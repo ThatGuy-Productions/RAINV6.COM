@@ -596,3 +596,50 @@ Unresolved / next-phase recommendations:
 - Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
 - The sparkline could be made interactive (hover to show day's count + date tooltip). Priority: low.
 - Consider adding more event types to the activity series (signup, login, tab_viewed) for a fuller picture. Priority: low.
+
+---
+Task ID: 12
+Agent: webDevReview (cron round 10)
+Task: Recurring QA pass + make sparkline interactive with hover tooltips.
+
+Work Log:
+- Read worklog.md (Tasks 1-11). App fully stable. Identified the worklog's own recommendation: "The sparkline could be made interactive (hover to show day's count + date tooltip)."
+- QA pass via agent-browser: all 14 studio tabs render without errors. No console errors.
+
+Feature: Interactive sparkline with hover tooltips
+- Rewrote the `ActivitySparkline` component in `LandingBetaVelocity.tsx` to be fully interactive:
+  - **Hover tracking**: `onMouseMove` on the SVG converts the client X to SVG viewBox coordinates, finds the nearest day index, and stores it in `hovered` state
+  - **Crosshair**: a dashed vertical line appears at the hovered day's X position, spanning the chart height
+  - **Enlarged dot**: the hovered day's dot grows from r=2 to r=4 with a smooth 0.15s transition
+  - **Baseline dot for zero days**: when hovering a zero-count day, a faint dot appears at the baseline so the user can see where they are
+  - **Floating tooltip**: an absolutely-positioned div above the SVG shows the event count, centered on the hovered point's X. Dark glassmorphism bg with lime border + shadow
+  - **Dynamic header**: the "N events · 14 days" subtitle in the header swaps to "Jul 20: 3 events" (formatted date + count) when hovering
+  - **Mouse leave**: clears the hover state, tooltip/crosshair disappear, header reverts to the total
+
+Styling details:
+- Crosshair: dashed lime line at 50% opacity
+- Hovered dot: enlarged (r=4) with glow drop-shadow
+- Tooltip: dark glassmorphism (rgba(14,16,22,0.95)) + lime border + box shadow
+- Smooth dot size transition (0.15s)
+- Date formatting: "Jul 20" via toLocaleDateString
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Sparkline SVG present ✓
+- Hovered at ~90% width → header showed "Jul 19: 0 events" (zero-count day) ✓
+- Hovered at ~95% width → header showed "Jul 20: 3 events" (today, active day) ✓
+- Tooltip appeared with event count ✓
+- No console errors
+- Studio launch from landing: works ✓
+- `bun run lint` → clean
+- Screenshot saved to `/home/z/my-project/download/landing-sparkline-interactive.png`
+
+Stage Summary:
+- The Beta Velocity sparkline is now fully interactive — visitors can hover over any day to see its exact date and event count, with a crosshair, enlarged dot, and floating tooltip. This makes the "real numbers" data explorable rather than just viewable.
+- Files changed: `src/components/rain/landing/LandingBetaVelocity.tsx` (rewrote ActivitySparkline with hover state, crosshair, tooltip, dynamic header).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
+- The sparkline could show event-type breakdown (session/render/export) as stacked areas. Priority: low.
+- Consider adding touch support for mobile (currently mouse-only hover). Priority: low.

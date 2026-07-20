@@ -266,16 +266,18 @@ function ActivitySparkline({ series }: { series: { date: string; count: number }
   const padding = 8
   const max = Math.max(...series.map((d) => d.count), 1)
   const total = series.reduce((sum, d) => sum + d.count, 0)
+  const [hovered, setHovered] = useState<number | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
 
   // Build the SVG path. X is evenly spaced, Y is count/max * height.
   const stepX = (width - padding * 2) / (series.length - 1)
   const points = series.map((d, i) => {
     const x = padding + i * stepX
     const y = height - padding - (d.count / max) * (height - padding * 2)
-    return { x, y, count: d.count }
+    return { x, y, count: d.count, date: d.date }
   })
 
-  // Smooth line path (catmull-rom → bezier for visual smoothness)
+  // Smooth line path (quadratic bezier for visual smoothness)
   const linePath = points
     .map((p, i) => {
       if (i === 0) return `M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`
@@ -288,6 +290,34 @@ function ActivitySparkline({ series }: { series: { date: string; count: number }
   // Area path (line + close to bottom)
   const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${height - padding} L ${points[0].x.toFixed(1)} ${height - padding} Z`
 
+  // Map a mouse X coordinate (in SVG viewBox units) to the nearest day index.
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    // Convert client X to SVG viewBox X
+    const scaleX = width / rect.width
+    const svgX = (e.clientX - rect.left) * scaleX
+    // Find nearest point index
+    let nearest = 0
+    let minDist = Infinity
+    points.forEach((p, i) => {
+      const dist = Math.abs(p.x - svgX)
+      if (dist < minDist) {
+        minDist = dist
+        nearest = i
+      }
+    })
+    setHovered(nearest)
+  }
+
+  const hoveredPoint = hovered !== null ? points[hovered] : null
+  // Format date as "Jul 15" for display
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso + 'T00:00:00')
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+
   return (
     <div className="mt-6 rounded-xl border border-rain-border/60 bg-rain-surface-2/40 p-4">
       <div className="flex items-center justify-between mb-2">
@@ -296,51 +326,104 @@ function ActivitySparkline({ series }: { series: { date: string; count: number }
           14-Day Activity
         </span>
         <span className="text-[10px] font-mono text-muted-foreground/60">
-          {total} events · {series.length} days
+          {hoveredPoint ? (
+            <span className="text-[#AAFF00]">
+              {fmtDate(hoveredPoint.date)}: {hoveredPoint.count} event{hoveredPoint.count !== 1 ? 's' : ''}
+            </span>
+          ) : (
+            <span>{total} events · {series.length} days</span>
+          )}
         </span>
       </div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-16"
-        preserveAspectRatio="none"
-        aria-label="14-day activity sparkline"
-      >
-        <defs>
-          <linearGradient id="sparkline-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#AAFF00" stopOpacity="0.3" />
-            <stop offset="100%" stopColor="#AAFF00" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="sparkline-line" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#84CC16" />
-            <stop offset="100%" stopColor="#AAFF00" />
-          </linearGradient>
-        </defs>
-        {/* Area fill */}
-        <path d={areaPath} fill="url(#sparkline-area)" />
-        {/* Line */}
-        <path
-          d={linePath}
-          fill="none"
-          stroke="url(#sparkline-line)"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          style={{ filter: 'drop-shadow(0 0 4px rgba(170,255,0,0.4))' }}
-        />
-        {/* Dots on non-zero days */}
-        {points.map((p, i) =>
-          p.count > 0 ? (
-            <circle
-              key={i}
-              cx={p.x}
-              cy={p.y}
-              r="2"
-              fill="#AAFF00"
-              style={{ filter: 'drop-shadow(0 0 3px rgba(170,255,0,0.6))' }}
+      <div className="relative">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-16"
+          preserveAspectRatio="none"
+          aria-label="14-day activity sparkline"
+          onMouseMove={handleMouseMove}
+          onMouseLeave={() => setHovered(null)}
+        >
+          <defs>
+            <linearGradient id="sparkline-area" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#AAFF00" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#AAFF00" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="sparkline-line" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#84CC16" />
+              <stop offset="100%" stopColor="#AAFF00" />
+            </linearGradient>
+          </defs>
+          {/* Area fill */}
+          <path d={areaPath} fill="url(#sparkline-area)" />
+          {/* Line */}
+          <path
+            d={linePath}
+            fill="none"
+            stroke="url(#sparkline-line)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ filter: 'drop-shadow(0 0 4px rgba(170,255,0,0.4))' }}
+          />
+          {/* Hover crosshair (vertical line at hovered day) */}
+          {hoveredPoint && (
+            <line
+              x1={hoveredPoint.x}
+              y1={padding}
+              x2={hoveredPoint.x}
+              y2={height - padding}
+              stroke="#AAFF00"
+              strokeWidth="1"
+              strokeDasharray="2,2"
+              opacity="0.5"
             />
-          ) : null,
+          )}
+          {/* Dots — show all non-zero days, enlarge the hovered one */}
+          {points.map((p, i) => {
+            const isHovered = hovered === i
+            if (p.count === 0 && !isHovered) return null
+            return (
+              <circle
+                key={i}
+                cx={p.x}
+                cy={p.y}
+                r={isHovered ? 4 : 2}
+                fill="#AAFF00"
+                style={{
+                  filter: 'drop-shadow(0 0 3px rgba(170,255,0,0.6))',
+                  transition: 'r 0.15s',
+                }}
+              />
+            )
+          })}
+          {/* Hover dot at baseline for zero-count days (so the user sees where they are) */}
+          {hoveredPoint && hoveredPoint.count === 0 && (
+            <circle
+              cx={hoveredPoint.x}
+              cy={height - padding}
+              r="3"
+              fill="#AAFF00"
+              opacity="0.4"
+            />
+          )}
+        </svg>
+        {/* Floating tooltip near the hovered point */}
+        {hoveredPoint && (
+          <div
+            className="absolute pointer-events-none px-2 py-1 rounded-md bg-[rgba(14,16,22,0.95)] border border-[rgba(170,255,0,0.3)] text-[10px] font-mono text-[#AAFF00] whitespace-nowrap"
+            style={{
+              left: `${(hoveredPoint.x / width) * 100}%`,
+              top: 0,
+              transform: 'translateX(-50%)',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            }}
+          >
+            {hoveredPoint.count} event{hoveredPoint.count !== 1 ? 's' : ''}
+          </div>
         )}
-      </svg>
+      </div>
       {/* Date range labels */}
       <div className="flex justify-between mt-1 text-[9px] font-mono text-muted-foreground/50">
         <span>{series[0]?.date.slice(5)}</span>
