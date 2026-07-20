@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Download, FileAudio, Loader2, Box, CheckCircle2, XCircle, Info, MessageSquare } from 'lucide-react'
+import { Download, FileAudio, Loader2, Box, CheckCircle2, XCircle, Info, MessageSquare, FileArchive, Lock } from 'lucide-react'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
   buildSidecarZip,
@@ -16,6 +16,7 @@ import type { SpatialConfig } from '@/lib/rain/spatial'
 import { notifySuccess, notifyError } from '@/lib/rain/notifications'
 import { recordExportDetails } from '@/lib/rain/analytics'
 import type { ProvenanceCertificate } from '@/lib/rain/types'
+import { useAuth } from '@/components/rain/admin/AuthContext'
 
 // BETA-ANALYTICS: fires the server-side export_completed event (source of
 // truth for activation/retention — see server-analytics.ts). Separate from
@@ -81,6 +82,39 @@ export function ExportTab() {
   const [attachCertificate, setAttachCertificate] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [verification, setVerification] = useState<ExportVerificationResult | null>(null)
+
+  // Enterprise auth — gates the "Download Full Source ZIP" affordance.
+  const { isEnterprise, loading: authLoading } = useAuth()
+  const [isDownloadingSource, setIsDownloadingSource] = useState(false)
+
+  /**
+   * Download the full runnable source codebase as a ZIP (Enterprise-only).
+   * Hits GET /api/rain/source which streams a real archive built server-side
+   * from src/, prisma/, and config files (see src/lib/rain/server-zip.ts).
+   */
+  const handleDownloadSource = async () => {
+    if (!isEnterprise || isDownloadingSource) return
+    setIsDownloadingSource(true)
+    try {
+      const res = await fetch('/api/rain/source', { cache: 'no-store' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `Server returned ${res.status}`)
+      }
+      const blob = await res.blob()
+      const fileCount = res.headers.get('X-File-Count') ?? '?'
+      triggerDownload(blob, 'rain-v6-source.zip')
+      notifySuccess(
+        'Source archive ready',
+        `${fileCount} files · ${(blob.size / 1024).toFixed(0)} KB`,
+      )
+    } catch (e) {
+      console.error('[RAIN source] download failed:', e)
+      notifyError('Source download failed', e instanceof Error ? e.message : 'Unknown error')
+    } finally {
+      setIsDownloadingSource(false)
+    }
+  }
 
   const fingerprint = useMemo(() => fingerprintFromCert(rainCert), [rainCert])
 

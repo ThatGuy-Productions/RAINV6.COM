@@ -18,7 +18,6 @@
  */
 
 import { NextRequest } from 'next/server'
-import { PRICING_TIERS } from './constants'
 import { db } from '@/lib/db'
 import { getSessionUser } from './auth'
 
@@ -34,6 +33,28 @@ export type TierGateResult = TierGateOk | TierGateFail
 
 /** Anonymous tier returned when no user identity is provided. */
 export const ANONYMOUS_TIER = 'free'
+
+/**
+ * Tier precedence ladder (low → high), used for tier-rank comparisons.
+ *
+ * Decoupled from `PRICING_TIERS` (which drives the public pricing page and
+ * intentionally lists only the free public-beta tier). The gate needs the
+ * FULL ladder so `isTierSufficient('free', 'enterprise')` correctly returns
+ * false — previously `enterprise` was absent from PRICING_TIERS, so
+ * `tierRank('enterprise')` fell back to 0 and every enterprise-gated route
+ * was effectively open to anonymous callers.
+ *
+ * Mirrors the ladder documented at the top of this file.
+ */
+const TIER_PRECEDENCE: readonly string[] = [
+  'casual',
+  'creator',
+  'independent',
+  'producer',
+  'studio',
+  'label',
+  'enterprise',
+] as const
 
 /**
  * Resolve a user's tier.
@@ -81,19 +102,32 @@ export async function getUserTierByUserId(userId: string | null): Promise<string
 }
 
 /**
- * Compare two tier slugs by their position in PRICING_TIERS.
+ * Compare two tier slugs by their position in the TIER_PRECEDENCE ladder.
  * Returns true if `userTier` is at least as high as `requiredTierSlug`.
  * Unknown slugs sort below casual.
  */
 export function isTierSufficient(userTier: string, requiredTierSlug: string): boolean {
+  // Exact match always satisfies (covers 'free'=='free' and unknown==unknown
+  // where the caller explicitly passes the same slug).
+  if (userTier === requiredTierSlug) return true
   const userRank = tierRank(userTier)
   const requiredRank = tierRank(requiredTierSlug)
+  // If the required tier is unknown to the ladder (rank 0) and didn't exact-
+  // match above, refuse — never let an unknown requirement be satisfied by
+  // a different unknown/low tier.
+  if (requiredRank === 0) return false
   return userRank >= requiredRank
 }
 
 function tierRank(slug: string): number {
-  const idx = PRICING_TIERS.findIndex((t) => t.slug === slug)
-  // -1 (not found) → rank 0 (below casual). casual itself is rank 1.
+  // 'free' (and any anonymous / unknown slug) ranks BELOW the paid ladder —
+  // it cannot satisfy any tier requirement except itself.
+  if (slug === ANONYMOUS_TIER) return 0
+  const idx = TIER_PRECEDENCE.indexOf(slug)
+  // Unknown slug (not in ladder, not 'free') → rank 0. Combined with the
+  // exact-match short-circuit in isTierSufficient, this means an unknown
+  // required tier is only satisfiable by an exact string match — never by
+  // a lower tier accidentally comparing as >=.
   return idx < 0 ? 0 : idx + 1
 }
 
