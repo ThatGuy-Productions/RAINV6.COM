@@ -25,6 +25,7 @@ import { AdminConsole } from '@/components/rain/admin/AdminConsole'
 import { SignUpModal } from '@/components/rain/admin/SignUpModal'
 import { SignInModal } from '@/components/rain/admin/SignInModal'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
+import { WhatsNewPanel } from '@/components/rain/layout/WhatsNewPanel'
 import { getAnonId } from '@/lib/rain/anon-id'
 
 /* ---------------------------------------------------------------------------
@@ -48,6 +49,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
   const [signUpOpen, setSignUpOpen] = useState(false)
   // Sign-in modal state (returning free-tier users).
   const [signInOpen, setSignInOpen] = useState(false)
+  // What's New changelog panel state.
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false)
 
   // Listen for shortcuts toggle event from StudioTopBar and KeyboardShortcuts
   useEffect(() => {
@@ -64,15 +67,18 @@ export function StudioApp({ onExit }: StudioAppProps) {
     const openConsole = () => setConsoleOpen(true)
     const openSignUp = () => setSignUpOpen(true)
     const openSignIn = () => setSignInOpen(true)
+    const openWhatsNew = () => setWhatsNewOpen(true)
     window.addEventListener('rain:admin-door-open', openDoor)
     window.addEventListener('rain:admin-console-open', openConsole)
     window.addEventListener('rain:signup-open', openSignUp)
     window.addEventListener('rain:signin-open', openSignIn)
+    window.addEventListener('rain:whatsnew-open', openWhatsNew)
     return () => {
       window.removeEventListener('rain:admin-door-open', openDoor)
       window.removeEventListener('rain:admin-console-open', openConsole)
       window.removeEventListener('rain:signup-open', openSignUp)
       window.removeEventListener('rain:signin-open', openSignIn)
+      window.removeEventListener('rain:whatsnew-open', openWhatsNew)
     }
   }, [])
 
@@ -161,6 +167,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {/* Free Beta Feedback Widget */}
       <FeedbackModal />
+      {/* What's New changelog panel — opened by the notifications bell */}
+      <WhatsNewPanel open={whatsNewOpen} onClose={() => setWhatsNewOpen(false)} />
     </div>
   )
 }

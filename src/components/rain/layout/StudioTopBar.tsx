@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bell, Circle, Cpu, Keyboard, Lock, Zap, ShieldCheck, UserPlus, LogIn, LogOut, Mail, ChevronDown } from 'lucide-react'
+import { ArrowLeft, Bell, Cpu, Keyboard, Lock, Zap, ShieldCheck, UserPlus, LogIn, LogOut, Mail, ChevronDown } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { RAIN_BRAND } from '@/lib/rain/constants'
 import { useAuth } from '@/components/rain/admin/AuthContext'
+import { getUnseenCount } from '@/components/rain/layout/WhatsNewPanel'
 
 interface StudioTopBarProps {
   onExit: () => void
@@ -16,6 +17,22 @@ export function StudioTopBar({ onExit }: StudioTopBarProps) {
   const sessionId = useSessionStore((s) => s.sessionId)
   const rainScore = useSessionStore((s) => s.rainScore)
   const { user, isEnterprise, loading: authLoading, logout } = useAuth()
+
+  // Unseen changelog count — drives the notification badge on the bell.
+  // SSR-safe (0 on server, real count after mount).
+  const [unseenCount, setUnseenCount] = useState(0)
+  useEffect(() => {
+    setUnseenCount(getUnseenCount())
+    const refresh = () => setUnseenCount(getUnseenCount())
+    // Re-check on focus (user may have cleared localStorage elsewhere).
+    window.addEventListener('focus', refresh)
+    // Re-check when the WhatsNew panel marks entries as seen.
+    window.addEventListener('rain:whatsnew-seen', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('rain:whatsnew-seen', refresh)
+    }
+  }, [])
 
   const statusColor =
     status === 'processing' ? '#F97316'
@@ -168,11 +185,17 @@ export function StudioTopBar({ onExit }: StudioTopBarProps) {
             <span>Shortcuts</span>
           </button>
           <button
-            className="p-1.5 rounded-md hover:bg-rain-surface-3 transition-colors relative"
-            aria-label="Notifications"
+            onClick={() => window.dispatchEvent(new CustomEvent('rain:whatsnew-open'))}
+            className="p-1.5 rounded-md hover:bg-rain-surface-3 transition-colors relative group"
+            aria-label="What's new — view changelog"
+            title="What's New"
           >
-            <Bell className="w-4 h-4" />
-            <Circle className="absolute top-1 right-1 w-1.5 h-1.5 fill-rain-accent text-rain-accent" />
+            <Bell className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+            {unseenCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 flex items-center justify-center rounded-full bg-[#AAFF00] text-black text-[8px] font-bold font-mono ring-2 ring-[rgba(14,16,22,1)]">
+                {unseenCount > 9 ? '9+' : unseenCount}
+              </span>
+            )}
           </button>
         </div>
       </div>

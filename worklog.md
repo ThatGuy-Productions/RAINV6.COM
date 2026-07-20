@@ -422,3 +422,60 @@ Unresolved / next-phase recommendations:
 - The demo's synthetic visual data could be replaced with real AnalyserNode measurements. Priority: low.
 - Consider adding a "What's New" changelog section or badge to surface recent features (auth, demo audio, FAQ). Priority: low.
 - The FAQ could be expanded with more questions based on real beta feedback. Priority: low.
+
+---
+Task ID: 9
+Agent: webDevReview (cron round 7)
+Task: Recurring QA pass + fix dead notifications bell + add What's New changelog panel.
+
+Work Log:
+- Read worklog.md (Tasks 1-8). App fully stable. Identified a real QA issue: the notifications bell in the studio top bar was a dead button — it had a notification dot but did nothing when clicked. This is a visible UI element with no functionality.
+- QA pass via agent-browser (DOM event dispatch): all 14 studio tabs render without errors. No console errors.
+
+Feature: What's New changelog panel (fixes dead notifications bell)
+- Created `src/components/rain/layout/WhatsNewPanel.tsx` — a slide-over panel triggered by the notifications bell:
+  - **7 changelog entries** covering the v0.2.0–v0.2.1 releases: beta launch, tier-gate fix, export crash fix, anonymous analytics, user accounts, demo audio, FAQ section
+  - Each entry has a type (feature/fix/improvement) with a color-coded icon (Sparkles lime / Bug red / Wrench cyan), version, date, title, and description
+  - **Timeline UI**: vertical connector line with dots, entries flow chronologically top-to-bottom (latest first)
+  - **Seen-state tracking**: localStorage flag (`rain_whatsnew_seen`) records which entries the user has viewed. The bell badge shows the unseen count. 1.5s after opening the panel, all entries are marked as seen and a `rain:whatsnew-seen` event dispatches so the badge clears immediately.
+  - **Slide-over animation**: framer-motion spring (damping 28, stiffness 280) from the right edge, with a backdrop blur overlay
+  - Esc-to-close, click-backdrop-to-close, explicit close button
+  - Exports `getUnseenCount()` for the bell badge
+- Wired the notifications bell in `StudioTopBar.tsx`:
+  - Was: dead button with static dot
+  - Now: opens the WhatsNewPanel via `rain:whatsnew-open` event
+  - Badge shows unseen count (lime circle with number, or "9+" if >9)
+  - Badge clears immediately when entries are marked seen (listens for `rain:whatsnew-seen` event)
+  - Re-checks count on window focus (in case localStorage changed elsewhere)
+- Wired the panel into `StudioApp.tsx` via the `rain:whatsnew-open` / `rain:whatsnew-seen` event pattern (consistent with the existing admin-door/signup/signin modals).
+
+Styling details:
+- Slide-over panel: dark glassmorphism (rgba(14,16,22,0.98)) with lime-tinted left border + layered shadow
+- Timeline: vertical connector line (white/[0.06]) with color-coded dots per entry type
+- Type badges: "NEW" (lime), "FIX" (red), "IMPROVED" (cyan) with tinted bg + border
+- Header: GitCommit icon in a lime-tinted rounded square, "7 updates · latest v0.2.1" subtitle
+- Footer: "Marked as seen" with a checkmark, Close link
+- Bell badge: lime circle with black count, ring-2 matching the header bg for cutout effect
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Fresh user (cleared localStorage): bell badge shows "7" ✓
+- Clicked bell → WhatsNewPanel slide-over opened with all 7 entries ✓
+- Timeline renders: "FAQ section + demo keyboard shortcut", "Interactive mastering demo with audio", "User accounts", "Anonymous analytics", "Export tab crash fixed", "Enterprise tier-gate security fix", "RAIN V6 free public beta launch" ✓
+- Closed panel → badge cleared to 0 immediately (via rain:whatsnew-seen event) ✓
+- Esc-to-close works ✓
+- Studio tabs still render correctly after panel interaction ✓
+- `bun run lint` → clean
+- Screenshot saved to `/home/z/my-project/download/whatsnew-panel.png`
+
+Stage Summary:
+- Fixed a real QA issue: the dead notifications bell is now functional — opens a What's New changelog panel that surfaces the 7 recent features/fixes from the beta.
+- The bell badge dynamically shows unseen count and clears after viewing — a polished notification UX.
+- This also serves as an investor-facing development-velocity indicator: the changelog visibly demonstrates active iteration.
+- Files changed: `src/components/rain/layout/WhatsNewPanel.tsx` (new), `src/components/rain/layout/StudioApp.tsx` (panel wiring + event), `src/components/rain/layout/StudioTopBar.tsx` (bell button + badge + unseenCount state).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
+- The changelog is static (hardcoded). Could be driven by a DB table or a `CHANGELOG.md` file parsed at build time for automatic updates. Priority: low.
+- Consider adding a "What's New" badge/section on the landing page to surface beta velocity to visitors. Priority: low.
