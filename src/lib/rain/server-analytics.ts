@@ -193,27 +193,51 @@ export interface FunnelStats {
   sessionsCreated: number
   rendersCompleted: number
   exportsCompleted: number
+  /** Distinct anonymous browsers (anonId) that hit each step. Captured
+   *  separately so the admin console can show "authenticated vs anonymous"
+   *  side-by-side — the free-beta funnel is mostly anonymous. */
+  anonymousSessions: number
+  anonymousRenders: number
+  anonymousExports: number
 }
 
-/** Distinct-user counts at each funnel step — for a drop-off chart. */
+/** Distinct-identity counts at each funnel step — for a drop-off chart.
+ *
+ * Counts BOTH authenticated users (by userId) AND anonymous browsers (by
+ * anonId). The free public beta is mostly anonymous usage — without
+ * counting anonId, the funnel would show near-zero sessions/renders until
+ * users sign up, which defeats the purpose of beta analytics. */
 export async function getFunnelStats(): Promise<FunnelStats> {
-  const countDistinctUsers = async (type: EventType) => {
+  const countDistinct = async (type: EventType) => {
     const rows = await db.event.findMany({
-      where: { type, userId: { not: null } },
-      select: { userId: true },
-      distinct: ['userId'],
+      where: { type },
+      select: { userId: true, anonId: true },
     })
-    return rows.length
+    const userIds = new Set<string>()
+    const anonIds = new Set<string>()
+    for (const r of rows) {
+      if (r.userId) userIds.add(r.userId)
+      else if (r.anonId) anonIds.add(r.anonId)
+    }
+    return { total: userIds.size + anonIds.size, anonymous: anonIds.size }
   }
 
-  const [signups, sessionsCreated, rendersCompleted, exportsCompleted] = await Promise.all([
-    countDistinctUsers('signup'),
-    countDistinctUsers('session_created'),
-    countDistinctUsers('render_completed'),
-    countDistinctUsers('export_completed'),
+  const [signups, sessions, renders, exports] = await Promise.all([
+    countDistinct('signup'),
+    countDistinct('session_created'),
+    countDistinct('render_completed'),
+    countDistinct('export_completed'),
   ])
 
-  return { signups, sessionsCreated, rendersCompleted, exportsCompleted }
+  return {
+    signups: signups.total,
+    sessionsCreated: sessions.total,
+    rendersCompleted: renders.total,
+    exportsCompleted: exports.total,
+    anonymousSessions: sessions.anonymous,
+    anonymousRenders: renders.anonymous,
+    anonymousExports: exports.anonymous,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -225,13 +249,16 @@ export async function getFunnelStats(): Promise<FunnelStats> {
  *  from "actually explored the product." */
 export async function getAverageFeatureDepth(): Promise<number> {
   const tabViews = await db.event.findMany({
-    where: { type: 'tab_viewed', userId: { not: null } },
-    select: { userId: true, metadata: true },
+    where: { type: 'tab_viewed' },
+    select: { userId: true, anonId: true, metadata: true },
   })
 
   const tabsByUser = new Map<string, Set<string>>()
   for (const v of tabViews) {
-    if (!v.userId) continue
+    // Key by userId when authenticated, anonId when anonymous — so the
+    // feature-depth metric reflects real exploration across both populations.
+    const key = v.userId ?? v.anonId
+    if (!key) continue
     let tab: string | undefined
     try {
       tab = v.metadata ? JSON.parse(v.metadata).tab : undefined
@@ -239,9 +266,9 @@ export async function getAverageFeatureDepth(): Promise<number> {
       tab = undefined
     }
     if (!tab) continue
-    const set = tabsByUser.get(v.userId) ?? new Set<string>()
+    const set = tabsByUser.get(key) ?? new Set<string>()
     set.add(tab)
-    tabsByUser.set(v.userId, set)
+    tabsByUser.set(key, set)
   }
 
   if (tabsByUser.size === 0) return 0

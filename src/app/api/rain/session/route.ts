@@ -15,15 +15,19 @@ export const runtime = 'nodejs'
  * MasteringTab, not once per render) is what makes it real, and is what
  * server-analytics.ts's funnel/session-depth math depends on.
  *
- * Body: { name?: string, fileName?: string }
+ * ANONYMOUS ACCESS (free-beta analytics): if no user is signed in, the
+ * route no longer returns 401. Instead it fires a `session_created` Event
+ * with the caller's anonId (so the activation/retention/funnel still
+ * captures free-beta usage) and returns `{ sessionId: null }` with 200.
+ * The Session row itself requires a userId FK, so it is skipped for
+ * anonymous callers — the Event is the source of truth for funnel math.
+ *
+ * Body: { name?: string, fileName?: string, anonId?: string }
  */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser(req)
-  if (!user) {
-    return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
-  }
+  const user = await getSessionUser(req).catch(() => null)
 
-  let body: { name?: unknown; fileName?: unknown }
+  let body: { name?: unknown; fileName?: unknown; anonId?: unknown }
   try {
     body = await req.json()
   } catch {
@@ -36,6 +40,22 @@ export async function POST(req: NextRequest) {
       : typeof body.fileName === 'string'
         ? body.fileName.slice(0, 200)
         : 'Untitled'
+  const anonId =
+    typeof body.anonId === 'string' && body.anonId.length > 0
+      ? body.anonId.slice(0, 128)
+      : null
+
+  // Anonymous path: fire the Event so the funnel captures this session,
+  // but don't create a Session row (it requires a userId FK).
+  if (!user) {
+    void trackEvent({
+      userId: null,
+      anonId,
+      type: 'session_created',
+      metadata: { name, anonymous: true },
+    })
+    return NextResponse.json({ sessionId: null, anonymous: true }, { status: 200 })
+  }
 
   try {
     const session = await db.session.create({
@@ -46,9 +66,14 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    void trackEvent({ userId: user.id, type: 'session_created', metadata: { sessionId: session.id } })
+    void trackEvent({
+      userId: user.id,
+      anonId,
+      type: 'session_created',
+      metadata: { sessionId: session.id },
+    })
 
-    return NextResponse.json({ sessionId: session.id }, { status: 201 })
+    return NextResponse.json({ sessionId: session.id, anonymous: false }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/session] create failed:', err)
     // Never block the mastering workflow on an analytics write — the client

@@ -79,3 +79,49 @@ Unresolved / next-phase recommendations:
 - `POST /api/rain/session` and `POST /api/rain/render` return 401 for anonymous users — the analytics persistence is auth-gated. Consider allowing anonymous session/render rows (with null userId) so the activation/retention funnel still captures free-beta usage, OR surface a "sign in to persist sessions" prompt in the Export tab.
 - The uploaded `@breezystack/lamejs` lacks the "RAIN V6 PATCH" (lowpass filter disable) referenced in comments — MP3 exports will have LAME's default ~18.6kHz cutoff at 320kbps. This is a quality issue, not a crash; not blocking but worth a follow-up.
 - The recurring webDevReview cron job is active and will continue QA + feature work every 15 minutes.
+
+---
+Task ID: 3
+Agent: webDevReview (cron round 1)
+Task: Recurring QA pass + fix highest-impact bug + add features/styling.
+
+Work Log:
+- Read worklog.md (Tasks 1-2). App was stable: build fixed, export crash fixed, tier-gate security fixed.
+- QA pass via agent-browser: all 12 studio tabs render without errors. Landing + studio + export flow confirmed working.
+- Identified highest-impact unresolved bug from worklog: anonymous users got 401 on `POST /api/rain/session` and `POST /api/rain/render`, breaking the free-beta activation/retention/funnel analytics. The whole point of the free beta is capturing usage data, but anonymous users (the majority) couldn't persist sessions or renders.
+- Root cause: both routes had `if (!user) return 401` at the top. Additionally, `getFunnelStats()` filtered `userId: { not: null }`, so even if anonymous Events were fired, they'd be invisible in the funnel.
+- Fix (server-side):
+  - `src/app/api/rain/session/route.ts` — removed 401 gate; anonymous callers now fire a `session_created` Event with their anonId and get `{ sessionId: null, anonymous: true }` with 200. Session row creation (requires userId FK) is skipped for anonymous.
+  - `src/app/api/rain/render/route.ts` — same pattern: anonymous callers fire `render_completed`/`export_completed` Events with anonId, get `{ ok: true, anonymous: true }` with 200.
+  - `src/lib/rain/server-analytics.ts` — `getFunnelStats()` now counts BOTH authenticated users (by userId) AND anonymous browsers (by anonId). Added `anonymousSessions/Renders/Exports` fields to the response. `getAverageFeatureDepth()` updated to key by `userId ?? anonId` so anonymous tab exploration is counted too.
+- Fix (client-side):
+  - Created `src/lib/rain/anon-id.ts` — generates + persists a per-browser UUID v4 in localStorage (`rain_anon_id`). SSR-safe (returns null on server). Cached in module scope.
+  - Wired `getAnonId()` into all analytics calls: StudioApp (tab_viewed), MasteringTab (session + render), ExportTab (export).
+- New feature: "Anonymous analytics tracking" indicator badge in the studio footer (`StudioStatusFooter.tsx`). Shows a pulsing green dot + "ANON" + first 8 chars of the browser's anonId. Click-to-copy the full ID. Tooltip explains: "Your renders and exports are counted in the free-beta funnel using this ID." This makes the analytics fix visible to users and is a transparency feature.
+- Styling polish: Export tab format cards redesigned with:
+  - Selected state: colored left bar accent + glow shadow + checkmark icon
+  - Hover state: lift (-translate-y-0.5) + border highlight + icon color shift
+  - `group` + `group-hover` for coordinated icon color transition
+
+Verification (agent-browser, end-to-end):
+- All 12 studio tabs: OK (zero errors)
+- Mastering → Load Demo → Run 16-Stage Master → RAIN Score displayed
+- Export tab → Export Master → "VERIFICATION REPORT: Verified ✓"
+- `POST /api/rain/session` → **200** (was 401)
+- `POST /api/rain/render` → **200** (was 401, called twice: render + export)
+- ANON badge visible in footer, click-to-copy functional
+- DB verification: 4 anonymous events persisted (session_created, render_completed, export_completed, tab_viewed) from a single anonymous browser session
+- `getFunnelStats()` returns: `{ sessionsCreated: 1, rendersCompleted: 1, exportsCompleted: 1, anonymousSessions: 1, anonymousRenders: 1, anonymousExports: 1 }`
+- `bun run lint` → clean (fixed set-state-in-effect lint error by using lazy useState initializer)
+
+Stage Summary:
+- Anonymous analytics pipeline fully fixed: free-beta usage now flows into the Event table and shows up in funnel stats. This unblocks the beta's core value proposition (measuring activation/retention).
+- New visible feature: ANON badge in footer (transparency + click-to-copy).
+- Export tab format cards visually polished.
+- Files changed: `src/lib/rain/anon-id.ts` (new), `src/app/api/rain/session/route.ts`, `src/app/api/rain/render/route.ts`, `src/lib/rain/server-analytics.ts`, `src/components/rain/layout/StudioApp.tsx`, `src/components/rain/mastering/MasteringTab.tsx`, `src/components/rain/tabs/ExportTab.tsx`, `src/components/rain/layout/StudioStatusFooter.tsx`.
+
+Unresolved / next-phase recommendations:
+- Registration UI not wired into the client (AuthContext has login + bootstrap but no register). The register route already accepts anonId, so when a register form is added, anonymous activity can be joined to the new account. Priority: medium.
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is not applied to the installed `@breezystack/lamejs` — MP3 exports will have ~18.6kHz cutoff at 320kbps. Quality issue, not a crash. Priority: low.
+- AdminConsole should display the new `anonymousSessions/Renders/Exports` funnel fields (they're in the API response but the UI may not render them yet). Priority: medium.
+- Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.

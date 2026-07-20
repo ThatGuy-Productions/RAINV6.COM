@@ -23,6 +23,7 @@ import { DataRain } from '@/components/rain/ui/DataRain'
 import { AdminDoorModal } from '@/components/rain/admin/AdminDoorModal'
 import { AdminConsole } from '@/components/rain/admin/AdminConsole'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
+import { getAnonId } from '@/lib/rain/anon-id'
 
 /* ---------------------------------------------------------------------------
    Ambient background for studio view (Task 10 — replaced particles with data rain)
@@ -73,7 +74,7 @@ export function StudioApp({ onExit }: StudioAppProps) {
     fetch('/api/rain/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'tab_viewed', metadata: { tab: activeTab } }),
+      body: JSON.stringify({ type: 'tab_viewed', anonId: getAnonId(), metadata: { tab: activeTab } }),
     }).catch(() => {})
   }, [activeTab])
 

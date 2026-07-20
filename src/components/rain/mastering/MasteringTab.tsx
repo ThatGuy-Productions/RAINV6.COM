@@ -30,6 +30,7 @@ import { ABComparisonToggle } from './ABComparisonToggle'
 import { BlindTestModal } from './BlindTestModal'
 import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
+import { getAnonId } from '@/lib/rain/anon-id'
 
 export function MasteringTab() {
   const fileName = useSessionStore((s) => s.fileName)
@@ -130,7 +131,7 @@ export function MasteringTab() {
       const res = await fetch('/api/rain/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileName }),
+        body: JSON.stringify({ fileName, anonId: getAnonId() }),
       })
       if (!res.ok) return null
       const data = (await res.json()) as { sessionId: string | null }
@@ -160,7 +161,7 @@ export function MasteringTab() {
         await fetch('/api/rain/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind, sessionId: backendSessionId.current, ...details }),
+          body: JSON.stringify({ kind, sessionId: backendSessionId.current, anonId: getAnonId(), ...details }),
         })
       } catch (e) {
         console.warn(`[analytics] reportRenderEvent(${kind}) failed:`, e)

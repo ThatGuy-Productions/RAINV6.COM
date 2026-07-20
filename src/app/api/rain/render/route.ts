@@ -14,6 +14,13 @@ export const runtime = 'nodejs'
  * never touched the DB, so `usage.ts`'s totalRenders/totalExports always
  * read zero regardless of real usage. This route is the fix.
  *
+ * ANONYMOUS ACCESS (free-beta analytics): if no user is signed in, the
+ * route no longer returns 401. It fires the render_completed /
+ * export_completed Event with the caller's anonId (so the funnel captures
+ * free-beta usage) and returns `{ ok: true }` with 200. The Render row
+ * itself requires a userId FK, so it is skipped for anonymous callers —
+ * the Event is the source of truth for funnel math.
+ *
  * Called twice from MasteringTab per user action:
  *   1. `kind: "render"` right after Stage 16 completes (audioEngine.render()
  *      resolves) — no format/file yet, just marks the master as produced.
@@ -29,13 +36,11 @@ export const runtime = 'nodejs'
  *   loudnessLufs?: number
  *   truePeakDbfs?: number
  *   renderTimeMs?: number
+ *   anonId?: string
  * }
  */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser(req)
-  if (!user) {
-    return NextResponse.json({ error: 'Sign in required' }, { status: 401 })
-  }
+  const user = await getSessionUser(req).catch(() => null)
 
   let body: Record<string, unknown>
   try {
@@ -51,6 +56,24 @@ export async function POST(req: NextRequest) {
   const loudnessLufs = typeof body.loudnessLufs === 'number' ? body.loudnessLufs : undefined
   const truePeakDbfs = typeof body.truePeakDbfs === 'number' ? body.truePeakDbfs : undefined
   const renderTimeMs = typeof body.renderTimeMs === 'number' ? body.renderTimeMs : undefined
+  const anonId =
+    typeof body.anonId === 'string' && body.anonId.length > 0
+      ? body.anonId.slice(0, 128)
+      : null
+
+  const eventType = kind === 'export' ? 'export_completed' : 'render_completed'
+
+  // Anonymous path: fire the Event so the funnel captures this render/export,
+  // but don't create a Render row (it requires a userId FK).
+  if (!user) {
+    void trackEvent({
+      userId: null,
+      anonId,
+      type: eventType,
+      metadata: { sessionId: null, format, anonymous: true },
+    })
+    return NextResponse.json({ ok: true, renderId: null, anonymous: true }, { status: 200 })
+  }
 
   try {
     // Only create a Render row once we have the fields the model requires
@@ -76,11 +99,12 @@ export async function POST(req: NextRequest) {
 
     void trackEvent({
       userId: user.id,
-      type: kind === 'export' ? 'export_completed' : 'render_completed',
+      anonId,
+      type: eventType,
       metadata: { sessionId, format, renderId },
     })
 
-    return NextResponse.json({ ok: true, renderId }, { status: 201 })
+    return NextResponse.json({ ok: true, renderId, anonymous: false }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/render] failed:', err)
     // Never let an analytics write block the user's actual export/download.

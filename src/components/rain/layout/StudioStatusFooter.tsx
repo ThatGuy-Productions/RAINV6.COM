@@ -22,6 +22,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSessionStore } from '@/lib/rain/store'
 import { audioEngine, type EngineTelemetry } from '@/lib/rain/audio-engine'
+import { getAnonId } from '@/lib/rain/anon-id'
 
 /** Small VU meter bar — horizontal, 8px tall, green→yellow→red gradient */
 function VuMeter({ level, label }: { level: number; label: string }) {
@@ -111,6 +112,15 @@ export function StudioStatusFooter() {
   const [telemetry, setTelemetry] = useState<EngineTelemetry | null>(null)
   const [telemetryOpen, setTelemetryOpen] = useState(false)
   const telemetryTimerRef = useRef<number | null>(null)
+
+  // Analytics tracking indicator — shows the anonymous ID (first 8 chars)
+  // so users can see their free-beta usage is being captured for the
+  // activation/retention/funnel. Click to copy the full ID.
+  // Lazy init is SSR-safe (getAnonId returns null when window is undefined);
+  // on client hydration it reads localStorage, so the badge appears after
+  // mount without a re-render churn.
+  const [anonId] = useState<string | null>(() => getAnonId())
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     const unsub = audioEngine.subscribe((state) => {
@@ -294,6 +304,30 @@ export function StudioStatusFooter() {
             <ComplianceBadge label="C2PA v2.2" color="#8B5CF6" />
             <ComplianceBadge label="EU AI Act" color="#00D4FF" />
           </div>
+
+          {/* Analytics tracking indicator — shows the browser's anonymous ID
+              so users can verify their free-beta usage is being captured.
+              Click to copy the full ID. */}
+          {anonId && (
+            <button
+              onClick={() => {
+                navigator.clipboard?.writeText(anonId).then(() => {
+                  setCopied(true)
+                  window.setTimeout(() => setCopied(false), 1500)
+                }).catch(() => {})
+              }}
+              className="hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rain-surface-3 border border-rain-border text-[9px] font-mono text-muted-foreground hover:border-rain-accent/50 hover:text-rain-accent transition-colors"
+              title={`Anonymous analytics ID (click to copy):\n${anonId}\n\nYour renders and exports are counted in the free-beta funnel using this ID. Sign up to persist sessions to your account.`}
+              aria-label="Anonymous analytics tracking ID — click to copy"
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full flex-shrink-0 rain-pulse"
+                style={{ backgroundColor: '#AAFF00' }}
+              />
+              {copied ? 'COPIED' : 'ANON'}
+              <span className="text-muted-foreground/60">{anonId.slice(0, 8)}</span>
+            </button>
+          )}
         </div>
       </div>
 

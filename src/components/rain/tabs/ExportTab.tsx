@@ -17,6 +17,7 @@ import { notifySuccess, notifyError } from '@/lib/rain/notifications'
 import { recordExportDetails } from '@/lib/rain/analytics'
 import type { ProvenanceCertificate } from '@/lib/rain/types'
 import { useAuth } from '@/components/rain/admin/AuthContext'
+import { getAnonId } from '@/lib/rain/anon-id'
 
 // BETA-ANALYTICS: fires the server-side export_completed event (source of
 // truth for activation/retention — see server-analytics.ts). Separate from
@@ -27,7 +28,7 @@ async function reportBetaExportEvent(format: string, outputFileHash: string | un
     await fetch('/api/rain/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'export', format, outputFileHash }),
+      body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId() }),
     })
   } catch (e) {
     console.warn('[analytics] reportBetaExportEvent failed:', e)
@@ -295,29 +296,44 @@ export function ExportTab() {
           </div>
           <div className="text-sm font-semibold mb-3">Choose authoritative master</div>
           <div className="grid sm:grid-cols-2 gap-2">
-            {FORMATS.map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setSelectedFormat(f.id)}
-                disabled={!hasProcessed}
-                className={`text-left p-3 rounded-md border transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                  selectedFormat === f.id
-                    ? 'border-rain-accent bg-rain-accent/10'
-                    : 'border-rain-border bg-rain-surface-2/60 hover:border-rain-accent/50'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <div className={selectedFormat === f.id ? 'text-rain-accent' : 'text-muted-foreground'}>
-                    {f.icon}
+            {FORMATS.map((f) => {
+              const isSelected = selectedFormat === f.id
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => setSelectedFormat(f.id)}
+                  disabled={!hasProcessed}
+                  className={`group relative text-left p-3 rounded-md border transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isSelected
+                      ? 'border-rain-accent bg-rain-accent/10 shadow-[0_0_12px_-4px_rgba(170,255,0,0.4)]'
+                      : 'border-rain-border bg-rain-surface-2/60 hover:border-rain-accent/50 hover:bg-rain-surface-2 hover:-translate-y-0.5'
+                  }`}
+                >
+                  {/* Selected indicator — colored left bar */}
+                  {isSelected && (
+                    <span
+                      className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-2/3 rounded-full bg-rain-accent"
+                      aria-hidden
+                    />
+                  )}
+                  <div className="flex items-start gap-2">
+                    <div className={`transition-colors ${isSelected ? 'text-rain-accent' : 'text-muted-foreground group-hover:text-rain-accent/70'}`}>
+                      {f.icon}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-sm font-semibold">{f.label}</span>
+                        {isSelected && (
+                          <CheckCircle2 className="w-3 h-3 text-rain-accent flex-shrink-0" />
+                        )}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground leading-tight mb-1">{f.desc}</div>
+                      <div className="text-[9px] font-mono text-muted-foreground">{f.size}</div>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold mb-0.5">{f.label}</div>
-                    <div className="text-[10px] text-muted-foreground leading-tight mb-1">{f.desc}</div>
-                    <div className="text-[9px] font-mono text-muted-foreground">{f.size}</div>
-                  </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              )
+            })}
           </div>
           {/* Full-bandwidth guarantee banner — addresses the "clean cutoff
               above 16-18 kHz" issue. WAV is lossless PCM (Nyquist = 24 kHz
