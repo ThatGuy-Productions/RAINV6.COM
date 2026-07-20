@@ -139,8 +139,8 @@ export function LandingTestimonials() {
               <span className="absolute inline-flex h-full w-full rounded-full bg-rain-accent opacity-75 rain-pulse" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-rain-accent" />
             </span>
-            <span className="text-rain-accent">12,847</span>
-            <span className="text-muted-foreground">hours mastered this month</span>
+            <span className="text-rain-accent">Free Public Beta</span>
+            <span className="text-muted-foreground">· every feature unlocked</span>
           </motion.div>
         </div>
 

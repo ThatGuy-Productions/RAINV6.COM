@@ -5,6 +5,7 @@ import { LandingNav } from './LandingNav'
 import { PartnerLogos } from './PartnerLogos'
 import { LandingHero } from './LandingHero'
 import { LandingDemo } from './LandingDemo'
+import { LandingBetaVelocity } from './LandingBetaVelocity'
 import { LandingFeatures } from './LandingFeatures'
 import { LandingTestimonials } from './LandingTestimonials'
 import { LandingArchitecture } from './LandingArchitecture'
@@ -34,6 +35,7 @@ export function LandingPage({ onLaunch }: LandingPageProps) {
         <main className="flex-1">
           <LandingHero onLaunch={onLaunch} />
           <LandingDemo onLaunch={onLaunch} />
+          <LandingBetaVelocity />
           <LandingFeatures />
           <LandingTestimonials />
           <LandingArchitecture />
