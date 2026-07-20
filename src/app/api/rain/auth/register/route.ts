@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
   const loginResult = await loginWithPassword(email, password, {
     userAgent: req.headers.get('user-agent') ?? undefined,
     ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? undefined,
+    req,
   })
 
   if (!loginResult.ok) {

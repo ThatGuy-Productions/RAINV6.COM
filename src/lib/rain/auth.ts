@@ -109,38 +109,73 @@ function hashToken(token: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Build the Set-Cookie header value for a session token.
- * httpOnly + SameSite=Lax + Secure (in production).
+ * Detect whether the request was served over HTTPS (via the gateway's
+ * X-Forwarded-Proto header). The preview environment serves over HTTPS even
+ * though the Next.js dev server is plain HTTP — this matters because cookies
+ * with SameSite=None require the Secure flag, which only works over HTTPS.
  */
-function buildSessionCookie(token: string, maxAgeSeconds: number): string {
+function isHttps(req: NextRequest | null): boolean {
+  if (!req) return false
+  const xfProto = req.headers.get('x-forwarded-proto')
+  if (xfProto) return xfProto.includes('https')
+  // Fallback: check the raw URL protocol
+  return req.nextUrl.protocol === 'https:'
+}
+
+/**
+ * Build the Set-Cookie header value for a session token.
+ *
+ * Cookie policy:
+ *   - SameSite=Lax for plain HTTP (localhost dev) — sufficient, secure, and
+ *     avoids the Secure-over-HTTPS requirement.
+ *   - SameSite=None; Secure for HTTPS (preview/prod) — REQUIRED for the
+ *     cookie to be stored when the app runs inside a cross-origin iframe
+ *     (the preview environment embeds the app on preview-chat-*.space-z.ai,
+ *     which is cross-site). Without SameSite=None, modern browsers silently
+ *     drop the cookie and the user appears logged out on every return.
+ *   - HttpOnly always (no JS access — prevents XSS theft).
+ *   - Path=/ always.
+ */
+function buildSessionCookie(token: string, maxAgeSeconds: number, secure: boolean): string {
   const parts = [
     `${SESSION_COOKIE}=${token}`,
     'Path=/',
     `Max-Age=${maxAgeSeconds}`,
     'HttpOnly',
-    'SameSite=Lax',
   ]
-  if (process.env.NODE_ENV === 'production') parts.push('Secure')
+  if (secure) {
+    // HTTPS (preview/prod): SameSite=None so the cookie survives the
+    // cross-origin iframe, plus Secure (required by SameSite=None).
+    parts.push('SameSite=None', 'Secure')
+  } else {
+    // Plain HTTP (localhost dev): Lax is safe and doesn't need Secure.
+    parts.push('SameSite=Lax')
+  }
   return parts.join('; ')
 }
 
 /** Build a Set-Cookie header that clears the session cookie. */
-function buildClearCookie(): string {
-  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'Max-Age=0', 'HttpOnly', 'SameSite=Lax']
-  if (process.env.NODE_ENV === 'production') parts.push('Secure')
+function buildClearCookie(secure: boolean): string {
+  const parts = [`${SESSION_COOKIE}=`, 'Path=/', 'Max-Age=0', 'HttpOnly']
+  if (secure) {
+    parts.push('SameSite=None', 'Secure')
+  } else {
+    parts.push('SameSite=Lax')
+  }
   return parts.join('; ')
 }
 
 /**
  * Set the session cookie on the outgoing response (route-handler usage).
+ * Pass the request so we can detect HTTPS via X-Forwarded-Proto.
  * Returns the Set-Cookie header value to attach to NextResponse.
  */
-export function sessionCookieHeader(token: string): string {
-  return buildSessionCookie(token, SESSION_TTL_SECONDS)
+export function sessionCookieHeader(token: string, req?: NextRequest | null): string {
+  return buildSessionCookie(token, SESSION_TTL_SECONDS, isHttps(req ?? null))
 }
 
-export function clearCookieHeader(): string {
-  return buildClearCookie()
+export function clearCookieHeader(req?: NextRequest | null): string {
+  return buildClearCookie(isHttps(req ?? null))
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +266,7 @@ export interface LoginFailure {
 export async function loginWithPassword(
   email: string,
   password: string,
-  meta?: { userAgent?: string; ip?: string },
+  meta?: { userAgent?: string; ip?: string; req?: NextRequest | null },
 ): Promise<LoginResult | LoginFailure> {
   const normalized = email.trim().toLowerCase()
   if (!normalized || !password) return { ok: false, error: 'Email and password are required' }
@@ -260,7 +295,7 @@ export async function loginWithPassword(
       tier: account.tier,
       createdAt: account.createdAt,
     }
-    return { ok: true, user, token, setCookie: sessionCookieHeader(token) }
+    return { ok: true, user, token, setCookie: sessionCookieHeader(token, meta?.req) }
   } catch (err) {
     console.error('[auth] loginWithPassword failed:', err)
     return { ok: false, error: 'Authentication service unavailable' }
@@ -282,7 +317,7 @@ export async function logout(req: NextRequest | null): Promise<string> {
       // ignore — cookie is cleared client-side regardless
     }
   }
-  return clearCookieHeader()
+  return clearCookieHeader(req)
 }
 
 // ---------------------------------------------------------------------------

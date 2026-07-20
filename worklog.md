@@ -713,3 +713,31 @@ Unresolved / next-phase recommendations:
 - The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
 - Consider adding review helpfulness voting (upvote/downvote) for sorting. Priority: low.
 - Consider adding review replies (admin response to reviews). Priority: low.
+
+---
+Task ID: 14
+Agent: main (orchestrator)
+Task: Fix "EVERY EXIT AND RETURN REQUIRES NEW ADMIN CREATION SO THERE IS NO PERSISTENCE" — session cookie not surviving across browser sessions.
+
+Root Cause:
+- The preview environment embeds the app in a **cross-origin iframe** (`preview-chat-*.space-z.ai`). Modern browsers silently drop cookies with `SameSite=Lax` in cross-site iframe contexts — the cookie was never stored by the browser, so every page reload / new session appeared logged out.
+- The existing cookie builder used `SameSite=Lax` always (with `Secure` only in `NODE_ENV=production`). Since the dev server runs as plain HTTP but is served via the HTTPS gateway, the `NODE_ENV` check never triggered, and `SameSite=Lax` blocked the cookie entirely in the iframe.
+
+Fix:
+- Updated `src/lib/rain/auth.ts` cookie builder to detect HTTPS via the gateway's `X-Forwarded-Proto` header:
+  - **HTTPS (preview/prod):** `SameSite=None; Secure` — required for the cookie to survive the cross-origin iframe. `SameSite=None` explicitly allows cross-site cookie usage, and `Secure` (required by the spec when `SameSite=None`) works because the gateway serves over HTTPS.
+  - **HTTP (localhost):** `SameSite=Lax` — sufficient and avoids the Secure-over-HTTP requirement.
+  - `HttpOnly` always (XSS protection), `Path=/` always, `Max-Age=604800` (7 days) always.
+- Threaded the `NextRequest` through `loginWithPassword` → `sessionCookieHeader(token, req)` and `logout(req)` → `clearCookieHeader(req)` so the cookie builder can detect HTTPS.
+- Updated all 3 call sites: login route, register route, bootstrap route — all now pass `req` in the meta object.
+
+Verification:
+- Register with `X-Forwarded-Proto: https` → Set-Cookie header: `SameSite=None; Secure` ✓
+- Login with `X-Forwarded-Proto: https` → Set-Cookie header: `SameSite=None; Secure` ✓
+- Login without X-Forwarded-Proto (localhost) → Set-Cookie header: `SameSite=Lax` ✓
+- Session persists across page reload: register → reload → account chip still shows the user ✓
+- Enterprise admin bootstrap persists: created admin → `admin/status` returns `bootstrapped: true` → admin door shows LOGIN form (not "create admin") ✓
+- `bun run lint` → clean
+- Cleaned up all test accounts/data
+
+Files changed: `src/lib/rain/auth.ts` (cookie builder + loginWithPassword + logout signatures), `src/app/api/rain/auth/login/route.ts` (pass req), `src/app/api/rain/auth/register/route.ts` (pass req), `src/app/api/rain/admin/bootstrap/route.ts` (pass req).
