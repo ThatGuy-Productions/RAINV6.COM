@@ -643,3 +643,73 @@ Unresolved / next-phase recommendations:
 - Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
 - The sparkline could show event-type breakdown (session/render/export) as stacked areas. Priority: low.
 - Consider adding touch support for mobile (currently mouse-only hover). Priority: low.
+
+---
+Task ID: 13
+Agent: main (orchestrator)
+Task: Add real authentication for users with a database + real live review section.
+
+Work Log:
+- Confirmed the app ALREADY has real DB-backed authentication (built in Tasks 4-5):
+  - Prisma Account model (email, scrypt-hashed password, tier, name)
+  - POST /api/rain/auth/register → creates account, auto-logs-in (sets httpOnly session cookie)
+  - POST /api/rain/auth/login → verifies credentials, sets session cookie
+  - POST /api/rain/auth/logout → clears session
+  - GET /api/rain/auth/me → hydrates current user
+  - AuthToken model stores SHA-256-hashed session tokens (never the raw token)
+  - 7-day session expiry, SameSite=Lax, httpOnly (no JS access)
+  - SignUpModal + SignInModal + account dropdown with logout in the studio top bar
+  - Verified: register → HTTP 201 (account created in DB), login → HTTP 200 (cookie set)
+
+Feature: Real live review section (DB-backed)
+- Added a `Review` model to the Prisma schema:
+  - id, userId (optional, for signed-in attribution), name, role, rating (1-5), title, body, approved (bool), createdAt
+  - Indexed on [approved, createdAt] for fast public queries
+  - Pushed to DB via `prisma db push`
+- Created `src/app/api/rain/reviews/route.ts`:
+  - GET (public): returns approved reviews, newest first, limit 1-50 (default 20)
+  - POST: submit a review. Auth is optional:
+    - Signed-in users: auto-approved (we trust authenticated accounts), attributed to their userId
+    - Anonymous users: approved=false (needs admin approval) — prevents spam
+  - Validates: name (required, ≤80), role (optional, ≤120), rating (1-5), title (required, ≤120), body (required, ≤1000)
+  - Fires a `feedback_submitted` Event on submission (tracked in analytics funnel)
+- Created `src/components/rain/landing/LandingReviews.tsx`:
+  - Fetches approved reviews from /api/rain/reviews when scrolled into view
+  - **Reviews grid**: responsive (1/2/3 cols), each card shows star rating, title, body (line-clamp-4), author avatar (color-hashed from name), name, role, date
+  - **Aggregate rating**: shows average stars + count when reviews exist
+  - **Empty state**: "No reviews yet — be the first to share your RAIN V6 experience" with a CTA
+  - **Submit form modal**: full review form with:
+    - Interactive 5-star rating selector (click stars, hover scale)
+    - Name + Role fields (auto-fills name from signed-in user)
+    - Title + Body (textarea with 1000-char counter)
+    - Submit button with loading state
+    - Success state with checkmark + auto-close after 1.5s
+    - Esc-to-close, click-outside-to-close
+    - Shows "Signed in · publishes instantly" or "Anonymous · needs approval" based on auth state
+  - Staggered entrance animation (framer-motion, 50ms delay per card)
+  - Loading skeletons (pulsing placeholders)
+- Wired into LandingPage between Compliance and Pricing. Added "Reviews" nav link.
+
+Verification (agent-browser + curl, end-to-end):
+- Real auth confirmed: register → 201 (account in DB), login → 200 (cookie set) ✓
+- GET /api/rain/reviews → 200, returns approved reviews ✓
+- POST anonymous review → 201, approved=false ("will appear after admin approval") ✓
+- POST signed-in review (with session cookie) → 201, approved=true ("Review published") ✓
+- Landing reviews section renders: "LIVE REVIEWS" badge, "Real reviews, from real users." heading, review cards with stars/name/role/date, "Write a review" button ✓
+- Review form opens, fields fillable, submit works, success state shows, modal closes, list refreshes ✓
+- Aggregate rating shows (5.0 · 1 review) ✓
+- DB verification: 3 reviews submitted (1 approved from signed-in user, 2 pending from anonymous) — only approved ones visible publicly ✓
+- `bun run lint` → clean
+- Cleaned up all test data after verification
+- Screenshot saved to `/home/z/my-project/download/landing-reviews-section.png`
+
+Stage Summary:
+- Real authentication: already in place (Prisma + scrypt + httpOnly session cookies + full signup/signin/logout UI). Confirmed working end-to-end.
+- Real live review section: NEW. Visitors see real DB-backed reviews, can submit their own (signed-in = instant publish, anonymous = needs approval). Spam-protected, fully functional.
+- Files changed: `prisma/schema.prisma` (added Review model), `src/app/api/rain/reviews/route.ts` (new), `src/components/rain/landing/LandingReviews.tsx` (new), `src/components/rain/landing/LandingPage.tsx` (added section), `src/components/rain/landing/LandingNav.tsx` (added Reviews link).
+
+Unresolved / next-phase recommendations:
+- Admin approval UI: there's no way for admins to approve pending anonymous reviews yet. Could add a "Reviews" tab to the AdminConsole with approve/reject buttons. Priority: medium.
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding review helpfulness voting (upvote/downvote) for sorting. Priority: low.
+- Consider adding review replies (admin response to reviews). Priority: low.

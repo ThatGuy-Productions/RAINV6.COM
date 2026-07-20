@@ -10,6 +10,7 @@ import { LandingFeatures } from './LandingFeatures'
 import { LandingTestimonials } from './LandingTestimonials'
 import { LandingArchitecture } from './LandingArchitecture'
 import { LandingCompliance } from './LandingCompliance'
+import { LandingReviews } from './LandingReviews'
 import { LandingPricing } from './LandingPricing'
 import { LandingFAQ } from './LandingFAQ'
 import { LandingFooter } from './LandingFooter'
@@ -40,6 +41,7 @@ export function LandingPage({ onLaunch }: LandingPageProps) {
           <LandingTestimonials />
           <LandingArchitecture />
           <LandingCompliance />
+          <LandingReviews />
           <LandingPricing onLaunch={onLaunch} />
           <LandingFAQ />
         </main>

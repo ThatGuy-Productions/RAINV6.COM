@@ -132,3 +132,29 @@ model Event {
   @@index([anonId, type, createdAt])
   @@index([type, createdAt])
 }
+
+/// Public user reviews — real DB-backed testimonials shown on the landing
+/// page's live reviews section. Submitted by signed-in users (or anonymously
+/// with a name). Auto-approved for signed-in users; anonymous submissions
+/// require manual approval (approved=false by default).
+model Review {
+  id        String   @id @default(cuid())
+  /// Null for anonymous submissions, set when the reviewer is signed in.
+  userId    String?
+  /// Display name shown publicly (e.g. "Maya Okonkwo"). Required.
+  name      String
+  /// Optional role/credential line (e.g. "Mastering Engineer · Berlin").
+  role      String?
+  /// 1-5 star rating.
+  rating    Int
+  /// Short headline (e.g. "Finally, honest LUFS in a browser").
+  title     String
+  /// Full review body (max ~1000 chars).
+  body      String
+  /// Only approved=true reviews are returned by the public GET endpoint.
+  /// Signed-in users auto-approve; anonymous submissions default to false.
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([approved, createdAt])
+}
