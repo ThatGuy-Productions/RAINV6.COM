@@ -543,3 +543,56 @@ Unresolved / next-phase recommendations:
 - Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
 - The Beta Velocity section could show a sparkline of renders-over-time if a time-series aggregation is added to the stats API. Priority: low.
 - Consider adding the changelogEntries count as a clickable link that opens the WhatsNewPanel (currently it's just a static number on the landing page, but the panel is studio-only). Priority: low.
+
+---
+Task ID: 11
+Agent: webDevReview (cron round 9)
+Task: Recurring QA pass + add 14-day activity sparkline to Beta Velocity section.
+
+Work Log:
+- Read worklog.md (Tasks 1-10). App fully stable. Identified the worklog's own recommendation: "The Beta Velocity section could show a sparkline of renders-over-time if a time-series aggregation is added to the stats API."
+- QA pass via agent-browser: all 14 studio tabs render without errors. No console errors.
+
+Feature 1: Time-series aggregation in stats API
+- Extended `GET /api/rain/stats` to include a 14-day `activitySeries`:
+  - Queries Event rows for `session_created`, `render_completed`, `export_completed` types with `createdAt >= 14 days ago`
+  - Groups into a 14-element array (one per day, oldest → newest), each with `{ date: "YYYY-MM-DD", count: number }`
+  - Groups in JS rather than Prisma groupBy (SQLite doesn't support date truncation without raw SQL)
+  - Returned alongside the existing aggregate counts
+- Error path returns `activitySeries: []` so the landing degrades gracefully.
+
+Feature 2: Activity sparkline visualization
+- Created `ActivitySparkline` component in `LandingBetaVelocity.tsx`:
+  - Renders a 600×80 SVG area chart with a gradient fill (lime, 30% → 0% opacity) + a glowing line (drop-shadow filter)
+  - Smooth path: uses quadratic bezier (Q) between points for visual smoothness rather than jagged line segments
+  - Dots on non-zero days: small lime circles with glow, so active days stand out
+  - Date range labels: first/middle/last dates in MM-DD format
+  - Header: "14-DAY ACTIVITY" with TrendingUp icon + "N events · 14 days" total
+- Only renders when there's data (hasData && activitySeries.length > 0) — on a fresh DB the empty state ("Be the first to master a track") shows instead.
+
+Styling details:
+- SVG area chart: gradient fill (lime 30%→0%) + line with drop-shadow glow
+- Quadratic bezier smoothing for organic curve
+- Glowing dots on active days (drop-shadow filter)
+- Date range labels in monospace, muted
+- Container: rounded-xl with border, matches the stat cards' styling
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Stats API: returns `activitySeries` with 14 days, real counts from the DB ✓
+- Beta Velocity section: "14-DAY ACTIVITY" label, sparkline SVG with 1 dot (the day with the export event), "LIVE · QUERIED ON PAGE LOAD · NO CACHING" indicator ✓
+- Sparkline SVG found via aria-label, with correct dot count matching the data ✓
+- Studio launch from landing: works ✓
+- `bun run lint` → clean
+- Screenshot saved to `/home/z/my-project/download/landing-beta-velocity-sparkline.png`
+
+Stage Summary:
+- The Beta Velocity section now has a real 14-day activity sparkline — visitors see a visual trend of beta usage over time, not just static counts. This makes the "real numbers" claim even more compelling and dynamic.
+- The stats API now serves both aggregate counts AND a time series, all from real DB queries.
+- Files changed: `src/app/api/rain/stats/route.ts` (added activitySeries aggregation), `src/components/rain/landing/LandingBetaVelocity.tsx` (added activitySeries to interface + ZERO_STATS + ActivitySparkline component).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
+- The sparkline could be made interactive (hover to show day's count + date tooltip). Priority: low.
+- Consider adding more event types to the activity series (signup, login, tab_viewed) for a fuller picture. Priority: low.

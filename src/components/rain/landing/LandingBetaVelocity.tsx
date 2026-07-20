@@ -24,6 +24,7 @@ interface BetaStats {
   totalExports: number
   totalFeedback: number
   changelogEntries: number
+  activitySeries: { date: string; count: number }[]
 }
 
 const ZERO_STATS: BetaStats = {
@@ -33,6 +34,7 @@ const ZERO_STATS: BetaStats = {
   totalExports: 0,
   totalFeedback: 0,
   changelogEntries: 7,
+  activitySeries: [],
 }
 
 export function LandingBetaVelocity() {
@@ -150,6 +152,11 @@ export function LandingBetaVelocity() {
           </div>
         )}
 
+        {/* 14-day activity sparkline */}
+        {!loading && hasData && stats && stats.activitySeries.length > 0 && (
+          <ActivitySparkline series={stats.activitySeries} />
+        )}
+
         {/* Live indicator + honesty note */}
         <div className="flex items-center justify-center gap-2 mt-8">
           <span className="relative flex h-2 w-2">
@@ -247,4 +254,99 @@ function useCountUp(target: number, active: boolean): number {
   }, [active, target])
 
   return display
+}
+
+// ── 14-day activity sparkline ───────────────────────────────────────────────
+// Renders the activitySeries as an SVG area chart with a gradient fill and
+// a glowing line. Shows "14-DAY ACTIVITY" label + total count.
+
+function ActivitySparkline({ series }: { series: { date: string; count: number }[] }) {
+  const width = 600
+  const height = 80
+  const padding = 8
+  const max = Math.max(...series.map((d) => d.count), 1)
+  const total = series.reduce((sum, d) => sum + d.count, 0)
+
+  // Build the SVG path. X is evenly spaced, Y is count/max * height.
+  const stepX = (width - padding * 2) / (series.length - 1)
+  const points = series.map((d, i) => {
+    const x = padding + i * stepX
+    const y = height - padding - (d.count / max) * (height - padding * 2)
+    return { x, y, count: d.count }
+  })
+
+  // Smooth line path (catmull-rom → bezier for visual smoothness)
+  const linePath = points
+    .map((p, i) => {
+      if (i === 0) return `M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`
+      const prev = points[i - 1]
+      const cpX = (prev.x + p.x) / 2
+      return `Q ${cpX.toFixed(1)} ${prev.y.toFixed(1)} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`
+    })
+    .join(' ')
+
+  // Area path (line + close to bottom)
+  const areaPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)} ${height - padding} L ${points[0].x.toFixed(1)} ${height - padding} Z`
+
+  return (
+    <div className="mt-6 rounded-xl border border-rain-border/60 bg-rain-surface-2/40 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+          <TrendingUp className="w-3 h-3 text-[#AAFF00]" />
+          14-Day Activity
+        </span>
+        <span className="text-[10px] font-mono text-muted-foreground/60">
+          {total} events · {series.length} days
+        </span>
+      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full h-16"
+        preserveAspectRatio="none"
+        aria-label="14-day activity sparkline"
+      >
+        <defs>
+          <linearGradient id="sparkline-area" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#AAFF00" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#AAFF00" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="sparkline-line" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#84CC16" />
+            <stop offset="100%" stopColor="#AAFF00" />
+          </linearGradient>
+        </defs>
+        {/* Area fill */}
+        <path d={areaPath} fill="url(#sparkline-area)" />
+        {/* Line */}
+        <path
+          d={linePath}
+          fill="none"
+          stroke="url(#sparkline-line)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ filter: 'drop-shadow(0 0 4px rgba(170,255,0,0.4))' }}
+        />
+        {/* Dots on non-zero days */}
+        {points.map((p, i) =>
+          p.count > 0 ? (
+            <circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r="2"
+              fill="#AAFF00"
+              style={{ filter: 'drop-shadow(0 0 3px rgba(170,255,0,0.6))' }}
+            />
+          ) : null,
+        )}
+      </svg>
+      {/* Date range labels */}
+      <div className="flex justify-between mt-1 text-[9px] font-mono text-muted-foreground/50">
+        <span>{series[0]?.date.slice(5)}</span>
+        <span>{series[Math.floor(series.length / 2)]?.date.slice(5)}</span>
+        <span>{series[series.length - 1]?.date.slice(5)}</span>
+      </div>
+    </div>
+  )
 }

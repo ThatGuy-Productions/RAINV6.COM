@@ -30,14 +30,49 @@ export const dynamic = 'force-dynamic'
  */
 export async function GET() {
   try {
-    const [totalSignups, totalRenders, totalSessions, totalExports, totalFeedback] =
+    // Query activity for the last 14 days — counts of session_created +
+    // render_completed + export_completed events per day. This drives the
+    // sparkline in the Beta Velocity section. Uses createdAt gte to filter,
+    // then groups in JS (Prisma's groupBy with date truncation isn't
+    // supported on SQLite without raw SQL).
+    const fourteenDaysAgo = new Date()
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13) // inclusive of today
+    fourteenDaysAgo.setHours(0, 0, 0, 0)
+
+    const [totalSignups, totalRenders, totalSessions, totalExports, totalFeedback, recentEvents] =
       await Promise.all([
         db.account.count(),
         db.render.count(),
         db.session.count(),
         db.event.count({ where: { type: 'export_completed' } }),
         db.feedback.count(),
+        db.event.findMany({
+          where: {
+            createdAt: { gte: fourteenDaysAgo },
+            type: { in: ['session_created', 'render_completed', 'export_completed'] },
+          },
+          select: { type: true, createdAt: true },
+        }),
       ])
+
+    // Build a 14-day activity series. Each day gets the count of events.
+    // The sparkline on the landing shows total activity per day.
+    const activitySeries: { date: string; count: number }[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    for (let i = 13; i >= 0; i--) {
+      const day = new Date(today)
+      day.setDate(day.getDate() - i)
+      const dayEnd = new Date(day)
+      dayEnd.setDate(dayEnd.getDate() + 1)
+      const count = recentEvents.filter(
+        (e) => e.createdAt >= day && e.createdAt < dayEnd,
+      ).length
+      activitySeries.push({
+        date: day.toISOString().slice(0, 10), // YYYY-MM-DD
+        count,
+      })
+    }
 
     return NextResponse.json(
       {
@@ -49,6 +84,8 @@ export async function GET() {
         // Matches the CHANGELOG array length in WhatsNewPanel.tsx.
         // When new entries are added, bump this number.
         changelogEntries: 7,
+        // 14-day activity series for the sparkline. Each entry is one day.
+        activitySeries,
         generatedAt: new Date().toISOString(),
       },
       {
@@ -68,6 +105,7 @@ export async function GET() {
       totalExports: 0,
       totalFeedback: 0,
       changelogEntries: 7,
+      activitySeries: [],
       generatedAt: new Date().toISOString(),
       error: 'stats unavailable',
     })
