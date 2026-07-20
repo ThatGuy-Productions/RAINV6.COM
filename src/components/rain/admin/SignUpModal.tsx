@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Loader2, Mail, User, Eye, EyeOff, KeyRound, AlertCircle, UserPlus, CheckCircle2, Sparkles } from 'lucide-react'
+import { Loader2, Mail, User, Eye, EyeOff, KeyRound, AlertCircle, UserPlus, CheckCircle2, Sparkles, ArrowRight } from 'lucide-react'
 import { useAuth } from './AuthContext'
 import { getAnonId } from '@/lib/rain/anon-id'
 
@@ -224,9 +224,18 @@ export function SignUpModal({ onClose, onSuccess }: SignUpModalProps) {
               </button>
 
               <div className="flex items-center justify-between pt-1">
-                <p className="text-[10px] text-muted-foreground font-mono">
-                  scrypt · httpOnly · 7-day session
-                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose()
+                    window.dispatchEvent(new CustomEvent('rain:signin-open'))
+                  }}
+                  disabled={submitting}
+                  className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-[#AAFF00] transition-colors group"
+                >
+                  Already have an account? Sign in
+                  <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                </button>
                 <button
                   type="button"
                   onClick={onClose}

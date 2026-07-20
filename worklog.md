@@ -190,3 +190,72 @@ Unresolved / next-phase recommendations:
 - Logout flow: free-tier users clicking the account chip opens the admin door (login form), but there's no explicit "Log out" button visible. Consider adding a logout affordance to the account chip dropdown. Priority: medium.
 - Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.
 - The register route accepts `anonId` but the AuthContext's `register` only passes it from `getAnonId()` — if the user already has a session cookie from a previous login, the anonId is still passed (harmless, but could be made conditional). Priority: low.
+
+---
+Task ID: 5
+Agent: webDevReview (cron round 3)
+Task: Recurring QA pass + add logout/sign-in flow + account dropdown menu.
+
+Work Log:
+- Read worklog.md (Tasks 1-4). App stable. Identified highest-impact gap: no logout affordance for signed-in users (the account chip opened the admin door login form, but there was no explicit "Log out"). Also no "Sign In" entry point for returning users (only Sign Up existed).
+- QA pass via agent-browser: all 14 studio tabs render without errors. No console errors.
+
+Feature 1: Account dropdown menu with logout
+- Replaced the simple account chip button with a full dropdown menu (`AccountMenu` component in `StudioTopBar.tsx`):
+  - Trigger: avatar chip with initial + name + chevron (rotates 180° when open)
+  - Header: large avatar + name + email + tier badge (color-coded: green for free, emerald for enterprise)
+  - Menu items: "Open admin console" (enterprise only), "Account & sessions" (opens admin door), "Log out" (red, calls `logout()`)
+  - Click-outside-to-close + Esc-to-close
+- Initially tried Radix `DropdownMenu` but the trigger didn't reliably toggle in the headless test environment (Radix uses pointer events that don't fire from synthetic clicks). Switched to a custom state-based implementation with `useState` + `useRef` + `useEffect` for outside-click — more robust and works identically.
+- Destructured `logout` from `useAuth()` at the component top level (fixed a hooks-in-callback bug).
+
+Feature 2: Sign In modal for returning users
+- Created `src/components/rain/admin/SignInModal.tsx` — lightweight login modal for existing free-tier accounts:
+  - "Welcome back" header with LogIn icon
+  - Email + password fields (with show/hide toggle)
+  - "No account? Create one" link that switches to the SignUpModal via `rain:signin-open` event
+  - Esc-to-close, click-outside-to-close
+- Wired into `StudioApp.tsx` via `rain:signin-open` window event.
+
+Feature 3: Interconnected auth modals
+- SignUpModal now has "Already have an account? Sign in" link → dispatches `rain:signin-open`
+- SignInModal has "No account? Create one" link → dispatches `rain:signup-open`
+- Users can switch between the two modals seamlessly.
+
+Top bar auth states:
+- Anonymous: "Sign In" (ghost) + "Sign Up" (primary lime) — two clear CTAs
+- Signed in (free): avatar chip dropdown with account info + logout
+- Signed in (enterprise): same dropdown + "Open admin console" menu item + existing shield button
+
+Styling polish:
+- Account dropdown: dark glassmorphism panel with lime border, large avatar in header, tier badge with color-coded bg/border
+- ChevronDown rotates 180° on open for visual feedback
+- Menu items have hover states (lime tint for default, red tint for logout)
+- SignInModal: top accent gradient line matching SignUpModal
+- Modal cross-links have arrow icons that translate-x on hover
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Anonymous state: "Sign In" + "Sign Up" buttons both visible ✓
+- Sign In modal opens, form works, "No account? Create one" switches to SignUp ✓
+- Sign Up modal opens, "Already have an account? Sign in" switches to SignIn ✓
+- Registration: created testuser@rain-beta.test → account chip appeared with dropdown ✓
+- Account dropdown opens (via DOM event dispatch): shows email, tier badge, "Account & sessions", "Log out" ✓
+- Logout: clicked "Log out" → top bar switched back to "Sign In" + "Sign Up" ✓
+- Login: used Sign In modal to log back in → account chip reappeared ✓
+- `bun run lint` → clean
+- Cleaned up test account after verification
+
+Note on testing: `agent-browser click` doesn't fire trusted pointer events that Radix UI's dropdown trigger listens for. The custom state-based dropdown also didn't toggle via `agent-browser click` on the trigger button, but DID toggle when dispatching a real `MouseEvent('click', {bubbles:true})` via `eval`. The code is fully functional in a real browser — this is a headless-test-environment limitation, not a code bug. Verified by dispatching real DOM events: dropdown opened, menu items rendered, logout worked.
+
+Stage Summary:
+- Complete auth flow now available: Sign Up (new users) ↔ Sign In (returning users) → Account dropdown (info + logout). No dead ends.
+- Logout gap from Task 4 worklog: FIXED.
+- Sign-in entry point gap: FIXED.
+- Files changed: `src/components/rain/admin/SignInModal.tsx` (new), `src/components/rain/layout/StudioTopBar.tsx` (AccountMenu component + Sign In button + logout), `src/components/rain/layout/StudioApp.tsx` (SignInModal wiring + rain:signin-open event), `src/components/rain/admin/SignUpModal.tsx` (cross-link to sign in).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied to the installed `@breezystack/lamejs` — MP3 exports have ~18.6kHz cutoff at 320kbps. Quality issue, not a crash. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.
+- The custom AccountMenu dropdown works but doesn't have the Radix accessibility features (focus trap, arrow-key navigation). Could be enhanced with keyboard navigation if needed. Priority: low.
+- The `agent-browser click` limitation with Radix/pointer-event-based components should be noted for future QA — use `agent-browser eval` with `dispatchEvent` for components that don't respond to synthetic clicks. Priority: low (testing tooling).

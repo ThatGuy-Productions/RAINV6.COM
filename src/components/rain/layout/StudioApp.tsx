@@ -23,6 +23,7 @@ import { DataRain } from '@/components/rain/ui/DataRain'
 import { AdminDoorModal } from '@/components/rain/admin/AdminDoorModal'
 import { AdminConsole } from '@/components/rain/admin/AdminConsole'
 import { SignUpModal } from '@/components/rain/admin/SignUpModal'
+import { SignInModal } from '@/components/rain/admin/SignInModal'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
 import { getAnonId } from '@/lib/rain/anon-id'
 
@@ -45,6 +46,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
   const [consoleOpen, setConsoleOpen] = useState(false)
   // Sign-up modal state (free-tier public registration).
   const [signUpOpen, setSignUpOpen] = useState(false)
+  // Sign-in modal state (returning free-tier users).
+  const [signInOpen, setSignInOpen] = useState(false)
 
   // Listen for shortcuts toggle event from StudioTopBar and KeyboardShortcuts
   useEffect(() => {
@@ -60,13 +63,16 @@ export function StudioApp({ onExit }: StudioAppProps) {
     const openDoor = () => setDoorOpen(true)
     const openConsole = () => setConsoleOpen(true)
     const openSignUp = () => setSignUpOpen(true)
+    const openSignIn = () => setSignInOpen(true)
     window.addEventListener('rain:admin-door-open', openDoor)
     window.addEventListener('rain:admin-console-open', openConsole)
     window.addEventListener('rain:signup-open', openSignUp)
+    window.addEventListener('rain:signin-open', openSignIn)
     return () => {
       window.removeEventListener('rain:admin-door-open', openDoor)
       window.removeEventListener('rain:admin-console-open', openConsole)
       window.removeEventListener('rain:signup-open', openSignUp)
+      window.removeEventListener('rain:signin-open', openSignIn)
     }
   }, [])
 
@@ -151,6 +157,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
       {consoleOpen && <AdminConsole onClose={() => setConsoleOpen(false)} />}
       {/* Sign Up — free-tier public registration modal */}
       {signUpOpen && <SignUpModal onClose={() => setSignUpOpen(false)} />}
+      {/* Sign In — returning free-tier users login modal */}
+      {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
       {/* Free Beta Feedback Widget */}
       <FeedbackModal />
     </div>
