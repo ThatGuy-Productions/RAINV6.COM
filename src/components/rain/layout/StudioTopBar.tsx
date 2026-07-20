@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, Bell, Circle, Cpu, Keyboard, Lock, Zap, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Bell, Circle, Cpu, Keyboard, Lock, Zap, ShieldCheck, UserPlus } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { RAIN_BRAND } from '@/lib/rain/constants'
 import { useAuth } from '@/components/rain/admin/AuthContext'
@@ -80,6 +80,49 @@ export function StudioTopBar({ onExit }: StudioTopBarProps) {
           <StatusPill icon={<Cpu className="w-3 h-3" />} label="WASM" color="#AAFF00" />
           <StatusPill icon={<Lock className="w-3 h-3" />} label="Ed25519" color="#10B981" />
           <StatusPill icon={<Zap className="w-3 h-3" />} label="48kHz" color="#F97316" />
+          {/* Account / Sign Up trigger.
+              - Not signed in: "Sign Up" pill → opens the free-tier registration
+                modal. This is the primary conversion affordance for the free
+                beta — anonymous users see it and can create an account to
+                persist their sessions/renders.
+              - Signed in (free tier): shows the user's email initial in a
+                colored chip. Clicking opens the admin door (where they can
+                see account info). Free-tier users are not enterprise, so the
+                admin door will show the login form — which is the right place
+                to log out / manage the session.
+              - Signed in as enterprise: handled by the shield button below. */}
+          {user ? (
+            <button
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent('rain:admin-door-open'))
+              }
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[rgba(170,255,0,0.08)] border border-[rgba(170,255,0,0.25)] text-[11px] font-mono hover:bg-[rgba(170,255,0,0.14)] hover:border-[rgba(170,255,0,0.45)] transition-all"
+              title={`Signed in as ${user.email}`}
+              aria-label={`Account: ${user.email}`}
+            >
+              <span
+                className="w-4 h-4 rounded-full bg-[#AAFF00] text-black text-[9px] font-bold flex items-center justify-center flex-shrink-0"
+              >
+                {(user.name || user.email)[0].toUpperCase()}
+              </span>
+              <span className="hidden sm:inline text-[#AAFF00] max-w-[120px] truncate">
+                {user.name || user.email.split('@')[0]}
+              </span>
+            </button>
+          ) : (
+            <button
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent('rain:signup-open'))
+              }
+              disabled={authLoading}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#AAFF00] text-black text-[11px] font-bold hover:bg-[#c5ff4a] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Sign up for a free account"
+              title="Create a free account to persist your sessions and renders"
+            >
+              <UserPlus className="w-3 h-3" />
+              <span>Sign Up</span>
+            </button>
+          )}
           {/* Enterprise Admin Door trigger.
               - Not signed in: discreet lock icon → opens login/setup modal.
               - Signed in as enterprise: green shield → opens console directly.

@@ -51,6 +51,8 @@ import {
   Zap,
   Music2,
   KeyRound,
+  Sparkles,
+  Filter,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------------------
@@ -84,6 +86,27 @@ interface StatsResponse {
   renderTimeMs: { avg: number | null; max: number | null }
   actor: { id: string; tier: string }
   generatedAt: string
+  /** Beta analytics — activation/retention/funnel/feature-depth.
+   *  May be absent on older snapshots; rendered defensively. */
+  beta?: {
+    activation: {
+      totalSignups: number
+      activatedUsers: number
+      activationRate: number
+      medianHoursToActivation: number | null
+    }
+    retention: { day: number; eligible: number; retained: number; rate: number }[]
+    funnel: {
+      signups: number
+      sessionsCreated: number
+      rendersCompleted: number
+      exportsCompleted: number
+      anonymousSessions: number
+      anonymousRenders: number
+      anonymousExports: number
+    }
+    avgFeatureDepth: number
+  } | null
 }
 
 interface Account {
@@ -353,6 +376,64 @@ function EmptyState({ icon: Icon, label }: { icon: React.ComponentType<{ classNa
     <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground/60">
       <Icon className="size-6" />
       <div className="font-mono text-xs">{label}</div>
+    </div>
+  )
+}
+
+/** A single horizontal bar in the beta conversion funnel.
+ *  Shows the step label, a proportional bar (auth portion solid + anonymous
+ *  portion hatched), and the numeric count. `anon` is a subset of `value`. */
+function BetaFunnelBar({
+  label,
+  value,
+  anon,
+  max,
+  color,
+}: {
+  label: string
+  value: number
+  anon?: number
+  max: number
+  color: string
+}) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0
+  const anonCount = anon ?? 0
+  const authCount = value - anonCount
+  const anonPct = value > 0 ? (anonCount / value) * 100 : 0
+  return (
+    <div className="flex items-center gap-2 py-1">
+      <span className="font-mono text-[10px] text-muted-foreground w-32 flex-shrink-0 truncate">
+        {label}
+      </span>
+      <div className="flex-1 h-5 rounded-md bg-rain-surface-3 overflow-hidden relative">
+        {/* Authenticated portion (solid) */}
+        <div
+          className="h-full transition-all duration-300 flex items-center justify-end pr-1.5"
+          style={{
+            width: `${pct}%`,
+            background: `linear-gradient(90deg, ${color}40, ${color})`,
+          }}
+        >
+          {authCount > 0 && (
+            <span className="font-mono text-[9px] font-bold text-black/80">{authCount}</span>
+          )}
+        </div>
+        {/* Anonymous portion overlay (hatched pattern indicator) */}
+        {anonCount > 0 && (
+          <div
+            className="absolute top-0 h-full transition-all duration-300 flex items-center justify-end pr-1.5"
+            style={{
+              left: `${pct - (pct * anonPct) / 100}%`,
+              width: `${(pct * anonPct) / 100}%`,
+              background: `repeating-linear-gradient(45deg, ${color}30, ${color}30 3px, ${color}15 3px, ${color}15 6px)`,
+              borderLeft: `1px dashed ${color}60`,
+            }}
+          >
+            <span className="font-mono text-[9px] font-bold text-white/70">{anonCount}</span>
+          </div>
+        )}
+      </div>
+      <span className="font-mono text-[10px] font-bold w-8 text-right flex-shrink-0">{value}</span>
     </div>
   )
 }
@@ -1062,6 +1143,167 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
               </div>
             </div>
           </section>
+
+          {/* ============ BETA ANALYTICS (activation / retention / funnel) ============ */}
+          {stats?.beta && (
+            <section>
+              <SectionHeader
+                icon={Sparkles}
+                title="Beta Analytics"
+                hint="activation · retention · funnel · feature depth"
+                right={
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                    depth {stats.beta.avgFeatureDepth.toFixed(1)} tabs/user
+                  </span>
+                }
+              />
+              <div className="grid gap-3 md:grid-cols-2">
+                {/* Activation card */}
+                <div className="rounded-xl border border-rain-border/60 bg-rain-surface-2/40 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                      Activation (7-day)
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/60">
+                      export within 7d of signup
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-3xl font-bold rain-gradient-text-lime">
+                      {(stats.beta.activation.activationRate * 100).toFixed(0)}%
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {stats.beta.activation.activatedUsers}/{stats.beta.activation.totalSignups} users
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/70 font-mono">
+                    median time-to-activation:{' '}
+                    {stats.beta.activation.medianHoursToActivation !== null
+                      ? `${stats.beta.activation.medianHoursToActivation.toFixed(1)}h`
+                      : '—'}
+                  </div>
+                </div>
+
+                {/* Retention card */}
+                <div className="rounded-xl border border-rain-border/60 bg-rain-surface-2/40 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                      Retention cohorts
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/60">
+                      day-N return rate
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {stats.beta.retention.length === 0 && (
+                      <div className="text-[11px] text-muted-foreground/60 italic">
+                        No cohort data yet — needs signups + elapsed time.
+                      </div>
+                    )}
+                    {stats.beta.retention.map((c) => (
+                      <div key={c.day} className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] text-muted-foreground w-12 flex-shrink-0">
+                          D{c.day}
+                        </span>
+                        <div className="flex-1 h-2 rounded-full bg-rain-surface-3 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${Math.min(100, c.rate * 100)}%`,
+                              background:
+                                c.rate > 0.4
+                                  ? 'linear-gradient(90deg,#AAFF00,#84CC16)'
+                                  : c.rate > 0.15
+                                    ? 'linear-gradient(90deg,#F59E0B,#F97316)'
+                                    : '#64748B',
+                            }}
+                          />
+                        </div>
+                        <span className="font-mono text-[10px] text-muted-foreground w-16 text-right flex-shrink-0">
+                          {c.retained}/{c.eligible}
+                        </span>
+                        <span className="font-mono text-[10px] font-bold w-10 text-right flex-shrink-0">
+                          {(c.rate * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Funnel card — full width, shows signup → session → render → export
+                  with authenticated vs anonymous breakdown. */}
+              <div className="mt-3 rounded-xl border border-rain-border/60 bg-rain-surface-2/40 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                    <Filter className="w-3 h-3" />
+                    Conversion funnel
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/60">
+                    distinct identities per step (auth + anon)
+                  </span>
+                </div>
+                <BetaFunnelBar
+                  label="Signups"
+                  value={stats.beta.funnel.signups}
+                  max={Math.max(
+                    stats.beta.funnel.signups,
+                    stats.beta.funnel.sessionsCreated,
+                    stats.beta.funnel.rendersCompleted,
+                    stats.beta.funnel.exportsCompleted,
+                    1,
+                  )}
+                  color="#AAFF00"
+                />
+                <BetaFunnelBar
+                  label="Sessions created"
+                  value={stats.beta.funnel.sessionsCreated}
+                  anon={stats.beta.funnel.anonymousSessions}
+                  max={Math.max(
+                    stats.beta.funnel.signups,
+                    stats.beta.funnel.sessionsCreated,
+                    stats.beta.funnel.rendersCompleted,
+                    stats.beta.funnel.exportsCompleted,
+                    1,
+                  )}
+                  color="#84CC16"
+                />
+                <BetaFunnelBar
+                  label="Renders completed"
+                  value={stats.beta.funnel.rendersCompleted}
+                  anon={stats.beta.funnel.anonymousRenders}
+                  max={Math.max(
+                    stats.beta.funnel.signups,
+                    stats.beta.funnel.sessionsCreated,
+                    stats.beta.funnel.rendersCompleted,
+                    stats.beta.funnel.exportsCompleted,
+                    1,
+                  )}
+                  color="#F59E0B"
+                />
+                <BetaFunnelBar
+                  label="Exports completed"
+                  value={stats.beta.funnel.exportsCompleted}
+                  anon={stats.beta.funnel.anonymousExports}
+                  max={Math.max(
+                    stats.beta.funnel.signups,
+                    stats.beta.funnel.sessionsCreated,
+                    stats.beta.funnel.rendersCompleted,
+                    stats.beta.funnel.exportsCompleted,
+                    1,
+                  )}
+                  color="#F97316"
+                />
+                {stats.beta.funnel.signups === 0 &&
+                  stats.beta.funnel.sessionsCreated === 0 && (
+                    <div className="mt-2 text-[11px] text-muted-foreground/60 italic">
+                      No funnel activity yet — usage will appear here as anonymous
+                      beta users load tracks and export.
+                    </div>
+                  )}
+              </div>
+            </section>
+          )}
 
           {/* ============ FOOTER META ============ */}
           <section className="flex flex-wrap items-center justify-between gap-3 border-t border-rain-border/40 pt-4 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">

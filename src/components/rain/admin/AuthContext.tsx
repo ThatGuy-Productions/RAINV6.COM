@@ -31,6 +31,10 @@ interface AuthState {
   isEnterprise: boolean
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>
   bootstrap: (email: string, password: string, name?: string) => Promise<{ ok: boolean; error?: string }>
+  /** Public free-tier registration. Creates the account + auto-logs-in.
+   *  Passes the browser's anonId so pre-signup anonymous activity is
+   *  attributed to the new account in the activation/retention funnel. */
+  register: (email: string, password: string, name?: string, anonId?: string) => Promise<{ ok: boolean; error?: string }>
   logout: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -112,12 +116,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }, [])
 
+  const register = useCallback(
+    async (email: string, password: string, name?: string, anonId?: string) => {
+      try {
+        const res = await fetch('/api/rain/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, name, anonId }),
+        })
+        const data = (await res.json()) as { user?: AuthUser; error?: string; note?: string }
+        if (!res.ok || !data.user) {
+          return { ok: false, error: data.error ?? 'Registration failed' }
+        }
+        setUser(data.user)
+        return { ok: true }
+      } catch {
+        return { ok: false, error: 'Network error' }
+      }
+    },
+    [],
+  )
+
   const value: AuthState = {
     user,
     loading,
     isEnterprise: user?.tier === 'enterprise',
     login,
     bootstrap,
+    register,
     logout,
     refresh,
   }

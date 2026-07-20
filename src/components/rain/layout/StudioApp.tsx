@@ -22,6 +22,7 @@ import { DataRain } from '@/components/rain/ui/DataRain'
 // read enterprise status via useAuth() without restructuring.
 import { AdminDoorModal } from '@/components/rain/admin/AdminDoorModal'
 import { AdminConsole } from '@/components/rain/admin/AdminConsole'
+import { SignUpModal } from '@/components/rain/admin/SignUpModal'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
 import { getAnonId } from '@/lib/rain/anon-id'
 
@@ -42,6 +43,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
   // Admin door state: doorOpen = login/setup modal; consoleOpen = full console overlay.
   const [doorOpen, setDoorOpen] = useState(false)
   const [consoleOpen, setConsoleOpen] = useState(false)
+  // Sign-up modal state (free-tier public registration).
+  const [signUpOpen, setSignUpOpen] = useState(false)
 
   // Listen for shortcuts toggle event from StudioTopBar and KeyboardShortcuts
   useEffect(() => {
@@ -56,11 +59,14 @@ export function StudioApp({ onExit }: StudioAppProps) {
   useEffect(() => {
     const openDoor = () => setDoorOpen(true)
     const openConsole = () => setConsoleOpen(true)
+    const openSignUp = () => setSignUpOpen(true)
     window.addEventListener('rain:admin-door-open', openDoor)
     window.addEventListener('rain:admin-console-open', openConsole)
+    window.addEventListener('rain:signup-open', openSignUp)
     return () => {
       window.removeEventListener('rain:admin-door-open', openDoor)
       window.removeEventListener('rain:admin-console-open', openConsole)
+      window.removeEventListener('rain:signup-open', openSignUp)
     }
   }, [])
 
@@ -143,6 +149,8 @@ export function StudioApp({ onExit }: StudioAppProps) {
       )}
       {/* Enterprise Admin Console — full overlay, only meaningful when authed */}
       {consoleOpen && <AdminConsole onClose={() => setConsoleOpen(false)} />}
+      {/* Sign Up — free-tier public registration modal */}
+      {signUpOpen && <SignUpModal onClose={() => setSignUpOpen(false)} />}
       {/* Free Beta Feedback Widget */}
       <FeedbackModal />
     </div>

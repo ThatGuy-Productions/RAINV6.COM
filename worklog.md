@@ -125,3 +125,68 @@ Unresolved / next-phase recommendations:
 - The LAME lowpass patch (referenced in audio-engine.ts comments) is not applied to the installed `@breezystack/lamejs` — MP3 exports will have ~18.6kHz cutoff at 320kbps. Quality issue, not a crash. Priority: low.
 - AdminConsole should display the new `anonymousSessions/Renders/Exports` funnel fields (they're in the API response but the UI may not render them yet). Priority: medium.
 - Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.
+
+---
+Task ID: 4
+Agent: webDevReview (cron round 2)
+Task: Recurring QA pass + add user registration UI + AdminConsole beta analytics + styling polish.
+
+Work Log:
+- Read worklog.md (Tasks 1-3). App stable: build, export, anonymous analytics all fixed. Identified next-phase priorities: registration UI (medium), AdminConsole funnel display (medium).
+- QA pass via agent-browser: all 14 studio tabs render without errors. Landing stat counters confirmed animating (16/12/27/18). No console errors anywhere.
+
+Feature 1: User Registration UI (free-tier signup)
+- Added `register` method to `AuthContext.tsx` — calls `POST /api/rain/auth/register`, passes the browser's anonId so pre-signup anonymous activity is attributed to the new account in the activation/retention funnel.
+- Created `src/components/rain/admin/SignUpModal.tsx` — full registration modal matching the AdminDoorModal aesthetic:
+  - Top accent gradient line + header with UserPlus/Sparkles icons
+  - Display name (optional), email, password, confirm password fields
+  - Live password strength meter (4 bars: Too short/Weak/Fair/Good/Strong, color-coded)
+  - Info banner explaining: "Your anonymous beta activity is carried over and attributed to your new profile"
+  - Success state: green checkmark + "Welcome to RAIN V6" + auto-close after 1.4s
+  - Esc-to-close, click-outside-to-close, show/hide password toggle
+- Wired `SignUpModal` into `StudioApp.tsx` via a `rain:signup-open` window event (same pattern as the admin door).
+- Added account/Sign-Up button to `StudioTopBar.tsx`:
+  - Not signed in: prominent lime "Sign Up" pill button (primary conversion affordance)
+  - Signed in (any tier): avatar chip with initial + name/email, click opens admin door
+  - Signed in as enterprise: handled by existing shield button
+
+Feature 2: AdminConsole Beta Analytics section
+- Extended `StatsResponse` interface in `AdminConsole.tsx` to include the `beta` field (activation, retention, funnel with anonymous breakdown, avgFeatureDepth).
+- Added a new "Beta Analytics" section to the AdminConsole with:
+  - **Activation card**: large % display (gradient text), activated/total users, median time-to-activation
+  - **Retention cohorts card**: D1/D7/D30 bars with color-coded rates (green >40%, amber >15%, gray below)
+  - **Conversion funnel card** (full width): 4 horizontal bars (Signups → Sessions → Renders → Exports) with:
+    - Solid portion = authenticated users (count in black)
+    - Hatched portion = anonymous users (count in white, diagonal stripe pattern)
+    - Proportional widths relative to the max step
+    - Empty state message when no activity
+- Created `BetaFunnelBar` helper component with the auth/anon visual split.
+- Added `Sparkles` + `Filter` icons to imports.
+
+Styling polish:
+- SignUpModal: password strength meter with 4 animated bars + color-coded label
+- SignUpModal: success state with green checkmark in a glowing circle
+- AdminConsole: retention cohort bars with gradient fills + rate thresholds
+- AdminConsole: funnel bars with hatched anonymous overlay pattern + dashed divider
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Landing stat counters: animate to 16/12/27/18 on scroll into view ✓
+- Sign Up button visible in top bar for anonymous users ✓
+- SignUp modal opens, form validation works (password match, min length) ✓
+- Real registration: "beta@test.studio" → HTTP 201, account created (tier=free), signup Event tracked WITH anonId, modal showed success state, top bar updated to account chip ✓
+- Admin Console: logged in as enterprise admin → "Beta Analytics" section renders with Activation (0%, 0/2 users), Retention (D1/D7/D30), Conversion Funnel (Signups=2, Sessions=1, Renders=1, Exports=1) ✓
+- 10 animated bars rendered in the funnel section ✓
+- `bun run lint` → clean
+- Cleaned up all test accounts/events after verification
+
+Stage Summary:
+- User registration fully wired end-to-end: client UI → API → DB → analytics attribution. Anonymous users can now convert to authenticated accounts, carrying their beta activity with them.
+- AdminConsole now surfaces the full beta analytics picture (activation/retention/funnel/feature-depth) with the authenticated-vs-anonymous breakdown — admins can see real free-beta usage.
+- Files changed: `src/components/rain/admin/AuthContext.tsx` (register method), `src/components/rain/admin/SignUpModal.tsx` (new), `src/components/rain/layout/StudioApp.tsx` (modal wiring), `src/components/rain/layout/StudioTopBar.tsx` (account/Sign-Up button), `src/components/rain/admin/AdminConsole.tsx` (beta section + BetaFunnelBar helper + StatsResponse.beta field).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied to the installed `@breezystack/lamejs` — MP3 exports have ~18.6kHz cutoff at 320kbps. Quality issue, not a crash. Priority: low.
+- Logout flow: free-tier users clicking the account chip opens the admin door (login form), but there's no explicit "Log out" button visible. Consider adding a logout affordance to the account chip dropdown. Priority: medium.
+- Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.
+- The register route accepts `anonId` but the AuthContext's `register` only passes it from `getAnonId()` — if the user already has a session cookie from a previous login, the anonId is still passed (harmless, but could be made conditional). Priority: low.
