@@ -16,9 +16,9 @@
  * "before" waveform is quieter/unbalanced, "after" is louder/balanced).
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useInView } from 'framer-motion'
-import { ArrowRight, Zap, Gauge, Activity, BarChart3, Sparkles } from 'lucide-react'
+import { ArrowRight, Zap, Gauge, Activity, BarChart3, Sparkles, Play, Pause, Volume2, Loader2 } from 'lucide-react'
 
 // ── Synthetic "before" and "after" data ────────────────────────────────────
 // The waveform is a list of amplitude samples (0..1). "Before" is quiet with
@@ -78,6 +78,139 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
+// ── Audio playback hook ─────────────────────────────────────────────────────
+// Loads the demo WAV and plays it through a Web Audio chain that simulates
+// the before/after mastering difference in real time. The `t` parameter
+// (0..1) drives a GainNode (volume) + BiquadFilter (lowpass cutoff) so the
+// visitor hears the transform as they drag the slider.
+
+interface DemoAudioState {
+  isPlaying: boolean
+  isLoading: boolean
+  error: string | null
+}
+
+function useDemoAudio(tRef: React.MutableRefObject<number>) {
+  const [state, setState] = useState<DemoAudioState>({ isPlaying: false, isLoading: false, error: null })
+  const ctxRef = useRef<AudioContext | null>(null)
+  const bufferRef = useRef<AudioBuffer | null>(null)
+  const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+  const gainRef = useRef<GainNode | null>(null)
+  const filterRef = useRef<BiquadFilterNode | null>(null)
+  const startedAtRef = useRef(0)
+  const offsetRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
+
+  // Sync the audio chain's parameters to the current `t` value.
+  const syncParams = useCallback(() => {
+    const t = tRef.current
+    // Gain: before = 0.35 (quiet), after = 0.85 (loud)
+    if (gainRef.current) {
+      gainRef.current.gain.value = lerp(0.35, 0.85, t)
+    }
+    // Lowpass cutoff: before = 6000 Hz (muffled), after = 20000 Hz (full)
+    if (filterRef.current) {
+      filterRef.current.frequency.value = lerp(6000, 20000, t)
+    }
+  }, [tRef])
+
+  // Continuously sync params while playing (the slider may be dragged).
+  useEffect(() => {
+    if (!state.isPlaying) return
+    const tick = () => {
+      syncParams()
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [state.isPlaying, syncParams])
+
+  const load = useCallback(async () => {
+    if (bufferRef.current || ctxRef.current) return
+    setState((s) => ({ ...s, isLoading: true, error: null }))
+    try {
+      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      const ctx = new Ctor()
+      ctxRef.current = ctx
+      const res = await fetch('/demo-sample.wav')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const arr = await res.arrayBuffer()
+      const buf = await ctx.decodeAudioData(arr)
+      bufferRef.current = buf
+    } catch (e) {
+      setState((s) => ({ ...s, isLoading: false, error: e instanceof Error ? e.message : 'Load failed' }))
+    }
+  }, [])
+
+  const play = useCallback(async () => {
+    await load()
+    const ctx = ctxRef.current
+    const buf = bufferRef.current
+    if (!ctx || !buf) {
+      if (!state.error) setState((s) => ({ ...s, isLoading: false }))
+      return
+    }
+    if (ctx.state === 'suspended') await ctx.resume()
+
+    // Build the chain: source → filter → gain → destination
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.loop = true
+
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.Q.value = 0.7
+
+    const gain = ctx.createGain()
+
+    src.connect(filter)
+    filter.connect(gain)
+    gain.connect(ctx.destination)
+
+    sourceRef.current = src
+    filterRef.current = filter
+    gainRef.current = gain
+
+    syncParams()
+    src.start(0, offsetRef.current % buf.duration)
+    startedAtRef.current = ctx.currentTime
+    setState({ isPlaying: true, isLoading: false, error: null })
+  }, [load, syncParams, state.error])
+
+  const stop = useCallback(() => {
+    const ctx = ctxRef.current
+    const src = sourceRef.current
+    if (ctx && src) {
+      // Track playback position for resume
+      const elapsed = ctx.currentTime - startedAtRef.current
+      offsetRef.current = (offsetRef.current + elapsed) % (bufferRef.current?.duration ?? 1)
+      try { src.stop() } catch { /* already stopped */ }
+      src.disconnect()
+    }
+    sourceRef.current = null
+    setState((s) => ({ ...s, isPlaying: false }))
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (sourceRef.current) {
+        try { sourceRef.current.stop() } catch { /* noop */ }
+      }
+      if (ctxRef.current) {
+        ctxRef.current.close().catch(() => {})
+      }
+    }
+  }, [])
+
+  return { ...state, play, stop }
+}
+
 // ── Main component ──────────────────────────────────────────────────────────
 
 export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
@@ -85,6 +218,13 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
   const isInView = useInView(sectionRef, { once: true, margin: '-80px' })
   const [t, setT] = useState(0) // 0 = before, 1 = after
   const autoPlayedRef = useRef(false)
+
+  // Keep a ref of `t` so the audio hook can read the latest value without
+  // re-subscribing on every slider drag.
+  const tRef = useRef(0)
+  useEffect(() => { tRef.current = t }, [t])
+
+  const audio = useDemoAudio(tRef)
 
   // Auto-play the transition once when scrolled into view.
   useEffect(() => {
@@ -160,7 +300,7 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
         <div className="rounded-2xl border border-[rgba(170,255,0,0.15)] bg-[rgba(14,16,22,0.6)] backdrop-blur-xl overflow-hidden"
           style={{ boxShadow: '0 24px 80px -20px rgba(0,0,0,0.6), 0 0 0 1px rgba(170,255,0,0.04)' }}
         >
-          {/* Top bar — before/after labels */}
+          {/* Top bar — before/after labels + audio toggle */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
             <div className="flex items-center gap-2">
               <div
@@ -170,12 +310,52 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
               <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
                 {isAfter ? 'Mastered' : 'Before Mastering'}
               </span>
+              {audio.isPlaying && (
+                <span className="flex items-center gap-1 ml-1 text-[10px] font-mono text-[#AAFF00]/80">
+                  <span className="flex gap-px items-end h-3">
+                    {[0.4, 0.7, 0.5, 0.9, 0.6].map((h, i) => (
+                      <span
+                        key={i}
+                        className="w-0.5 bg-[#AAFF00] rounded-full animate-pulse"
+                        style={{ height: `${h * 100}%`, animationDelay: `${i * 80}ms` }}
+                      />
+                    ))}
+                  </span>
+                  live
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60">
-              <span className="hidden sm:inline">RAIN ENGINE v6</span>
-              <span>48 kHz · 24-bit</span>
+            <div className="flex items-center gap-3">
+              {/* Audio play/pause button */}
+              <button
+                onClick={() => { if (audio.isPlaying) audio.stop(); else void audio.play() }}
+                disabled={audio.isLoading}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgba(170,255,0,0.1)] border border-[rgba(170,255,0,0.25)] text-[10px] font-mono text-[#AAFF00] hover:bg-[rgba(170,255,0,0.18)] hover:border-[rgba(170,255,0,0.45)] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label={audio.isPlaying ? 'Pause audio demo' : 'Play audio demo'}
+                title={audio.isPlaying ? 'Pause' : 'Play — hear the difference'}
+              >
+                {audio.isLoading ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : audio.isPlaying ? (
+                  <Pause className="w-3 h-3" />
+                ) : (
+                  <Play className="w-3 h-3" />
+                )}
+                <span className="hidden sm:inline">
+                  {audio.isLoading ? 'Loading' : audio.isPlaying ? 'Pause' : 'Play'}
+                </span>
+              </button>
+              <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60">
+                <span className="hidden sm:inline">RAIN ENGINE v6</span>
+                <span>48 kHz · 24-bit</span>
+              </div>
             </div>
           </div>
+          {audio.error && (
+            <div className="px-5 py-1.5 text-[10px] font-mono text-amber-400/80 bg-amber-500/5 border-b border-amber-500/10">
+              Audio unavailable: {audio.error}. Visual demo still works.
+            </div>
+          )}
 
           {/* Visualization grid */}
           <div className="grid md:grid-cols-2 gap-px bg-white/[0.04]">
@@ -287,8 +467,9 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
             Try it with your own track
             <ArrowRight className="w-4 h-4" />
           </button>
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            No upload required — the demo track loads instantly in the studio.
+          <p className="mt-3 text-[11px] text-muted-foreground flex items-center justify-center gap-1.5">
+            <Volume2 className="w-3 h-3" />
+            Hit <span className="font-mono text-[#AAFF00]/80">Play</span> to hear the difference — drag the slider while playing.
           </p>
         </div>
       </div>
