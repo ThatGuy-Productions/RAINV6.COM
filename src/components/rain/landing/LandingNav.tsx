@@ -32,6 +32,7 @@ export function LandingNav({ onLaunch }: LandingNavProps) {
         </a>
 
         <nav className="hidden md:flex items-center gap-6 text-sm">
+          <a href="#demo" className="text-muted-foreground hover:text-foreground transition-colors">Demo</a>
           <a href="#features" className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
           <a href="#architecture" className="text-muted-foreground hover:text-foreground transition-colors">Architecture</a>
           <a href="#pricing" className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>

@@ -259,3 +259,53 @@ Unresolved / next-phase recommendations:
 - Consider adding a socket.io mini-service for real-time collaboration features. Priority: low.
 - The custom AccountMenu dropdown works but doesn't have the Radix accessibility features (focus trap, arrow-key navigation). Could be enhanced with keyboard navigation if needed. Priority: low.
 - The `agent-browser click` limitation with Radix/pointer-event-based components should be noted for future QA — use `agent-browser eval` with `dispatchEvent` for components that don't respond to synthetic clicks. Priority: low (testing tooling).
+
+---
+Task ID: 6
+Agent: webDevReview (cron round 4)
+Task: Recurring QA pass + add interactive landing demo + styling polish.
+
+Work Log:
+- Read worklog.md (Tasks 1-5). App fully stable: build, export, auth (signup/signin/logout), analytics, admin console all working. Remaining recommendations were low-priority (LAME patch, socket.io, keyboard nav).
+- QA pass via agent-browser: all 14 studio tabs render without errors. Investigated a "Fast Refresh runtime error" in the log — confirmed transient (from previous round's edit-during-testing); server recovered and serving 200s cleanly.
+- Investigated Settings tab: initially appeared to show the upload zone, but confirmed via DOM event dispatch that it renders rich content (theme toggle, engine config, checkboxes, keyboard shortcuts). The `agent-browser click` synthetic event limitation from Task 5 still applies.
+
+Feature: Interactive Mastering Demo (landing page)
+- Created `src/components/rain/landing/LandingDemo.tsx` — a full before/after mastering comparison section that demonstrates the product's value without requiring audio playback. Pure-visual but realistic:
+  - **Waveform panel**: 80-bar animated waveform that transforms from quiet/unbalanced (before) to loud/controlled (after), with color shift (amber → lime)
+  - **Spectrum panel**: 24-band frequency analyzer showing muddiness (bass-heavy, scooped mids) → balanced response, with hue gradient (orange lows → lime highs)
+  - **Loudness panel**: LUFS + True Peak meters with animated bars, target markers, and real-time numeric readouts (-18.4 → -14.0 LUFS, -3.2 → -1.0 dBTP)
+  - **RAIN Score gauge**: 270° SVG arc gauge with drop-shadow glow, animating 47 → 92, plus 4 platform sub-scores (Spotify/Apple/YouTube/Tidal)
+- **Auto-play**: when scrolled into view (framer-motion `useInView`), the transition animates over 2.2s with ease-in-out cubic. Uses `useRef` guard (not state) to avoid the set-state-in-effect lint rule.
+- **Interactive slider**: visitors can drag the before/after slider to scrub the transition in real time — all 4 panels interpolate synchronously.
+- **Ambient glow**: radial gradient background that intensifies as the master is "applied" (opacity scales with `t`).
+- Added to `LandingPage.tsx` between Hero and Features. Added "Demo" nav link in `LandingNav.tsx` pointing to `#demo`.
+- CTA button at the bottom: "Try it with your own track" → launches the studio.
+
+Styling details:
+- Glassmorphism panel with lime border tint + backdrop blur + layered box shadow
+- 2×2 grid of visualization panels with hairline dividers (gap-px on white/[0.04])
+- Custom range slider styling: white thumb with lime border + glow, gradient track (amber → lime)
+- SVG gauge with drop-shadow filter for glow effect
+- Spectrum bars use HSL hue gradient (25° → 80°) for frequency-to-color mapping
+- Waveform bars have opacity + box-shadow scaling with amplitude
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Landing page: demo section renders with "LIVE MASTERING DEMO" badge, heading, 4 panels (Waveform/Spectrum/Loudness/RAIN Score), slider, CTA ✓
+- Auto-play: scrolled into view → slider animated to value `1` (after) → RAIN Score showed `92` ✓
+- Slider interactivity: dragged to `0.3` → score changed; dragged to `0` → score changed back ✓
+- CTA button: clicked → navigated to `/#studio` (studio loaded) ✓
+- No console errors
+- `bun run lint` → clean
+- Screenshot saved to `/home/z/my-project/download/landing-demo-section.png`
+
+Stage Summary:
+- New high-impact landing page section: Interactive Mastering Demo. This is the "show, don't tell" moment — visitors see exactly what the 16-stage pipeline does before entering the studio. Major conversion driver.
+- Files changed: `src/components/rain/landing/LandingDemo.tsx` (new), `src/components/rain/landing/LandingPage.tsx` (added LandingDemo), `src/components/rain/landing/LandingNav.tsx` (added Demo link).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
+- The landing demo could be enhanced with actual audio playback (Web Audio API) — currently purely visual. Would require a short demo audio file. Priority: medium.
+- The demo section's synthetic data could be replaced with real measurements from the audio engine after a demo track load. Priority: low.
