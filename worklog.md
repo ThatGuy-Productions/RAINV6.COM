@@ -360,3 +360,65 @@ Unresolved / next-phase recommendations:
 - Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
 - The demo's synthetic visual data (waveform/spectrum) could be replaced with real measurements from the audio engine's AnalyserNode for full audio-reactive visuals. Priority: low.
 - Consider adding keyboard shortcut (Space) to toggle the demo audio playback. Priority: low.
+
+---
+Task ID: 8
+Agent: webDevReview (cron round 6)
+Task: Recurring QA pass + add FAQ section + demo keyboard shortcut.
+
+Work Log:
+- Read worklog.md (Tasks 1-7). App fully stable: build, export, auth, analytics, admin console, landing demo with audio all working. Remaining recommendations were low-priority (LAME patch, socket.io, audio-reactive visuals, keyboard shortcut for demo).
+- QA pass via agent-browser (using DOM event dispatch for reliable clicking): all 14 studio tabs render without errors. Mobile responsiveness verified (iPhone 14 viewport) — nav collapses, demo renders all 4 panels + Play button. No console errors anywhere.
+
+Feature 1: FAQ section (landing page)
+- Created `src/components/rain/landing/LandingFAQ.tsx` — accordion-style frequently-asked-questions section with 6 questions:
+  1. "Does my audio leave my device?" — privacy (ShieldCheck icon, emerald accent)
+  2. "Is the mastering quality professional-grade?" — quality (Music icon, lime accent)
+  3. "What export formats are supported?" — formats (Download icon, cyan accent)
+  4. "How much does it cost?" — pricing (DollarSign icon, amber accent)
+  5. "What is RAIN-CERT provenance?" — provenance (KeyRound icon, purple accent)
+  6. "How long is the beta, and what happens after?" — timeline (Clock icon, orange accent)
+- Each FAQ item has a color-coded icon that lights up when expanded, a chevron that rotates 180°, and a smooth grid-rows accordion animation (0fr → 1fr).
+- First question ("Does my audio leave my device?") is open by default — the highest-friction concern.
+- "Still have questions? Send us feedback" CTA at the bottom that dispatches the `rain:feedback-open` event.
+- Staggered entrance animation (framer-motion whileInView, 50ms delay per item).
+- Added to LandingPage between Pricing and Footer. Added "FAQ" nav link.
+
+Feature 2: Space keyboard shortcut for demo audio
+- Added a keydown listener to `LandingDemo.tsx` that toggles audio playback when:
+  - The Space key is pressed
+  - The user isn't typing in an input/textarea
+  - The demo section is in the viewport (top < 60% viewport height, bottom > 40%)
+- Updated the demo CTA hint to show a styled `<kbd>Space</kbd>` keycap: "Hit Play or press [Space] to hear the difference"
+- The kbd element has a bordered, surface-tinted styling matching the studio theme.
+
+Styling details:
+- FAQ accordion: color-coded accent per question (emerald/lime/cyan/amber/purple/orange), icon background lights up on expand, glow shadow on open items
+- Smooth grid-rows transition for accordion expand/collapse (no height jank)
+- Chevron rotation + color shift on expand
+- Staggered entrance: each FAQ item fades + slides up with 50ms offset
+- Kbd keycap: px-1.5 py-0.5 rounded border with surface bg, monospace font
+
+Verification (agent-browser, end-to-end):
+- All 14 studio tabs: OK (zero errors)
+- Mobile (iPhone 14): landing nav collapses, demo renders correctly ✓
+- FAQ section: renders with "FREQUENTLY ASKED" badge, "Questions, answered." heading, all 6 questions, first expanded by default ✓
+- Accordion interaction: clicked second question → it expanded (first collapsed) ✓
+- "Send us feedback" CTA present ✓
+- FAQ nav link present ✓
+- Demo Space hint: `<kbd>Space</kbd>` keycap visible ✓
+- Studio launch from landing: works ✓
+- `bun run lint` → clean
+- Screenshots: `/home/z/my-project/download/landing-faq-section.png`
+
+Stage Summary:
+- New high-trust landing section: FAQ answering the 6 most common beta questions (privacy, quality, formats, pricing, provenance, timeline). This is the last trust-building section before the footer — removes conversion friction.
+- Demo audio can now be toggled with the Space key (when demo is in view) — matches the studio's keyboard-first UX.
+- Files changed: `src/components/rain/landing/LandingFAQ.tsx` (new), `src/components/rain/landing/LandingPage.tsx` (added LandingFAQ), `src/components/rain/landing/LandingNav.tsx` (added FAQ link), `src/components/rain/landing/LandingDemo.tsx` (Space shortcut + kbd hint).
+
+Unresolved / next-phase recommendations:
+- The LAME lowpass patch (referenced in audio-engine.ts comments) is still not applied — MP3 exports have ~18.6kHz cutoff at 320kbps. Priority: low.
+- Consider adding a socket.io mini-service for real-time collaboration. Priority: low.
+- The demo's synthetic visual data could be replaced with real AnalyserNode measurements. Priority: low.
+- Consider adding a "What's New" changelog section or badge to surface recent features (auth, demo audio, FAQ). Priority: low.
+- The FAQ could be expanded with more questions based on real beta feedback. Priority: low.

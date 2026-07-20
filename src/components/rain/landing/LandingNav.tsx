@@ -36,6 +36,7 @@ export function LandingNav({ onLaunch }: LandingNavProps) {
           <a href="#features" className="text-muted-foreground hover:text-foreground transition-colors">Features</a>
           <a href="#architecture" className="text-muted-foreground hover:text-foreground transition-colors">Architecture</a>
           <a href="#pricing" className="text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
+          <a href="#faq" className="text-muted-foreground hover:text-foreground transition-colors">FAQ</a>
           <a href="#pricing" className="text-muted-foreground hover:text-foreground transition-colors">Free Beta</a>
         </nav>
 

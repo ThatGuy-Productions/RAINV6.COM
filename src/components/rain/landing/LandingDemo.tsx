@@ -245,6 +245,26 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
     return () => cancelAnimationFrame(rafId)
   }, [isInView])
 
+  // Keyboard shortcut: Space toggles audio playback when the demo section
+  // is in view. Ignores the keypress if the user is typing in an input.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+      // Only react when the demo section is in the viewport
+      const rect = sectionRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const inView = rect.top < window.innerHeight * 0.6 && rect.bottom > window.innerHeight * 0.4
+      if (!inView) return
+      e.preventDefault()
+      if (audio.isPlaying) audio.stop()
+      else void audio.play()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [audio])
+
   // Interpolated data
   const wave = useMemo(
     () => BEFORE_WAVE.map((v, i) => lerp(v, AFTER_WAVE[i], t)),
@@ -467,9 +487,11 @@ export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
             Try it with your own track
             <ArrowRight className="w-4 h-4" />
           </button>
-          <p className="mt-3 text-[11px] text-muted-foreground flex items-center justify-center gap-1.5">
+          <p className="mt-3 text-[11px] text-muted-foreground flex items-center justify-center gap-1.5 flex-wrap">
             <Volume2 className="w-3 h-3" />
-            Hit <span className="font-mono text-[#AAFF00]/80">Play</span> to hear the difference — drag the slider while playing.
+            Hit <span className="font-mono text-[#AAFF00]/80">Play</span> or press
+            <kbd className="px-1.5 py-0.5 rounded border border-rain-border bg-rain-surface-2/60 text-[9px] font-mono text-foreground/80">Space</kbd>
+            to hear the difference — drag the slider while playing.
           </p>
         </div>
       </div>
