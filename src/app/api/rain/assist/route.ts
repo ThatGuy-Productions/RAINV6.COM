@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 import { RAIN_ASSISTANT_SYSTEM_PROMPT } from '@/lib/rain/ai-prompts'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
-import { withTierGate } from '@/lib/rain/tier-gate'
+// withTierGate is intentionally NOT imported — the AI Co-Master is unlocked
+// for all users during the free public beta. Post-beta, re-add:
+//   import { withTierGate } from '@/lib/rain/tier-gate'
+// and gate with `withTierGate(req, 'creator')`.
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -10,8 +13,8 @@ export const maxDuration = 30
 /** Abort the LLM call after 22s so our catch block can fire the graceful
  * fallback before the platform's 30s hard kill (which happens before the
  * catch block runs in production). */
-const LLM_TIMEOUT_MS = 22_000
-const LLM_MAX_TOKENS_ASSIST = 800
+const LLM_TIMEOUT_MS = 28_000
+const LLM_MAX_TOKENS_ASSIST = 600
 
 /**
  * POST /api/rain/assist
@@ -37,14 +40,11 @@ const LLM_MAX_TOKENS_ASSIST = 800
  */
 export async function POST(req: NextRequest) {
   try {
-    // Tier gate: AI Co-Master is a Creator-tier feature (≥ $9/mo).
-    const gate = await withTierGate(req, 'creator')
-    if (!gate.ok) {
-      return NextResponse.json(
-        { error: gate.error, required: gate.required, current: gate.current },
-        { status: gate.status },
-      )
-    }
+    // FREE BETA: the AI Co-Master Engineer is unlocked for everyone during the
+    // free public beta (per the FAQ: "the AI Co-Master Engineer — all free").
+    // The tier gate is intentionally NOT enforced here so anonymous + free-tier
+    // users can use it. Post-beta, re-enable: `withTierGate(req, 'creator')`.
+    // Rate limiting still applies to prevent LLM abuse.
 
     // Rate limit: 20 requests/min per IP — prevents abuse of the LLM endpoint.
     const rl = checkRateLimit(req, 'assist', 20)

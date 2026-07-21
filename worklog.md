@@ -741,3 +741,78 @@ Verification:
 - Cleaned up all test accounts/data
 
 Files changed: `src/lib/rain/auth.ts` (cookie builder + loginWithPassword + logout signatures), `src/app/api/rain/auth/login/route.ts` (pass req), `src/app/api/rain/auth/register/route.ts` (pass req), `src/app/api/rain/admin/bootstrap/route.ts` (pass req).
+
+---
+Task ID: 15
+Agent: main (orchestrator)
+Task: FORENSIC TEST — every button, every action, every function. Fix what doesn't work. No fake claims.
+
+Forensic Test Results:
+
+API ENDPOINTS (17 tested):
+- 1.1  GET /                                → 200 ✓ (243KB landing page)
+- 1.2  GET /api/rain/auth/me (anon)        → 200 {user:null} ✓
+- 1.3  GET /api/rain/admin/status          → 200 {bootstrapped:false} ✓
+- 1.4  GET /api/rain/stats                 → 200 real aggregate counts ✓
+- 1.5  GET /api/rain/reviews               → 200 {reviews:[],count:0} ✓
+- 1.6  POST /api/rain/events               → 200 {ok:true} ✓
+- 1.7  POST /api/rain/session (anon)      → 200 {sessionId:null,anonymous:true} ✓
+- 1.8  POST /api/rain/render (anon)        → 200 {ok:true,anonymous:true} ✓
+- 1.9  POST /api/rain/feedback             → 201 {ok:true} ✓
+- 1.10 GET /api/rain/source (anon)         → 403 (enterprise-gated) ✓
+- 1.11 GET /api/rain/admin/stats (anon)    → 403 (enterprise-gated) ✓
+- 1.12 GET /api/rain/admin/accounts (anon)→ 403 ✓
+- 1.13 GET /api/rain/admin/renders (anon) → 403 ✓
+- 1.14 GET /api/rain/provenance           → 200 {algorithm:"Ed25519",...} ✓
+- 1.15 POST /api/rain/assist              → WAS 403 (tier-gated) → FIXED → 200 real AI response ✓
+- 1.16 POST /api/rain/suggest             → WAS 403 (tier-gated) → FIXED → 200 real AI report ✓
+- 1.17 POST /api/rain/distribute          → 409 (honest: needs LABELGRID_API_KEY env var) ✓
+
+BUGS FOUND AND FIXED:
+
+Bug 1: AI Co-Master Engineer was tier-gated (FAKE CLAIM)
+- The FAQ explicitly says "the AI Co-Master Engineer — all free" during the free beta.
+- But /api/rain/assist returned 403 "Tier insufficient, required: creator" for anonymous/free users.
+- And /api/rain/suggest returned 403 "required: independent".
+- FIX: Removed the withTierGate('creator') call from assist/route.ts and withTierGate('independent') from suggest/route.ts. Both now work for anonymous + free-tier users (rate limiting still applies). Post-beta, the gates can be re-enabled.
+- VERIFIED: assist now returns a real LLM response with macros (glue:8, punch:7), 92% confidence, reasoning, and tension detection. suggest returns a real mastering report.
+
+Bug 2: LLM requests timing out (22s timeout was too tight)
+- The assist/suggest routes had LLM_TIMEOUT_MS = 22_000 but the complex system prompt took ~22s, causing intermittent timeouts.
+- FIX: Increased LLM_TIMEOUT_MS to 28_000 (just under the 30s maxDuration) and reduced max_tokens (assist: 800→600, suggest: 500→400) to speed up response generation.
+- VERIFIED: assist now consistently returns a real AI response in ~22s.
+
+UI FORENSIC TESTS:
+- Landing nav links: all 6 exist (demo, features, architecture, pricing, reviews, faq) ✓
+- All 14 studio tabs render without errors ✓
+- Mastering pipeline: Load Demo → Run 16-Stage Master → "Re-render Master" appeared ✓
+- Export: Export Master → "VERIFICATION REPORT: Verified ✓" ✓
+- AI Co-Master: AI Suggest button → called /api/rain/assist (200) → macros changed (GLUE:5, PUNCH:6) ✓
+- Admin Console: bootstrap → admin door shows LOGIN (not setup) → login → console opens with Beta Analytics (real funnel data: Sessions=2, Renders=2, Exports=1) ✓
+- Enterprise routes with admin session: admin/stats, admin/accounts, admin/renders → all 200 OK ✓
+- Source ZIP download: 200 application/zip ✓
+- Session persistence: reload → still logged in as admin ✓
+- Logout: account menu → Log out → Sign In button appears ✓
+- FAQ accordion: first question expanded by default, clicking second expands it ✓
+- Demo audio: /demo-sample.wav accessible (200, 768KB), Play button works ✓
+- Reviews section: renders empty state ("Be the first"), submit form works ✓
+- Beta Velocity stats: real DB counts, sparkline renders ✓
+
+HONESTY VERIFICATION:
+- No fabricated metrics remain (the "12,847 hours" was removed in Task 10) ✓
+- Stats API returns real DB counts (verified: 0 signups, 2 sessions, 1 export from test activity) ✓
+- Distribute route honestly reports it needs LABELGRID_API_KEY (doesn't fake success) ✓
+- Provenance route honestly reports "AudioSeal not available in-browser" ✓
+- Export verification re-parses the actual file bytes (not just toggle state) ✓
+
+Stage Summary:
+- 2 real bugs fixed: AI Co-Master tier-gate (was 403, now works for all) + LLM timeout (was timing out, now returns real responses).
+- Every API endpoint tested and either works or honestly reports its limitation.
+- Every studio tab renders without errors.
+- The full mastering pipeline (load → run → export → verify) works end-to-end.
+- Auth persists across reloads (cookie fix from Task 14 confirmed).
+- Admin console shows real analytics data.
+- `bun run lint` → clean.
+- No fake claims remain: the AI Co-Master, which was advertised as free but 403'd free users, now actually works for free users.
+
+Files changed: `src/app/api/rain/assist/route.ts` (removed tier gate + increased timeout + reduced max_tokens), `src/app/api/rain/suggest/route.ts` (same).

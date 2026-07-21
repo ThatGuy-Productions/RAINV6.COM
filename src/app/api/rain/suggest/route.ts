@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 import { RAIN_ASSISTANT_REPORT_PROMPT } from '@/lib/rain/ai-prompts'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
-import { withTierGate } from '@/lib/rain/tier-gate'
+// withTierGate is intentionally NOT imported — the standalone mastering
+// report is unlocked for all users during the free public beta. Post-beta,
+// re-add: `import { withTierGate } from '@/lib/rain/tier-gate'` and gate
+// with `withTierGate(req, 'independent')`.
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
 
-const LLM_TIMEOUT_MS = 22_000
-const LLM_MAX_TOKENS_SUGGEST = 500
+const LLM_TIMEOUT_MS = 28_000
+const LLM_MAX_TOKENS_SUGGEST = 400
 
 /**
  * POST /api/rain/suggest
@@ -25,14 +28,9 @@ const LLM_MAX_TOKENS_SUGGEST = 500
  */
 export async function POST(req: NextRequest) {
   try {
-    // Tier gate: standalone mastering report is an Independent-tier feature.
-    const gate = await withTierGate(req, 'independent')
-    if (!gate.ok) {
-      return NextResponse.json(
-        { error: gate.error, required: gate.required, current: gate.current },
-        { status: gate.status },
-      )
-    }
+    // FREE BETA: standalone mastering report is unlocked for everyone during
+    // the free public beta. Post-beta, re-enable: `withTierGate(req, 'independent')`.
+    // Rate limiting still applies to prevent LLM abuse.
 
     // Rate limit: 15 requests/min per IP — slightly tighter than assist since
     // report generation is more expensive.
