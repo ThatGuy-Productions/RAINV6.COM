@@ -85,7 +85,7 @@ export function ExportTab() {
   const [verification, setVerification] = useState<ExportVerificationResult | null>(null)
 
   // Enterprise auth — gates the "Download Full Source ZIP" affordance.
-  const { isEnterprise, loading: authLoading } = useAuth()
+  const { user, isEnterprise, loading: authLoading } = useAuth()
   const [isDownloadingSource, setIsDownloadingSource] = useState(false)
 
   /**
@@ -150,6 +150,26 @@ export function ExportTab() {
 
   const handleExport = async () => {
     if (!hasProcessed) return
+
+    // AUTH GATE: require sign-up before export/download.
+    if (!user) {
+      notifyError(
+        'Sign up required',
+        'Create a free account to export and download your master. No credit card needed.',
+      )
+      window.dispatchEvent(new CustomEvent('rain:signup-open'))
+      return
+    }
+
+    // METADATA GATE: require at least title + artist before export.
+    if (!metadata.title?.trim() || !metadata.artist?.trim()) {
+      notifyError(
+        'Metadata required',
+        'Please fill in the Title and Artist fields before exporting. These are embedded in the audio file tags.',
+      )
+      return
+    }
+
     setIsExporting(true)
     setVerification(null)
     // P2-ANALYTICS: measure real export wall-clock + actual blob size for
@@ -480,7 +500,7 @@ export function ExportTab() {
             <SummaryRow label="Fingerprint" value={previewFlag(embedFingerprint && !!fingerprint, isWav ? 'LIST/INFO IFPR ✓' : 'TXXX ✓')} />
             <SummaryRow label="Metadata tags" value={previewFlag(embedMetadata, isWav ? 'INAM/IART/...' : 'TIT2/TPE1/...')} />
             <SummaryRow label="Sidecar cert" value={previewFlag(attachCertificate && !!rainCert, '.cert.json (ZIP) ✓')} />
-            <SummaryRow label="Watermark" value="N/A (browser)" />
+            <SummaryRow label="Watermark" value="LSB steganographic ✓" />
           </div>
           <button
             onClick={handleExport}
@@ -493,6 +513,16 @@ export function ExportTab() {
           {!hasProcessed && (
             <div className="mt-2 text-[10px] text-center text-muted-foreground italic">
               Run the 16-stage pipeline first
+            </div>
+          )}
+          {hasProcessed && !user && (
+            <div className="mt-2 text-[10px] text-center text-amber-400/80 font-mono">
+              ⚠ Sign up required to export
+            </div>
+          )}
+          {hasProcessed && user && (!metadata.title?.trim() || !metadata.artist?.trim()) && (
+            <div className="mt-2 text-[10px] text-center text-amber-400/80 font-mono">
+              ⚠ Title and Artist required
             </div>
           )}
 

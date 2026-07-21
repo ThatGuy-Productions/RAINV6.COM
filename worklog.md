@@ -816,3 +816,97 @@ Stage Summary:
 - No fake claims remain: the AI Co-Master, which was advertised as free but 403'd free users, now actually works for free users.
 
 Files changed: `src/app/api/rain/assist/route.ts` (removed tier gate + increased timeout + reduced max_tokens), `src/app/api/rain/suggest/route.ts` (same).
+
+---
+Task ID: 16
+Agent: main (orchestrator)
+Task: Build studio tour, signup-before-export gate, metadata validation, exit review popup, LSB watermark, and a separate /tools page with 35 real working free tools.
+
+Work Log:
+
+STUDIO FEATURES:
+
+1. Step-by-step studio tour with skip function
+   - Created `StudioTour.tsx` — 8-step guided walkthrough (welcome → upload → macros → master → export → provenance → analytics → signup)
+   - Each step: icon, title, body text, optional highlight hint
+   - Skip button (X + "Skip tour" link), Back/Next navigation
+   - Progress dots (click to jump), keyboard nav (arrows + Esc to skip)
+   - localStorage flag prevents re-showing after completion or skip
+   - Shows 1.5s after first studio load
+
+2. Signup-required gate before export/download
+   - Updated `ExportTab.tsx` `handleExport()` — if `!user`, fires an error toast ("Sign up required") and opens the SignUpModal via `rain:signup-open` event
+   - Visual indicator: "⚠ Sign up required to export" shows below the Export Master button when not signed in
+
+3. Metadata-required validation before export
+   - Updated `handleExport()` — if `!metadata.title` or `!metadata.artist`, fires an error toast ("Metadata required — Title and Artist") and returns without exporting
+   - Visual indicator: "⚠ Title and Artist required" shows when metadata is incomplete
+
+4. Live review popup on exit
+   - Created `ExitReviewPopup.tsx` — triggers on `beforeunload` when the user has meaningfully interacted (loaded a track, ran a master, or viewed tabs)
+   - Shows a compact review form: 5-star rating, name, review text, submit button
+   - Calls `POST /api/rain/reviews` on submit
+   - sessionStorage flag prevents re-showing within the same session
+   - Success state with checkmark, auto-dismiss after 1.5s
+
+5. Real LSB audio watermark in WAV exports
+   - Updated `audioBufferToWav()` in `audio-engine.ts` — embeds a 32-bit watermark derived from the provenance signature hash into the LSB of every 32nd sample on channel 0
+   - The LSB modification is ~1/65536 of the signal at 16-bit — far below the noise floor, imperceptible
+   - This is a real, deterministic, verifiable steganographic watermark (NOT AudioSeal AI watermarking — that's not available in-browser, as documented)
+   - Updated the Export tab summary to show "LSB steganographic ✓" instead of "N/A (browser)"
+
+FREE TOOLS PAGE (/tools):
+
+6. Tools catalog (`tools-catalog.ts`)
+   - 35 real tools across 5 categories:
+     - Audio Conversion (7): FLAC→WAV, FLAC→MP3, WAV→MP3, WAV→AIFF, AIFF→WAV, AIFF→MP3, MP3→WAV
+     - Audio Effects (12): Volume, Bass Boost, EQ, Reverse, Stereo Panner, Vocal Remover, Reverb, Pitch/Tempo, Noise Reducer, Downmixer, 3D Audio, Auto Panner
+     - Audio Tools (5): Trimmer, BPM Detector, Waveform Image, Spectrogram Image, Spotify URL↔URI
+     - Image Conversion (6): JPG↔PNG↔WEBP, PNG→GIF, JPG→GIF, WEBP→PNG
+     - PDF Tools (6): Rotate, Split, Combine, Extract Pages, HTML→PDF
+
+7. Audio processing library (`tools-audio.ts`)
+   - `decodeAudioFile()` — decodes any browser-supported format via Web Audio API
+   - `encodeWav()` — manual PCM WAV encoder (16/24-bit)
+   - `encodeAiff()` — manual AIFF encoder with 80-bit extended float sample rate
+   - `encodeMp3()` — real LAME encoding via lamejs (320 kbps CBR)
+   - All 12 audio effects: Volume (GainNode), Bass Boost (lowshelf BiquadFilter), EQ (peaking filters), Reverse (buffer reversal), Pan (StereoPanner), Vocal Remover (L-R center cancellation), Reverb (ConvolverNode with generated impulse response), Pitch/Tempo (playbackRate + detune), Noise Reducer (highpass + lowpass + compressor gate), Downmixer (mono/stereo), 3D Audio (HRTF PannerNode), Auto Panner (LFO → StereoPanner.pan)
+   - Audio tools: trimAudio, detectBPM (peak-based), generateWaveformImage (Canvas), generateSpectrogramImage (FFT + Canvas), convertSpotifyUri
+
+8. Tools landing page (`/tools/page.tsx`)
+   - Hero: "Free File Conversion Tools" with "100% In-Browser" badge
+   - 5 category sections with tool count + icon
+   - Each tool: name, description, output format badge, "in-browser" label
+   - "What's NOT here (and why)" honesty section explaining why video/AAC/Word/PSD/TTF-EOT conversions aren't possible
+
+9. Dynamic tool page (`/tools/[slug]/page.tsx`)
+   - Upload zone (drag-drop + click to browse)
+   - Tool-specific options UI (sliders for volume/bass/EQ/pan/reverb/pitch/etc.)
+   - "Convert to .{ext}" button
+   - Processing state with spinner
+   - Error display
+   - Result with download link + file size
+   - "Convert another file" reset
+
+10. Navigation
+    - Added "Free Tools" button to landing nav (next to Launch Studio)
+    - Tools page has "Back to studio" link
+
+Verification (agent-browser, end-to-end):
+- Tools landing page: renders with all 5 categories, 35 tool links ✓
+- WAV to MP3 tool: uploaded demo-sample.wav → clicked "Convert to .mp3" → "Conversion complete!" → download link shows "demo-sample.mp3" ✓
+- No console errors during conversion ✓
+- Studio tour: not re-tested (shows on first visit only, localStorage)
+- Auth gate + metadata gate: code verified, will trigger on export click
+- LSB watermark: embedded in every WAV export (code verified)
+- `bun run lint` → clean (extracted OptionSlider to module level to fix static-components lint error)
+- Installed `pdf-lib` for PDF tools
+
+Files changed: `src/components/rain/layout/StudioTour.tsx` (new), `src/components/rain/layout/ExitReviewPopup.tsx` (new), `src/components/rain/layout/StudioApp.tsx` (tour + exit popup wiring), `src/components/rain/tabs/ExportTab.tsx` (auth gate + metadata gate + watermark label), `src/lib/rain/audio-engine.ts` (LSB watermark), `src/lib/rain/tools-catalog.ts` (new), `src/lib/rain/tools-audio.ts` (new), `src/app/tools/page.tsx` (new), `src/app/tools/[slug]/page.tsx` (new), `src/components/rain/landing/LandingNav.tsx` (Free Tools link), `package.json` (pdf-lib).
+
+Unresolved / next-phase recommendations:
+- The exit review popup uses `beforeunload` which is unreliable in cross-origin iframes (the preview environment). May need a fallback "before you leave" in-app modal. Priority: medium.
+- PDF Split currently downloads only the first page as a single PDF. A full split-to-ZIP would require the server-zip.ts library adapted for client use. Priority: low.
+- PDF Combine needs multiple file upload (currently only processes the first file). Priority: medium.
+- The FLAC→WAV/MP3 conversions depend on the browser's FLAC decoder (Chrome supports it, Firefox may not). Could add a libflac.js fallback. Priority: low.
+- The spectrogram generator uses a naive DFT (slow). Could use Web Audio's AnalyserNode for real-time. Priority: low.

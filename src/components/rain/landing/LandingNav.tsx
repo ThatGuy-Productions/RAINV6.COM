@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { Terminal } from 'lucide-react'
+import { Terminal, Wrench } from 'lucide-react'
 import { RAIN_BRAND } from '@/lib/rain/constants'
 
 interface LandingNavProps {
@@ -42,6 +42,13 @@ export function LandingNav({ onLaunch }: LandingNavProps) {
         </nav>
 
         <div className="flex items-center gap-2">
+          <a
+            href="/tools"
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-rain-border bg-rain-surface-2/60 text-sm text-muted-foreground hover:text-foreground hover:border-rain-accent/30 transition-colors"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            Free Tools
+          </a>
           <button
             onClick={onLaunch}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-rain-accent text-black text-sm font-semibold hover:scale-[1.02] active:scale-95 transition-transform"

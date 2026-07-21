@@ -26,6 +26,8 @@ import { SignUpModal } from '@/components/rain/admin/SignUpModal'
 import { SignInModal } from '@/components/rain/admin/SignInModal'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
 import { WhatsNewPanel } from '@/components/rain/layout/WhatsNewPanel'
+import { StudioTour } from '@/components/rain/layout/StudioTour'
+import { ExitReviewPopup } from '@/components/rain/layout/ExitReviewPopup'
 import { getAnonId } from '@/lib/rain/anon-id'
 
 /* ---------------------------------------------------------------------------
@@ -169,6 +171,10 @@ export function StudioApp({ onExit }: StudioAppProps) {
       <FeedbackModal />
       {/* What's New changelog panel — opened by the notifications bell */}
       <WhatsNewPanel open={whatsNewOpen} onClose={() => setWhatsNewOpen(false)} />
+      {/* Studio tour — shows on first visit, skip-able */}
+      <StudioTour />
+      {/* Exit review popup — triggers on beforeunload if user has interacted */}
+      <ExitReviewPopup />
     </div>
   )
 }
