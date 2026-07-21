@@ -28,7 +28,7 @@ export function LandingPage({ onLaunch }: LandingPageProps) {
   // and `animate`/`whileInView` props still work — only the `initial` entrance
   // snapshot is skipped.
   return (
-    <MotionConfig initial={false}>
+    <MotionConfig>
       <div className="min-h-screen flex flex-col">
         <LandingNav onLaunch={onLaunch} />
         {/* Partner logo marquee banner — horizontal strip just below the main nav */}

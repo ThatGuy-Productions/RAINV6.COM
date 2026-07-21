@@ -45,9 +45,9 @@ export async function getUsageStats(): Promise<UsageStats> {
     const [totalUsers, totalRenders, totalExports, renders30d, exports30d, feedbackCount] = await Promise.all([
       db.account.count(),
       db.render.count(),
-      db.render.count({ where: { format: { not: null } } }),
+      db.render.count(),
       db.render.count({ where: { createdAt: { gte: past30d } } }),
-      db.render.count({ where: { format: { not: null }, createdAt: { gte: past30d } } }),
+      db.render.count({ where: { createdAt: { gte: past30d } } }),
       db.feedback.count(),
     ])
 
@@ -58,7 +58,7 @@ export async function getUsageStats(): Promise<UsageStats> {
 
     // Last export timestamp
     const lastRender = await db.render.findFirst({
-      where: { format: { not: null } },
+      where: {},
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     })

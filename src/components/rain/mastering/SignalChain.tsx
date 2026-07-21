@@ -10,7 +10,7 @@ const progressBarVariants = {
   hidden: { width: '0%' },
   visible: (progress: number) => ({
     width: `${progress}%`,
-    transition: { duration: 0.3, ease: 'easeOut' }
+    transition: { duration: 0.3, ease: 'easeOut' as const }
   })
 }
 
@@ -25,7 +25,7 @@ const pulseGlowVariants = {
     transition: {
       duration: 1.5,
       repeat: Infinity,
-      ease: 'easeInOut'
+      ease: 'easeInOut' as const
     }
   }
 }
@@ -37,7 +37,7 @@ const checkmarkVariants = {
     scale: 1, 
     rotate: 0,
     transition: { 
-      type: 'spring', 
+      type: 'spring' as const, 
       stiffness: 500, 
       damping: 30,
       delay: 0.1
@@ -114,7 +114,7 @@ export function SignalChain() {
               className="h-full bg-gradient-to-r from-rain-accent/60 to-rain-accent rounded-full"
               initial={{ width: '0%' }}
               animate={{ width: `${progress}%` }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              transition={{ duration: 0.3, ease: 'easeOut' as const }}
             />
           </div>
           <div className="flex justify-between text-[9px] font-mono text-muted-foreground mt-1">
@@ -241,7 +241,7 @@ export function SignalChain() {
                         scale: [1, 1.1, 0.9]
                       }}
                       exit={{ opacity: 0 }}
-                      transition={{ duration: 0.6, ease: 'easeOut' }}
+                      transition={{ duration: 0.6, ease: 'easeOut' as const }}
                     >
                       {/* Corner sparkles */}
                       <motion.div 

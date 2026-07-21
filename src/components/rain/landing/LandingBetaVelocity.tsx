@@ -181,7 +181,7 @@ function StatCard({
   loading,
   color,
 }: {
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   label: string
   value: number | undefined
   loading: boolean

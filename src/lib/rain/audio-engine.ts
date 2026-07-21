@@ -491,7 +491,7 @@ class RainAudioEngine {
     const sampleRate = this.inputBuffer.sampleRate
     const numChannels = repairedChannels.length
     const newBuffer = this.context.createBuffer(numChannels, length, sampleRate)
-    for (let c = 0; c < numChannels; c++) newBuffer.copyToChannel(repairedChannels[c], c)
+    for (let c = 0; c < numChannels; c++) newBuffer.copyToChannel(repairedChannels[c] as Float32Array<ArrayBuffer>, c)
     this.inputBuffer = newBuffer
     // Update duration (repair length is normally unchanged, but be safe)
     this.state.duration = newBuffer.duration
@@ -1144,7 +1144,7 @@ class RainAudioEngine {
     const outChannelCount = inChannels.length
     const offCtx = new OfflineAudioContext(outChannelCount, length, sampleRate)
     const outBuffer = offCtx.createBuffer(outChannelCount, length, sampleRate)
-    for (let ch = 0; ch < outChannelCount; ch++) outBuffer.copyToChannel(inChannels[ch], ch)
+    for (let ch = 0; ch < outChannelCount; ch++) outBuffer.copyToChannel(inChannels[ch] as Float32Array<ArrayBuffer>, ch)
     this.processedBuffer = outBuffer
 
     // Final analysis & score
@@ -1371,11 +1371,11 @@ class RainAudioEngine {
       // the live AudioContext hasn't been initialised yet.
       const off = new OfflineAudioContext(channels.length, channels[0].length, sampleRate)
       const buf = off.createBuffer(channels.length, channels[0].length, sampleRate)
-      for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c], c)
+      for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c] as Float32Array<ArrayBuffer>, c)
       return buf
     }
     const buf = this.context.createBuffer(channels.length, channels[0].length, sampleRate)
-    for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c], c)
+    for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c] as Float32Array<ArrayBuffer>, c)
     return buf
   }
 

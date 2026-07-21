@@ -65,7 +65,7 @@ function shouldSkipFile(name: string): boolean {
 async function walkDir(dirAbs: string): Promise<string[]> {
   const { readdir } = await import('node:fs/promises')
   const out: string[] = []
-  let entries: Awaited<ReturnType<typeof readdir>>
+  let entries: import('node:fs').Dirent[]
   try {
     entries = await readdir(dirAbs, { withFileTypes: true })
   } catch {

@@ -286,7 +286,7 @@ function StatCard({
   sublabel,
   loading,
 }: {
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   label: string
   value: number | string
   sublabel?: string
@@ -350,7 +350,7 @@ function SectionHeader({
   hint,
   right,
 }: {
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   title: string
   hint?: string
   right?: React.ReactNode
@@ -371,7 +371,7 @@ function SectionHeader({
   )
 }
 
-function EmptyState({ icon: Icon, label }: { icon: React.ComponentType<{ className?: string }>; label: string }) {
+function EmptyState({ icon: Icon, label }: { icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; label: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground/60">
       <Icon className="size-6" />

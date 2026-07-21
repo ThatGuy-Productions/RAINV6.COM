@@ -18,7 +18,7 @@ export const runtime = 'nodejs'
  * and stems are scoped to that userId via Prisma — no cross-user access.
  */
 export async function POST(req: NextRequest) {
-  let body: { email?: unknown; password?: unknown; name?: unknown }
+  let body: { email?: unknown; password?: unknown; name?: unknown; anonId?: unknown }
   try {
     body = await req.json()
   } catch {

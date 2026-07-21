@@ -139,7 +139,7 @@ function countChangedMacros(current: MacroValues, candidate: MacroValues): numbe
 // ---------------------------------------------------------------------------
 
 interface ToolbarButtonProps {
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   label: string
   onClick: () => void
   disabled?: boolean

@@ -32,6 +32,16 @@ export function ExitReviewPopup() {
   const [body, setBody] = useState('')
   const [name, setName] = useState('')
   const dismissedRef = useRef(false)
+  const dismissTimerRef = useRef<number | null>(null)
+
+  // Clear the dismiss timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (dismissTimerRef.current !== null) {
+        window.clearTimeout(dismissTimerRef.current)
+      }
+    }
+  }, [])
 
   // Check if the user has interacted enough to warrant the popup.
   const fileName = useSessionStore((s) => s.fileName)
@@ -88,7 +98,7 @@ export function ExitReviewPopup() {
     } catch { /* best-effort */ }
     setSubmitting(false)
     setDone(true)
-    setTimeout(() => dismiss(), 1500)
+    dismissTimerRef.current = window.setTimeout(() => dismiss(), 1500)
   }
 
   return (

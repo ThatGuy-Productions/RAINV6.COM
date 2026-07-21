@@ -99,7 +99,7 @@ const CHANGELOG: ChangelogEntry[] = [
 ]
 
 // ── Type metadata ──────────────────────────────────────────────────────────
-const TYPE_META: Record<EntryType, { icon: React.ComponentType<{ className?: string }>; accent: string; label: string }> = {
+const TYPE_META: Record<EntryType, { icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>; accent: string; label: string }> = {
   feature: { icon: Sparkles, accent: '#AAFF00', label: 'New' },
   fix: { icon: Bug, accent: '#EF4444', label: 'Fix' },
   improvement: { icon: Wrench, accent: '#06B6D4', label: 'Improved' },

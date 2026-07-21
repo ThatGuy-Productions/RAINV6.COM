@@ -25,7 +25,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+const ICONS: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
   Sliders, Layers, Wrench, Music2, Box, ShieldCheck, Target, ClipboardList, Download, Share2,
   Fingerprint, UserCircle, BarChart3, Settings,
 }

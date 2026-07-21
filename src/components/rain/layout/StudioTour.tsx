@@ -27,7 +27,7 @@ const TOUR_SEEN_KEY = 'rain_tour_seen_v1'
 
 interface TourStep {
   id: string
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   title: string
   body: string
   highlight?: string // CSS selector to highlight (not implemented as spotlight yet, just text guide)

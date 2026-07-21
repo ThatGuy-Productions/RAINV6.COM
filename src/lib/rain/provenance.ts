@@ -254,8 +254,8 @@ export async function generateProvenance(opts: {
     claimGenerator: `RAIN/${'6.0.0-rc1'}`,
     actions: [
       { action: 'c2pa.audio.mastered', parameters: { engine: 'RAIN-DSP-Web-v6' }, when: now },
-      { action: 'c2pa.audio.dsp', parameters: { params }, when: now },
-      { action: 'c2pa.audio.analyzed', parameters: { analysis }, when: now },
+      { action: 'c2pa.audio.dsp', parameters: { params: JSON.stringify(params) }, when: now },
+      { action: 'c2pa.audio.analyzed', parameters: { analysis: JSON.stringify(analysis) }, when: now },
     ],
     assertions: [
       { label: 'c2pa.actions.v2', data: { actions: ['mastered', 'dsp', 'analyzed'] } },

@@ -139,6 +139,7 @@ export interface AiDisclosure {
   composition: 'none' | 'assisted' | 'generated'
   mixing: 'none' | 'assisted' | 'generated'
   mastering: 'none' | 'assisted' | 'generated'
+  [key: string]: 'none' | 'assisted' | 'generated'
 }
 
 export interface TrackMetadata {

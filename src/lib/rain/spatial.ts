@@ -530,14 +530,14 @@ async function binauralize(
     if (signal?.aborted) throw abortedError()
     const src = offCtx.createBufferSource()
     const inBuf = offCtx.createBuffer(1, length, sampleRate)
-    inBuf.copyToChannel(channels[i], 0)
+    inBuf.copyToChannel(channels[i] as Float32Array<ArrayBuffer>, 0)
     src.buffer = inBuf
 
     const conv = offCtx.createConvolver()
     conv.normalize = false // preserve HRTF energy
     const irBuf = offCtx.createBuffer(2, HRTF_LENGTH, sampleRate)
-    irBuf.copyToChannel(hrtfs[i].left, 0)
-    irBuf.copyToChannel(hrtfs[i].right, 1)
+    irBuf.copyToChannel(hrtfs[i].left as Float32Array<ArrayBuffer>, 0)
+    irBuf.copyToChannel(hrtfs[i].right as Float32Array<ArrayBuffer>, 1)
     conv.buffer = irBuf
 
     src.connect(conv)
@@ -1482,7 +1482,7 @@ async function buildManifestJson(
   bedFormat: SpatialConfig['bedFormat'],
   numObjects: number,
 ): Promise<string> {
-  const fileEntries = []
+  const fileEntries: { path: string; sizeBytes: number; sha256: string }[] = []
   for (const f of files) {
     const sha = await sha256Hex(f.bytes)
     fileEntries.push({

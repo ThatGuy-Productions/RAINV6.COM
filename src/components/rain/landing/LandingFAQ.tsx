@@ -20,7 +20,7 @@ interface FAQItem {
   id: string
   question: string
   answer: string
-  icon: React.ComponentType<{ className?: string }>
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>
   accent: string
 }
 

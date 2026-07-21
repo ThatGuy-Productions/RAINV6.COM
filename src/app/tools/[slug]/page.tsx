@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Upload, Download, Loader2, CheckCircle2, AlertCircle, FileAudio, FileImage, FileText, Settings } from 'lucide-react'
 import { getTool } from '@/lib/rain/tools-catalog'
@@ -30,6 +30,13 @@ export default function ToolPage({ params }: PageProps) {
   useState(() => {
     params.then((p) => setSlug(p.slug))
   })
+
+  // Revoke blob URL on unmount to prevent memory leak.
+  useEffect(() => {
+    return () => {
+      if (result?.url) URL.revokeObjectURL(result.url)
+    }
+  }, [result?.url])
 
   const tool = getTool(slug)
 
@@ -245,7 +252,7 @@ export default function ToolPage({ params }: PageProps) {
             page.setRotation(degrees((current + angle) % 360))
           })
           const out = await pdf.save()
-          blob = new Blob([out], { type: 'application/pdf' })
+          blob = new Blob([out as BlobPart], { type: 'application/pdf' })
           break
         }
         case 'pdf-split': {
@@ -257,7 +264,7 @@ export default function ToolPage({ params }: PageProps) {
           const [copiedPage] = await newPdf.copyPages(pdf, [0])
           newPdf.addPage(copiedPage)
           const out = await newPdf.save()
-          blob = new Blob([out], { type: 'application/pdf' })
+          blob = new Blob([out as BlobPart], { type: 'application/pdf' })
           break
         }
         case 'pdf-combine': {
@@ -265,7 +272,7 @@ export default function ToolPage({ params }: PageProps) {
           const bytes = await file.arrayBuffer()
           const pdf = await PDFDocument.load(bytes)
           const out = await pdf.save()
-          blob = new Blob([out], { type: 'application/pdf' })
+          blob = new Blob([out as BlobPart], { type: 'application/pdf' })
           break
         }
         case 'pdf-extract': {
@@ -275,12 +282,12 @@ export default function ToolPage({ params }: PageProps) {
           const startPage = Math.max(0, (options.startPage ?? 1) - 1)
           const endPage = Math.min(pages.length, options.endPage ?? pages.length)
           const newPdf = await PDFDocument.create()
-          const indices = []
+          const indices: number[] = []
           for (let i = startPage; i < endPage; i++) indices.push(i)
           const copied = await newPdf.copyPages(pdf, indices)
           copied.forEach((p) => newPdf.addPage(p))
           const out = await newPdf.save()
-          blob = new Blob([out], { type: 'application/pdf' })
+          blob = new Blob([out as BlobPart], { type: 'application/pdf' })
           break
         }
         case 'pdf-from-html': {
@@ -301,7 +308,7 @@ export default function ToolPage({ params }: PageProps) {
             })
           })
           const out = await pdf.save()
-          blob = new Blob([out], { type: 'application/pdf' })
+          blob = new Blob([out as BlobPart], { type: 'application/pdf' })
           break
         }
 
@@ -318,7 +325,7 @@ export default function ToolPage({ params }: PageProps) {
     } finally {
       setProcessing(false)
     }
-  })
+  }, [file, tool, options])
 
   if (!tool) {
     return (
@@ -443,7 +450,11 @@ export default function ToolPage({ params }: PageProps) {
               Download
             </a>
             <button
-              onClick={() => { setFile(null); setResult(null) }}
+              onClick={() => {
+                if (result?.url) URL.revokeObjectURL(result.url)
+                setFile(null)
+                setResult(null)
+              }}
               className="block mx-auto mt-3 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
             >
               Convert another file
@@ -567,8 +578,8 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
-    img.onload = () => { resolve(img) }
-    img.onerror = reject
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img) }
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e) }
     img.src = url
   })
 }
