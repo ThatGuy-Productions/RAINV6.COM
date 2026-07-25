@@ -2,6 +2,7 @@
 
 import { MotionConfig } from 'framer-motion'
 import { LandingNav } from './LandingNav'
+import { ServiceNoticeBanner } from './ServiceNoticeBanner'
 import { PartnerLogos } from './PartnerLogos'
 import { LandingHero } from './LandingHero'
 import { LandingDemo } from './LandingDemo'
@@ -31,6 +32,7 @@ export function LandingPage({ onLaunch }: LandingPageProps) {
     <MotionConfig>
       <div className="min-h-screen flex flex-col">
         <LandingNav onLaunch={onLaunch} />
+        <ServiceNoticeBanner />
         {/* Partner logo marquee banner — horizontal strip just below the main nav */}
         <PartnerLogos />
         <main className="flex-1">

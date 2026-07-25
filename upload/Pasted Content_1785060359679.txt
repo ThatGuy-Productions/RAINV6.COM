@@ -1,0 +1,569 @@
+## Error Type
+Console Error
+
+## Error Message
+A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <LandingPage onLaunch={function launchStudio}>
+      <MotionConfig>
+        <div className="min-h-scre...">
+          <LandingNav>
+          <ServiceNoticeBanner>
+          <PartnerLogos>
+          <main className="flex-1">
+            <LandingHero>
+            <LandingDemo onLaunch={function launchStudio}>
+              <section ref={{current:null}} id="demo" className="jsx-b652b6...">
+                <div>
+                <div className="jsx-b652b6...">
+                  <div>
+                  <div style={{...}} className="jsx-b652b6...">
+                    <div>
+                    <div className="jsx-b652b6...">
+                      <div>
+                      <div className="jsx-b652b6...">
+                        <div>
+                        <SpectrumBars values={[...]} t={0}>
+                          <div className="flex items...">
+                            <motion.div className="flex-1 rou..." style={{height:"87...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "87.3731913802099%"
+-                                 height: "93.2205%"
++                                 background: "hsl(25, 90%, 45%)"
++                                 opacity: 0.9368659569010496
+-                                 opacity: "0.966103"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 98, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"76...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "76.48943538050484%"
+-                                 height: "81.3987%"
++                                 background: "hsl(27.291666666666668, 90%, 45%)"
++                                 opacity: 0.8824471769025242
+-                                 opacity: "0.906994"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 105, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"68...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "68.40307883545232%"
+-                                 height: "68.268%"
++                                 background: "hsl(29.583333333333332, 90%, 45%)"
++                                 opacity: 0.8420153941772616
+-                                 opacity: "0.84134"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 113, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"52...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "52.28590992640921%"
+-                                 height: "54.3369%"
++                                 background: "hsl(31.875, 90%, 45%)"
++                                 opacity: 0.761429549632046
+-                                 opacity: "0.771685"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 121, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"44...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "44.07991709788342%"
+-                                 height: "49.2747%"
++                                 background: "hsl(34.166666666666664, 90%, 45%)"
++                                 opacity: 0.7203995854894171
+-                                 opacity: "0.746373"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 129, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"38...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "38.66163437801377%"
+-                                 height: "41.8074%"
++                                 background: "hsl(36.458333333333336, 90%, 45%)"
++                                 opacity: 0.6933081718900689
+-                                 opacity: "0.709037"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 137, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"31...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "31.276960019656315%"
+-                                 height: "33.5217%"
++                                 background: "hsl(38.75, 90%, 45%)"
++                                 opacity: 0.6563848000982816
+-                                 opacity: "0.667608"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 145, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"29...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "29.87892261193638%"
+-                                 height: "24.0481%"
++                                 background: "hsl(41.04166666666667, 90%, 45%)"
++                                 opacity: 0.6493946130596819
+-                                 opacity: "0.620241"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 153, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"19...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "19.252544151107156%"
+-                                 height: "20.7221%"
++                                 background: "hsl(43.33333333333333, 90%, 45%)"
++                                 opacity: 0.5962627207555358
+-                                 opacity: "0.60361"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 161, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"21...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "21.311828910946584%"
+-                                 height: "21.9044%"
++                                 background: "hsl(45.625, 90%, 45%)"
++                                 opacity: 0.6065591445547329
+-                                 opacity: "0.609522"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 169, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"15...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "15.657164028267864%"
+-                                 height: "15.1186%"
++                                 background: "hsl(47.91666666666667, 90%, 45%)"
++                                 opacity: 0.5782858201413393
+-                                 opacity: "0.575593"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 176, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"19...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "19.963324725609894%"
+-                                 height: "19.796%"
++                                 background: "hsl(50.20833333333333, 90%, 45%)"
++                                 opacity: 0.5998166236280494
+-                                 opacity: "0.59898"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 184, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"14...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "14.059507049817086%"
+-                                 height: "20.2164%"
++                                 background: "hsl(52.5, 90%, 45%)"
++                                 opacity: 0.5702975352490854
+-                                 opacity: "0.601082"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 192, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"20...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "20.633023098687964%"
+-                                 height: "17.4348%"
++                                 background: "hsl(54.791666666666664, 90%, 45%)"
++                                 opacity: 0.6031651154934399
+-                                 opacity: "0.587174"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 200, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"19...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "19.21248029748126%"
+-                                 height: "17.7355%"
++                                 background: "hsl(57.083333333333336, 90%, 45%)"
++                                 opacity: 0.5960624014874063
+-                                 opacity: "0.588677"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 208, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"21...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "21.878930556228287%"
+-                                 height: "21.6158%"
++                                 background: "hsl(59.375, 90%, 45%)"
++                                 opacity: 0.6093946527811415
+-                                 opacity: "0.608079"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(218, 216, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"23...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "23.957969654591814%"
+-                                 height: "26.278%"
++                                 background: "hsl(61.666666666666664, 90%, 45%)"
++                                 opacity: 0.619789848272959
+-                                 opacity: "0.63139"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(212, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"21...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "21.5839744324148%"
+-                                 height: "27.9329%"
++                                 background: "hsl(63.958333333333336, 90%, 45%)"
++                                 opacity: 0.607919872162074
+-                                 opacity: "0.639665"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(204, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"22...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "22.589657812922766%"
+-                                 height: "28.8071%"
++                                 background: "hsl(66.25, 90%, 45%)"
++                                 opacity: 0.6129482890646138
+-                                 opacity: "0.644035"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(197, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"25...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "25.42282246625923%"
+-                                 height: "28.0188%"
++                                 background: "hsl(68.54166666666666, 90%, 45%)"
++                                 opacity: 0.6271141123312962
+-                                 opacity: "0.640094"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(189, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"31...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "31.625528081095382%"
+-                                 height: "27.9118%"
++                                 background: "hsl(70.83333333333334, 90%, 45%)"
++                                 opacity: 0.6581276404054769
+-                                 opacity: "0.639559"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(181, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"26...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "26.281086544087824%"
+-                                 height: "25.1664%"
++                                 background: "hsl(73.125, 90%, 45%)"
++                                 opacity: 0.6314054327204391
+-                                 opacity: "0.625832"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(173, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"29...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "29.246522854708303%"
+-                                 height: "33.0812%"
++                                 background: "hsl(75.41666666666666, 90%, 45%)"
++                                 opacity: 0.6462326142735415
+-                                 opacity: "0.665406"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(165, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                            <motion.div className="flex-1 rou..." style={{height:"29...", ...}}>
+                              <div
+                                className="flex-1 rounded-t-sm transition-all duration-150"
+                                style={{
++                                 height: "29.510054518795272%"
+-                                 height: "28.5818%"
++                                 background: "hsl(77.70833333333334, 90%, 45%)"
++                                 opacity: 0.6475502725939764
+-                                 opacity: "0.642909"
+-                                 background-image: "initial"
+-                                 background-position-x: "initial"
+-                                 background-position-y: "initial"
+-                                 background-size: "initial"
+-                                 background-repeat: "initial"
+-                                 background-attachment: "initial"
+-                                 background-origin: "initial"
+-                                 background-clip: "initial"
+-                                 background-color: "rgb(157, 218, 11)"
+                                }}
+                                ref={function useMotionRef.useCallback}
+                              >
+                      ...
+                    ...
+                  ...
+                ...
+            ...
+          ...
+
+
+
+    at div (<anonymous>:null:null)
+    at <unknown> (src/components/rain/landing/LandingDemo.tsx:573:11)
+    at Array.map (<anonymous>:null:null)
+    at SpectrumBars (src/components/rain/landing/LandingDemo.tsx:566:15)
+    at LandingDemo (src/components/rain/landing/LandingDemo.tsx:401:15)
+    at LandingPage (src/components/rain/landing/LandingPage.tsx:40:11)
+    at Home (src/app/page.tsx:68:11)
+
+## Code Frame
+  571 |         const light = after ? 55 : 45
+  572 |         return (
+> 573 |           <motion.div
+      |           ^
+  574 |             key={i}
+  575 |             className="flex-1 rounded-t-sm transition-all duration-150"
+  576 |             style={{
+
+Next.js version: 16.1.3 (Turbopack)

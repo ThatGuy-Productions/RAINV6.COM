@@ -983,3 +983,30 @@ LESSON:
 - The `dev.sh` script should check if the DB exists before running `db:push`.
 
 This is a catastrophic data loss event. The 135 users who signed up need to be contacted and asked to re-register. Their accounts cannot be recovered.
+
+---
+Task ID: 19
+Agent: main (orchestrator)
+Task: Add temporary hero notice banner with apology + resolved message. Create updates file.
+
+Work Log:
+- Created `src/components/rain/landing/ServiceNoticeBanner.tsx` — a dismissible amber banner that appears at the top of the landing page (below nav, above hero):
+  - Amber-tinted background with AlertTriangle icon
+  - Message: "Service Notice: A database issue on July 20th may have affected some beta accounts. The issue is resolved — if you can't log in, please re-register. We apologize for the inconvenience."
+  - "Resolved" highlighted in lime green
+  - Dismiss button (X) — dismissed state tracked in sessionStorage (doesn't reappear in same session)
+  - Slide-down animation (framer-motion), 800ms delay after page load
+- Added to `LandingPage.tsx` between Nav and PartnerLogos
+- Created `download/incident-report/UPDATES.md` — tracks the incident status and actions taken
+- Verified: banner appears on landing, dismiss works, no errors, lint + type check clean
+
+Verification:
+- Banner text visible: "Service Notice: A database issue on July 20th may have affected some beta accounts. The issue is resolved — if you can't log in, please re-register. We apologize for the inconvenience." ✓
+- Dismiss button works (banner disappears, sessionStorage flag prevents re-show) ✓
+- Reload brings banner back (new session) ✓
+- No console errors ✓
+- `bun run lint` → clean
+- `bunx tsc --noEmit` → clean
+- Screenshot saved to `/home/z/my-project/download/service-notice-banner.png`
+
+Files changed: `src/components/rain/landing/ServiceNoticeBanner.tsx` (new), `src/components/rain/landing/LandingPage.tsx` (added banner), `download/incident-report/UPDATES.md` (new).
