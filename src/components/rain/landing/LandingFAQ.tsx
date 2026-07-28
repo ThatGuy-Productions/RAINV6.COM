@@ -79,7 +79,7 @@ export function LandingFAQ() {
   const [openId, setOpenId] = useState<string | null>('privacy')
 
   return (
-    <section className="relative py-24 px-4 border-t border-rain-border/50" id="faq">
+    <section className="relative py-16 px-4 border-t border-rain-border/50" id="faq">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="text-center mb-12">

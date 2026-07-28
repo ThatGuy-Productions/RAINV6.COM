@@ -52,36 +52,25 @@ export function LandingFooter() {
             <ul className="space-y-1.5 text-sm">
               <li><a href="#features" className="text-muted-foreground hover:text-rain-accent transition-colors">Features</a></li>
               <li><a href="#architecture" className="text-muted-foreground hover:text-rain-accent transition-colors">Architecture</a></li>
-              <li><a href="#free" className="text-muted-foreground hover:text-rain-accent transition-colors">Free Beta</a></li>
-              <li><a href="#compliance" className="text-muted-foreground hover:text-rain-accent transition-colors">Compliance</a></li>
+              <li><a href="/tools" className="text-muted-foreground hover:text-rain-accent transition-colors">Free Tools</a></li>
+              <li><a href="#reviews" className="text-muted-foreground hover:text-rain-accent transition-colors">Reviews</a></li>
+              <li><a href="#faq" className="text-muted-foreground hover:text-rain-accent transition-colors">FAQ</a></li>
             </ul>
           </div>
           <div>
-            <div className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-3">Compliance</div>
+            <div className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-3">Support</div>
+            <ul className="space-y-1.5 text-sm">
+              <li><a href="mailto:philippusbolke@gmail.com" className="text-muted-foreground hover:text-rain-accent transition-colors">Contact Us</a></li>
+              <li><a href="/#demo" className="text-muted-foreground hover:text-rain-accent transition-colors">Demo</a></li>
+              <li><a href="/tools" className="text-muted-foreground hover:text-rain-accent transition-colors">Tools</a></li>
+            </ul>
+          </div>
+          <div>
+            <div className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-3">Legal</div>
             <ul className="space-y-1.5 text-sm text-muted-foreground">
-              <li>EU AI Act Article 50</li>
-              <li>DDEX ERN 4.3.2</li>
-              <li>C2PA v2.2</li>
-              <li>ISO 3901 (ISRC)</li>
-              <li>ITU-R BS.1770-4</li>
-              <li>AES17 True Peak</li>
-            </ul>
-          </div>
-          <div>
-            <div className="text-xs font-mono uppercase tracking-wider text-muted-foreground mb-3">Press</div>
-            <ul className="space-y-3 text-xs text-muted-foreground">
-              <li>
-                <p className="italic leading-relaxed">&ldquo;The first browser-based chain that doesn&rsquo;t lie about LUFS.&rdquo;</p>
-                <p className="font-mono text-[10px] mt-0.5 text-rain-accent/70">— SoundOnSound Brief</p>
-              </li>
-              <li>
-                <p className="italic leading-relaxed">&ldquo;Ed25519 provenance for every render — finally.&rdquo;</p>
-                <p className="font-mono text-[10px] mt-0.5 text-rain-accent/70">— Resolution Magazine</p>
-              </li>
-              <li>
-                <p className="italic leading-relaxed">&ldquo;DDEX ERN 4.3.2 done right, in-browser.&rdquo;</p>
-                <p className="font-mono text-[10px] mt-0.5 text-rain-accent/70">— Hypebot Wire</p>
-              </li>
+              <li><a href="mailto:philippusbolke@gmail.com?subject=Privacy%20Policy" className="hover:text-rain-accent transition-colors">Privacy Policy</a></li>
+              <li><a href="mailto:philippusbolke@gmail.com?subject=Terms%20of%20Service" className="hover:text-rain-accent transition-colors">Terms of Service</a></li>
+              <li>Proprietary — © 2026</li>
             </ul>
           </div>
         </div>

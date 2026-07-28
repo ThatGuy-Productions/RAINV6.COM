@@ -214,7 +214,13 @@ export function PartnerLogos() {
         style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(170,255,0,0.35) 50%, transparent 100%)' }}
         aria-hidden
       />
-      <div className="relative overflow-hidden h-11 flex items-center">
+      <div
+        className="relative overflow-hidden h-11 flex items-center"
+        style={{
+          WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%)',
+          maskImage: 'linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%)',
+        }}
+      >
         {/* Shimmer sweep — slow diagonal lime highlight crossing the row */}
         <motion.div
           aria-hidden
