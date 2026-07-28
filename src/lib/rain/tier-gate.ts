@@ -74,23 +74,11 @@ export async function getUserTier(req: NextRequest | null, userId?: string | nul
   const sessionUser = await getSessionUser(req)
   if (sessionUser) return sessionUser.tier
 
-  // 2. Legacy x-user-id header fallback.
-  let id = userId ?? null
-  if (!id && req) {
-    id = req.headers.get('x-user-id')
-  }
-  if (!id) return ANONYMOUS_TIER
-  try {
-    const account = await db.account.findUnique({
-      where: { id },
-      select: { tier: true },
-    })
-    if (!account) return ANONYMOUS_TIER
-    return account.tier
-  } catch (err) {
-    console.error('[tier-gate] getUserTier lookup failed:', err)
-    return ANONYMOUS_TIER
-  }
+  // SECURITY FIX (C3): The legacy x-user-id header fallback has been REMOVED.
+  // It allowed any caller to impersonate any user by setting the x-user-id
+  // header to a known CUID, bypassing the session cookie entirely.
+  // Only the authenticated session cookie is trusted now.
+  return ANONYMOUS_TIER
 }
 
 /**
@@ -158,17 +146,13 @@ export async function withTierGate(
       current: sessionUser.tier,
     }
   }
-  // Legacy header fallback.
-  const userId = req ? req.headers.get('x-user-id') : null
-  const tier = await getUserTier(req, userId)
-  if (isTierSufficient(tier, requiredTierSlug)) {
-    return { ok: true, tier, userId }
-  }
+  // SECURITY FIX (C3): x-user-id header fallback removed.
+  // Only the session cookie is trusted for tier resolution.
   return {
     ok: false,
     status: 403,
     error: 'Tier insufficient',
     required: requiredTierSlug,
-    current: tier,
+    current: ANONYMOUS_TIER,
   }
 }

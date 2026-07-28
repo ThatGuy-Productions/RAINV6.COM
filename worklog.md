@@ -1010,3 +1010,47 @@ Verification:
 - Screenshot saved to `/home/z/my-project/download/service-notice-banner.png`
 
 Files changed: `src/components/rain/landing/ServiceNoticeBanner.tsx` (new), `src/components/rain/landing/LandingPage.tsx` (added banner), `download/incident-report/UPDATES.md` (new).
+
+---
+Task ID: 20
+Agent: main (orchestrator)
+Task: Forensic audit security fixes + stats update + cron job creation.
+
+Security Fixes Applied (from external forensic audit):
+
+C3 (CRITICAL): x-user-id header bypass — REMOVED
+- The tier-gate.ts had a fallback path that read the `x-user-id` request header to resolve user tier. Any caller could set this header to a known CUID and impersonate any user, bypassing the session cookie entirely.
+- FIX: Removed the header fallback from both `getUserTier()` and `withTierGate()`. Only the authenticated session cookie is trusted now. Anonymous callers get `ANONYMOUS_TIER` (free) with no way to escalate.
+
+C2 (CRITICAL): Admin status information disclosure — FIXED
+- The `/api/rain/admin/status` endpoint returned `accountCount` and `tierCounts` to anyone, revealing total user count and tier distribution.
+- FIX: Now only returns `{ bootstrapped: boolean }`. The account count and tier breakdown are no longer exposed publicly.
+
+C1 (CRITICAL): Bootstrap endpoint no rate limiting — FIXED
+- The `/api/rain/admin/bootstrap` endpoint had no rate limiting, allowing brute-force attempts to create an enterprise admin before the legitimate operator.
+- FIX: Added `checkRateLimit(req, 'bootstrap', 3)` — 3 attempts per minute per IP. Exceeding returns 429 with Retry-After header.
+
+H10 (HIGH): Prisma query logging in all environments — FIXED
+- The Prisma client was configured with `log: ['query']` which logs every SQL query (potentially containing user data) in all environments including production.
+- FIX: Changed to conditional logging: `['query', 'error', 'warn']` in development, `['error', 'warn']` only in production.
+
+Stats Update:
+- The stats API (`/api/rain/stats`) now uses `dbSignups` as the variable name for clarity. The totalSignups count reflects the actual DB account count. Pre-incident user counts are not fabricated — the number shows the real current state.
+
+Cron Job Created:
+- Job ID: 295771
+- Schedule: every 15 minutes (0 */15 * * * ?)
+- Type: webDevReview
+- Priority: 10 (high)
+- Tasks: forensic audit, security checks, QA, bug fixes, feature additions, styling polish
+
+Verification:
+- bun run lint → clean
+- bunx tsc --noEmit → clean
+- x-user-id only in comments (documenting removal), not in active code ✓
+- admin/status returns only {bootstrapped:true} ✓
+- Bootstrap has rate limiting ✓
+- Prisma logging conditional on NODE_ENV ✓
+- Server running on port 3000, HTTP 200 ✓
+
+Files changed: src/lib/rain/tier-gate.ts (C3 fix), src/app/api/rain/admin/status/route.ts (C2 fix), src/app/api/rain/admin/bootstrap/route.ts (C1 fix), src/lib/db.ts (H10 fix), src/app/api/rain/stats/route.ts (variable rename).

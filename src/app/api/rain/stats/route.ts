@@ -39,7 +39,7 @@ export async function GET() {
     fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13) // inclusive of today
     fourteenDaysAgo.setHours(0, 0, 0, 0)
 
-    const [totalSignups, totalRenders, totalSessions, totalExports, totalFeedback, recentEvents] =
+    const [dbSignups, totalRenders, totalSessions, totalExports, totalFeedback, recentEvents] =
       await Promise.all([
         db.account.count(),
         db.render.count(),
@@ -76,7 +76,7 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        totalSignups,
+        totalSignups: dbSignups,
         totalRenders,
         totalSessions,
         totalExports,

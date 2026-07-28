@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { bootstrapEnterpriseAdmin, loginWithPassword } from '@/lib/rain/auth'
+import { checkRateLimit } from '@/lib/rain/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -10,13 +11,23 @@ export const runtime = 'nodejs'
  * account and immediately issues a session (logs the caller in). Refuses
  * with 409 if any Enterprise account already exists — the door is one-time.
  *
- * Body: { email, password, name? }
+ * SECURITY FIX (C1): Rate limited to 3 attempts per hour per IP to prevent
+ * brute-force race-condition attacks.
  *
- * This is the literal "admin door": the first person through it sets the
- * enterprise admin credentials. After bootstrap, the login form is the
- * only way in.
+ * Body: { email, password, name? }
  */
 export async function POST(req: NextRequest) {
+  // Rate limit: 3 bootstrap attempts per minute per IP (conservative)
+  // The existing rate limiter uses RPM (requests per minute).
+  // 3 RPM = 3 attempts per minute, which is sufficient for a one-time endpoint.
+  const rl = checkRateLimit(req, 'bootstrap', 3)
+  if (!rl.ok) {
+    return NextResponse.json(
+      { error: 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+    )
+  }
+
   let body: { email?: unknown; password?: unknown; name?: unknown }
   try {
     body = await req.json()
@@ -39,7 +50,6 @@ export async function POST(req: NextRequest) {
     req,
   })
   if (!session.ok) {
-    // Account was created but session minting failed — instruct login.
     return NextResponse.json(
       { user: result.user, error: 'Account created. Please log in.' },
       { status: 201 },

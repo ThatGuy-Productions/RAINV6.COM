@@ -17,22 +17,19 @@ export const runtime = 'nodejs'
  */
 export async function GET(_req: NextRequest) {
   try {
-    const accounts = await db.account.findMany({
-      select: { id: true, tier: true },
+    // SECURITY FIX (C2): Only return bootstrapped boolean publicly.
+    // accountCount and tierCounts are information disclosure — they reveal
+    // the total number of users and their tier distribution to anyone.
+    const enterpriseCount = await db.account.count({
+      where: { tier: 'enterprise' },
     })
-    const tierCounts: Record<string, number> = {}
-    for (const a of accounts) {
-      tierCounts[a.tier] = (tierCounts[a.tier] ?? 0) + 1
-    }
     return NextResponse.json({
-      bootstrapped: (tierCounts.enterprise ?? 0) > 0,
-      accountCount: accounts.length,
-      tierCounts,
+      bootstrapped: enterpriseCount > 0,
     })
   } catch (err) {
     console.error('[admin/status] failed:', err)
     return NextResponse.json(
-      { bootstrapped: false, accountCount: 0, tierCounts: {}, error: 'Database unavailable' },
+      { bootstrapped: false },
       { status: 200 },
     )
   }
