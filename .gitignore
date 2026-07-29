@@ -57,4 +57,4 @@ server.log
 db/*.db
 upload/
 tool-results/
-download/*.png
+download/*.pngrain-beta.zip
