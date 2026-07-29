@@ -15,7 +15,7 @@ import {
   Upload,
 } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
-import { PLATFORM_TARGETS } from '@/lib/rain/constants'
+import { DSP_DELIVERY_PARTNERS } from '@/lib/rain/constants'
 import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
 import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rain/notifications'
 import { audioEngine } from '@/lib/rain/audio-engine'
@@ -121,7 +121,7 @@ export function DistributeTab() {
       contributors: metadata.contributors,
       aiDisclosure: metadata.aiDisclosure ?? disclosure,
       targetDsps: selectedPlatforms,
-      dspLabels: Object.fromEntries(PLATFORM_TARGETS.map((p) => [p.slug, p.label])),
+      dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
     })
   }, [metadata, disclosure, selectedPlatforms])
 
@@ -221,7 +221,7 @@ export function DistributeTab() {
           // form existed).
           aiDisclosure: metadata.aiDisclosure ?? disclosure,
           targetDsps: selectedPlatforms,
-          dspLabels: Object.fromEntries(PLATFORM_TARGETS.map((p) => [p.slug, p.label])),
+          dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
         },
         artwork?.file,
       )
@@ -452,7 +452,7 @@ export function DistributeTab() {
           Each selected DSP emits a &lt;Deal&gt; block in the ERN XML inside the ZIP.
         </div>
         <div className="grid sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-96 overflow-y-auto rain-scrollbar">
-          {PLATFORM_TARGETS.map((p) => (
+          {DSP_DELIVERY_PARTNERS.map((p) => (
             <button
               key={p.slug}
               onClick={() => togglePlatform(p.slug)}
@@ -465,7 +465,9 @@ export function DistributeTab() {
               <Music className={`w-3 h-3 flex-shrink-0 ${selectedPlatforms.includes(p.slug) ? 'text-rain-accent' : 'text-muted-foreground'}`} />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold truncate">{p.label}</div>
-                <div className="text-[9px] font-mono text-muted-foreground truncate">{p.codec} · {p.targetLufs} LUFS</div>
+                <div className="text-[9px] font-mono text-muted-foreground truncate">
+                  {p.requiresIsrc ? 'ISRC req.' : 'No ISRC'} · {p.territoryRestrictions.length > 0 ? p.territoryRestrictions.join(', ') : 'Worldwide'}
+                </div>
               </div>
               {selectedPlatforms.includes(p.slug) && (
                 <CheckCircle2 className="w-3 h-3 text-rain-accent flex-shrink-0" />

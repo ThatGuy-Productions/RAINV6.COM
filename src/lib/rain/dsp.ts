@@ -714,6 +714,93 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
     mb_release_low: 180.0, mb_release_high: 70.0,
     mid_gain: 0.0,
   },
+  amapiano: {
+    // Deep, log-drum-forward: fast low attack for tight kick, slow mid for
+    // shaker/groove presence, wide stereo for synth pads + keys
+    mb_attack_low: 1.5, mb_attack_mid: 12.0, mb_attack_high: 5.0,
+    mb_release_low: 55.0, mb_release_high: 45.0,
+    mid_gain: 0.0, // wide mix — don't center-bias
+    stereo_width: 1.25, // wide synth pads and stereo log drums
+    analog_saturation: true,
+    saturation_drive: 0.15,
+    saturation_mode: 'tape' as const,
+  },
+  gospel: {
+    // Vocal-forward: strong center for choir/lead, moderate compression
+    // with long release for sustained notes and dynamic builds
+    mb_attack_low: 6.0, mb_attack_mid: 10.0, mb_attack_high: 5.0,
+    mb_release_low: 150.0, mb_release_high: 60.0,
+    mid_gain: 1.5, // center emphasis for choir + lead vocals
+    stereo_width: 1.1, // slightly wider for organ/piano
+  },
+  afrobeats: {
+    // Percussive + melodic: tight kick via fast low attack, wide mid for
+    // layered percussion, warm saturation for vintage afro-groove
+    mb_attack_low: 2.0, mb_attack_mid: 6.0, mb_attack_high: 3.0,
+    mb_release_low: 70.0, mb_release_high: 40.0,
+    mid_gain: -0.5, // de-emphasize center for wide percussion field
+    stereo_width: 1.2,
+    analog_saturation: true,
+    saturation_drive: 0.25,
+    saturation_mode: 'tape' as const,
+  },
+  afro_house: {
+    // Driving 4/4: tight all-band attack, punchy mid for percussive
+    // layers, clean highs for shakers and rides
+    mb_attack_low: 2.0, mb_attack_mid: 4.0, mb_attack_high: 2.0,
+    mb_release_low: 80.0, mb_release_high: 35.0,
+    mid_gain: -1.0, // wide soundstage for house
+    stereo_width: 1.3,
+    analog_saturation: true,
+    saturation_drive: 0.2,
+    saturation_mode: 'tube' as const,
+  },
+  gqom: {
+    // Minimal, raw, bass-heavy: fast low attack with high ratio for
+    // crushing sub-bass, slow high attack to preserve raw percussion edge
+    mb_attack_low: 1.0, mb_attack_mid: 3.0, mb_attack_high: 15.0,
+    mb_release_low: 40.0, mb_release_high: 25.0,
+    mid_gain: -0.5,
+    stereo_width: 1.15,
+    analog_saturation: false, // keep it raw and digital
+  },
+  metal: {
+    // Aggressive, fast: tight attack across all bands for palm-muted
+    // precision, fast release for clarity in dense arrangements
+    mb_attack_low: 2.0, mb_attack_mid: 3.0, mb_attack_high: 1.5,
+    mb_release_low: 50.0, mb_release_high: 25.0,
+    mid_gain: -2.0, // push guitars to sides, leave kick/snare center
+  },
+  rnb: {
+    // Smooth + punchy: moderate attack, vocal-forward mid, clean highs
+    mb_attack_low: 4.0, mb_attack_mid: 8.0, mb_attack_high: 3.0,
+    mb_release_low: 100.0, mb_release_high: 50.0,
+    mid_gain: 1.0, // vocal emphasis
+    stereo_width: 1.15,
+  },
+  country: {
+    // Natural, acoustic-forward: slow attack, moderate ratio for
+    // transparent dynamics — preserves guitar picking and vocal nuance
+    mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0,
+    mb_release_low: 200.0, mb_release_high: 80.0,
+    mid_gain: 0.5,
+  },
+  reggae: {
+    // Bass-forward dub: slow low attack for sub weight, fast high for
+    // clean skank guitar and hi-hat clarity
+    mb_attack_low: 8.0, mb_attack_mid: 12.0, mb_attack_high: 4.0,
+    mb_release_low: 150.0, mb_release_high: 45.0,
+    mid_gain: 0.0,
+    stereo_width: 1.2,
+  },
+  ambient: {
+    // No compression — max dynamics preservation. Slow attack + low
+    // ratio = near-transparent; wide stereo for pads and drones
+    mb_attack_low: 20.0, mb_attack_mid: 25.0, mb_attack_high: 15.0,
+    mb_release_low: 300.0, mb_release_high: 120.0,
+    mid_gain: 0.0,
+    stereo_width: 1.4,
+  },
 }
 
 export function generateHeuristicParams(genre: string, platform: string, macros: MacroValues): ProcessingParams {

@@ -696,8 +696,34 @@ class RainAudioEngine {
     }
 
     try {
-    // Build params from macros + genre + platform
-    const params = generateHeuristicParams(genre, platform, macros)
+    // ─── Stage 4: AI Inference (RainNet v2) ───
+    // P3-RAINNET: try ONNX inference first; fall back to genre heuristics
+    // if the model isn't loaded yet or the audio is too short for a Mel spec.
+    let params: ProcessingParams
+    let inferenceSource: 'MODEL' | 'HEURISTIC' = 'HEURISTIC'
+    wrappedOnProgress?.(4, 16, 'AI Inference')
+    checkCancel()
+    try {
+      const inCh0 = inChannels[0] ?? new Float32Array(0)
+      const hasEnoughAudio = inCh0.length >= 48000 * 0.5 // at least 0.5s at 48kHz
+      if (hasEnoughAudio) {
+        const { runRainNetInference } = await import('./rainnet-inference')
+        const result = await runRainNetInference({
+          audio: inCh0,
+          sampleRate,
+          genre,
+          platform,
+          simpleMode: simpleMode ? 1.0 : 0.0,
+        })
+        params = result.params as ProcessingParams
+        inferenceSource = 'MODEL'
+      } else {
+        throw new Error('Audio too short for RainNet — falling back to heuristics')
+      }
+    } catch (rainNetError) {
+      console.warn('[RainNet] inference failed, falling back to heuristics:', rainNetError)
+      params = generateHeuristicParams(genre, platform, macros)
+    }
     applyMacrosToParams(params)
     this.params = params
 

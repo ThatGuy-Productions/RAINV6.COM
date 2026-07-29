@@ -211,23 +211,32 @@ export function validateMetadata(m: TrackMetadata): MetadataIssue[] {
  * and writes the combined value as `"Genre:Subgenre"` into `genreSubgenre`.
  */
 export const GENRE_SUBGENRE_OPTIONS: { genre: string; subgenres: string[] }[] = [
-  { genre: 'Pop', subgenres: ['Indie Pop', 'Synth Pop', 'Dance Pop', 'Electropop', 'Bedroom Pop'] },
-  { genre: 'Rock', subgenres: ['Indie Rock', 'Alt Rock', 'Hard Rock', 'Punk', 'Post-Rock'] },
-  { genre: 'Hip-Hop', subgenres: ['Trap', 'Boom Bap', 'Drill', 'Lo-Fi Hip-Hop', 'Rap'] },
-  { genre: 'Electronic', subgenres: ['House', 'Techno', 'Drum & Bass', 'Ambient', 'Dubstep'] },
-  { genre: 'R&B/Soul', subgenres: ['Contemporary R&B', 'Neo-Soul', 'Funk', 'Alternative R&B', 'Classic Soul'] },
-  { genre: 'Jazz', subgenres: ['Smooth Jazz', 'Bebop', 'Fusion', 'Vocal Jazz', 'Free Jazz'] },
+  { genre: 'Pop', subgenres: ['Indie Pop', 'Synth Pop', 'Dance Pop', 'Electropop', 'Bedroom Pop', 'Afro Pop'] },
+  { genre: 'Rock', subgenres: ['Indie Rock', 'Alt Rock', 'Hard Rock', 'Punk', 'Post-Rock', 'Alternative Rock'] },
+  { genre: 'Hip-Hop', subgenres: ['Trap', 'Boom Bap', 'Drill', 'Lo-Fi Hip-Hop', 'Rap', 'UK Drill'] },
+  { genre: 'Electronic', subgenres: ['House', 'Techno', 'Drum & Bass', 'Ambient', 'Dubstep', 'Deep House', 'Amapiano'] },
+  { genre: 'R&B/Soul', subgenres: ['Contemporary R&B', 'Neo-Soul', 'Funk', 'Alternative R&B', 'Classic Soul', 'Afro R&B'] },
+  { genre: 'Amapiano', subgenres: ['Deep Amapiano', 'Private School Amapiano', 'Sgija', 'Amapiano Jazz', 'Commercial Amapiano'] },
+  { genre: 'Gospel', subgenres: ['Contemporary Gospel', 'Traditional Gospel', 'Gospel Hip-Hop', 'Choral Gospel', 'Praise & Worship'] },
+  { genre: 'Jazz', subgenres: ['Smooth Jazz', 'Bebop', 'Fusion', 'Vocal Jazz', 'Free Jazz', 'Afro Jazz'] },
   { genre: 'Classical', subgenres: ['Orchestral', 'Chamber', 'Solo Instrumental', 'Choral', 'Opera'] },
   { genre: 'Country', subgenres: ['Modern Country', 'Classic Country', 'Americana', 'Bluegrass', 'Outlaw'] },
   { genre: 'Latin', subgenres: ['Reggaeton', 'Latin Pop', 'Bachata', 'Salsa', 'Regional Mexican'] },
   { genre: 'Reggae', subgenres: ['Roots Reggae', 'Dub', 'Dancehall', 'Ska', 'Lovers Rock'] },
-  { genre: 'World', subgenres: ['Afrobeats', 'Bollywood', 'Celtic', 'K-Pop', 'Tropical'] },
+  { genre: 'World', subgenres: ['Afrobeats', 'Bollywood', 'Celtic', 'K-Pop', 'Tropical', 'Gqom', 'Afro House'] },
   { genre: 'Folk', subgenres: ['Indie Folk', 'Folk Rock', 'Singer-Songwriter', 'Folk Pop', 'Traditional'] },
+  { genre: 'Metal', subgenres: ['Heavy Metal', 'Death Metal', 'Black Metal', 'Power Metal', 'Progressive Metal'] },
 ]
 
 /** ISO 639-2 language codes — common release languages, with display names. */
 export const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'eng', label: 'English' },
+  { value: 'afr', label: 'Afrikaans' },
+  { value: 'zul', label: 'isiZulu' },
+  { value: 'xho', label: 'isiXhosa' },
+  { value: 'sot', label: 'Sesotho' },
+  { value: 'tsn', label: 'Setswana' },
+  { value: 'nso', label: 'Sepedi' },
   { value: 'fra', label: 'French' },
   { value: 'deu', label: 'German' },
   { value: 'spa', label: 'Spanish' },
@@ -243,11 +252,17 @@ export const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'swe', label: 'Swedish' },
   { value: 'pol', label: 'Polish' },
   { value: 'tur', label: 'Turkish' },
+  { value: 'swa', label: 'Swahili' },
+  { value: 'yor', label: 'Yoruba' },
+  { value: 'hau', label: 'Hausa' },
 ]
 
 /** PRO / collecting society suggestions — free-text field with these as datalist options. */
 export const PRO_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: '— None —' },
+  { value: 'SAMRO', label: 'SAMRO (South Africa)' },
+  { value: 'CAPASSO', label: 'CAPASSO (South Africa — Mechanical)' },
+  { value: 'SAMPRA', label: 'SAMPRA (South Africa — Needletime)' },
   { value: 'PRS', label: 'PRS for Music (UK)' },
   { value: 'ASCAP', label: 'ASCAP (US)' },
   { value: 'BMI', label: 'BMI (US)' },
@@ -259,6 +274,8 @@ export const PRO_OPTIONS: { value: string; label: string }[] = [
   { value: 'KOMCA', label: 'KOMCA (KR)' },
   { value: 'APRA', label: 'APRA AMCOS (AU/NZ)' },
   { value: 'SOCAN', label: 'SOCAN (CA)' },
+  { value: 'MCSN', label: 'MCSN (Nigeria)' },
+  { value: 'COSON', label: 'COSON (Nigeria)' },
 ]
 
 /**

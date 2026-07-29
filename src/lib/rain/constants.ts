@@ -149,6 +149,7 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
 export const GENRES = [
   'pop', 'rock', 'hiphop', 'electronic', 'classical', 'jazz',
   'metal', 'folk', 'rnb', 'country', 'reggae', 'ambient',
+  'amapiano', 'gospel', 'afrobeats', 'afro_house', 'gqom',
 ] as const
 
 export type Genre = (typeof GENRES)[number]
@@ -157,6 +158,7 @@ export type Genre = (typeof GENRES)[number]
 // Platform targets — 27 platform loudness targets
 // ---------------------------------------------------------------------------
 
+/** Loudness target profiles for mastering — use for rendering, NOT for distribution. */
 export const PLATFORM_TARGETS: readonly PlatformTarget[] = [
   // Tier 1 — Major streaming
   { slug: 'spotify', label: 'Spotify', targetLufs: -14, truePeakCeiling: -1, codec: 'Ogg Vorbis', tier: 1 },
@@ -197,6 +199,36 @@ export const PLATFORM_TARGETS: readonly PlatformTarget[] = [
 ] as const
 
 export const DEFAULT_PLATFORM = 'spotify'
+
+/**
+ * DDEX ERN 4.3.2 delivery partners — real DSPs and aggregators, NOT loudness targets.
+ * Separated from PLATFORM_TARGETS per audit finding: CD, Vinyl, EBU R128, ATSC A/85,
+ * and Podcast are loudness profiles, not DDEX delivery partners.
+ */
+export interface DspDeliveryPartner {
+  slug: string
+  label: string
+  requiresIsrc: boolean
+  requiresUpc: boolean
+  territoryRestrictions: string[] // empty = worldwide
+}
+
+export const DSP_DELIVERY_PARTNERS: readonly DspDeliveryPartner[] = [
+  { slug: 'spotify', label: 'Spotify', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'apple_music', label: 'Apple Music', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'amazon_music', label: 'Amazon Music', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'youtube_music', label: 'YouTube Music', requiresIsrc: true, requiresUpc: false, territoryRestrictions: [] },
+  { slug: 'tidal', label: 'Tidal', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'deezer', label: 'Deezer', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'soundcloud', label: 'SoundCloud', requiresIsrc: false, requiresUpc: false, territoryRestrictions: [] },
+  { slug: 'pandora', label: 'Pandora', requiresIsrc: true, requiresUpc: false, territoryRestrictions: ['US'] },
+  { slug: 'tiktok', label: 'TikTok', requiresIsrc: false, requiresUpc: false, territoryRestrictions: [] },
+  { slug: 'instagram', label: 'Instagram / Facebook', requiresIsrc: false, requiresUpc: false, territoryRestrictions: [] },
+  { slug: 'qobuz', label: 'Qobuz', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'boomplay', label: 'Boomplay', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+  { slug: 'anghami', label: 'Anghami', requiresIsrc: true, requiresUpc: false, territoryRestrictions: ['MENA'] },
+  { slug: 'labelgrid', label: 'LabelGrid — Direct Delivery', requiresIsrc: true, requiresUpc: true, territoryRestrictions: [] },
+] as const
 
 // ---------------------------------------------------------------------------
 // Pricing tiers
