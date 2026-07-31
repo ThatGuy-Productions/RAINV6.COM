@@ -12,6 +12,14 @@ export const runtime = 'nodejs'
  * identity on mount and after login/logout.
  */
 export async function GET(req: NextRequest) {
-  const user = await getSessionUser(req)
-  return NextResponse.json({ user })
+  try {
+    const user = await getSessionUser(req)
+    return NextResponse.json({ user })
+  } catch (err) {
+    console.error('[api/rain/auth/me] GET failed:', err)
+    return NextResponse.json(
+      { user: null, error: 'Failed to resolve session.' },
+      { status: 500 },
+    )
+  }
 }

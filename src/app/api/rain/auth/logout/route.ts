@@ -11,8 +11,16 @@ export const runtime = 'nodejs'
  * — calling logout when not logged in is a no-op, not an error.
  */
 export async function POST(req: NextRequest) {
-  const setCookie = await logout(req)
-  const res = NextResponse.json({ ok: true })
-  res.headers.set('Set-Cookie', setCookie)
-  return res
+  try {
+    const setCookie = await logout(req)
+    const res = NextResponse.json({ ok: true })
+    res.headers.set('Set-Cookie', setCookie)
+    return res
+  } catch (err) {
+    console.error('[api/rain/auth/logout] POST failed:', err)
+    return NextResponse.json(
+      { ok: false, error: 'Logout failed. Please try again.' },
+      { status: 500 },
+    )
+  }
 }

@@ -39,8 +39,8 @@ export async function POST(req: NextRequest) {
   try {
     await db.feedback.create({
       data: {
-        comment: comment.slice(0, 2000),
-        email: typeof body.email === 'string' && body.email.trim() ? body.email.trim().toLowerCase() : null,
+        comment,
+        email: typeof body.email === 'string' && body.email.trim() ? body.email.trim().toLowerCase().slice(0, 255) : null,
         allowFollowUp: body.allowFollowUp === true,
         userAgent: req.headers.get('user-agent')?.slice(0, 255) ?? null,
       },

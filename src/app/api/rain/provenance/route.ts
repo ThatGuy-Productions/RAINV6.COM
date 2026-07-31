@@ -16,13 +16,21 @@ export const runtime = 'nodejs'
  * route is open to all callers regardless of `x-user-id`.
  */
 export async function GET(_req: NextRequest) {
-  return NextResponse.json({
-    algorithm: 'Ed25519',
-    manifestVersion: 'C2PA-2.2',
-    watermark: 'none',
-    watermark_note: 'AudioSeal not available in-browser; manifest records absence honestly',
-    fingerprint: 'Chromaprint',
-    compliance: ['EU-AI-Act-Article-50', 'DDEX-ERN-4.3.2', 'C2PA-2.2', 'ISO-3901-ISRC'],
-    deadline: '2026-08-02',
-  })
+  try {
+    return NextResponse.json({
+      algorithm: 'Ed25519',
+      manifestVersion: 'C2PA-2.2',
+      watermark: 'none',
+      watermark_note: 'AudioSeal not available in-browser; manifest records absence honestly',
+      fingerprint: 'Chromaprint',
+      compliance: ['EU-AI-Act-Article-50', 'DDEX-ERN-4.3.2', 'C2PA-2.2', 'ISO-3901-ISRC'],
+      deadline: '2026-08-02',
+    })
+  } catch (err) {
+    console.error('[api/rain/provenance] GET failed:', err)
+    return NextResponse.json(
+      { error: 'Failed to retrieve provenance metadata.' },
+      { status: 500 },
+    )
+  }
 }
