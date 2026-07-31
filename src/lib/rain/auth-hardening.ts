@@ -123,6 +123,33 @@ export interface MfaSetup {
 }
 
 /**
+ * Encode a Buffer as RFC 4648 Base32 (A-Z, 2-7, no padding).
+ * Required by TOTP (RFC 6238) and all major authenticator apps.
+ */
+function base32Encode(buffer: Buffer): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let bits = 0
+  let value = 0
+  let output = ''
+
+  for (const byte of buffer) {
+    value = (value << 8) | byte
+    bits += 8
+
+    while (bits >= 5) {
+      output += alphabet[(value >>> (bits - 5)) & 31]
+      bits -= 5
+    }
+  }
+
+  if (bits > 0) {
+    output += alphabet[(value << (5 - bits)) & 31]
+  }
+
+  return output
+}
+
+/**
  * Generate a new TOTP secret and associated materials for MFA setup.
  *
  * Returns:
@@ -140,7 +167,7 @@ export interface MfaSetup {
 export function generateMfaSecret(): { secret: string; uri: string; backupCodes: string[] } {
   // Generate a 20-byte random secret and base32-encode it (standard TOTP key length).
   const rawSecret = randomBytes(20)
-  const secret = rawSecret.toString('base64url').slice(0, 32).toUpperCase()
+  const secret = base32Encode(rawSecret)
 
   // otpauth:// URI — the standard format all TOTP apps accept.
   const issuer = 'RAIN+V6'

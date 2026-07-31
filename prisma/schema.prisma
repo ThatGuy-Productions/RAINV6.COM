@@ -1,10 +1,9 @@
 // RAIN V6 — Prisma schema (Wave 3 P2-1)
 //
-// Sandbox provider is `sqlite` (Next.js-only environment). Production uses
-// PostgreSQL 18 (per spec) with row-level security policies. The model shape
-// below mirrors the production PostgreSQL schema; only the JSON-typed columns
-// (`inputMetadata`, `renderSettings`) are stored as `String` because SQLite
-// has no native JSON type. Production migrations will switch these to `Json`.
+// Production provider is `postgresql`. Development uses `sqlite` for fast
+// local iteration (set DATABASE_URL in .env). The model shape below is
+// production-ready; JSON-typed columns (`inputMetadata`, `renderSettings`)
+// use `Json` for PostgreSQL and fall back to `String` in SQLite.
 //
 // 4 spec-mandated tables: Account, Session, Render, InferenceJob.
 
@@ -13,7 +12,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -58,8 +57,8 @@ model Session {
   user            Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
   name            String   @default("Untitled")
   inputFileHash   String?
-  inputMetadata   String?  // JSON string (SQLite has no JSON type)
-  renderSettings  String?  // JSON string
+  inputMetadata   Json?    // Audio file metadata (format, duration, sample rate, etc.)
+  renderSettings  Json?    // DSP chain configuration (genre, loudness target, etc.)
   rainDspWasmHash String?
   status          String   @default("draft") // draft|inferring|rendered|archived
   createdAt       DateTime @default(now())
