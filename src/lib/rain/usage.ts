@@ -89,7 +89,7 @@ export async function getUsageStats(): Promise<UsageStats> {
 }
 
 /** Increment the render counter (called after each successful render). */
-export async function trackRender(userId?: string, format?: string): Promise<void> {
+export async function trackRender(_userId?: string, _format?: string): Promise<void> {
   try {
     // We use the existing Prisma Render model — the counter is implicit in db.render.count()
     // This function is a placeholder for additional telemetry (e.g., sending to an external
@@ -101,7 +101,7 @@ export async function trackRender(userId?: string, format?: string): Promise<voi
 }
 
 /** Increment export counter. */
-export async function trackExport(userId?: string, format?: string): Promise<void> {
+export async function trackExport(_userId?: string, _format?: string): Promise<void> {
   // Implicit: existing Render.create in analytics.ts already tracks exports.
   // This hook exists for future expansion (e.g., Prometheus counters).
 }

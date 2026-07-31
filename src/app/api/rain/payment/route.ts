@@ -167,15 +167,18 @@ async function handleCreate(
   }
 
   const validProviders: PaymentMethod[] = ['payfast', 'ozow', 'stripe']
-  if (!validProviders.includes(provider)) {
+  if (!validProviders.includes(provider as PaymentMethod)) {
     return NextResponse.json(
       { ok: false, error: `Invalid payment provider. Must be one of: ${validProviders.join(', ')}.`, stage: 'validate' },
       { status: 400, headers: corsHeaders(origin) },
     )
   }
 
+  // After validation, provider is guaranteed to be a valid PaymentMethod
+  const validatedProvider = provider as PaymentMethod
+
   // ── Create isolated payment session ─────────────────────────────────────
-  const result = isolation.createSession(userSessionId, provider, amountCents, req)
+  const result = isolation.createSession(userSessionId, validatedProvider, amountCents, req)
 
   if ('error' in result) {
     const status = result.retryAfter ? 429 : 400
@@ -220,7 +223,7 @@ async function handleCreate(
   }
 
   // ── Live mode: generate provider redirect URL ──────────────────────────
-  const providerInstance = isolation.getProvider(provider)
+  const providerInstance = isolation.getProvider(validatedProvider)
   if (!providerInstance || !providerInstance.configured) {
     return NextResponse.json(
       { ok: false, error: 'Payment provider is not configured.', stage: 'provider' },
@@ -254,7 +257,7 @@ async function handleCreate(
 // ---------------------------------------------------------------------------
 
 async function handleConfirm(
-  req: NextRequest,
+  _req: NextRequest,
   body: Record<string, unknown>,
   origin: string | null,
 ): Promise<NextResponse> {

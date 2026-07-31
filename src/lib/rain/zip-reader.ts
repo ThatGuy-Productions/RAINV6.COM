@@ -64,14 +64,6 @@ const SIG_LOCAL = 0x04034b50 // Local File Header
 const MAX_ZIP_COMMENT = 0xffff
 const EOCD_MIN_LEN = 22
 
-/** General-purpose bit flag — bit 3 means the CRC/sizes are stored in a data
- *  descriptor AFTER the file data (streaming mode). When set, the local header
- *  fields are zero and the central directory is authoritative for the sizes. */
-const FLAG_DATA_DESCRIPTOR = 0x08
-/** Bit 11 means filename + comment are UTF-8. We always decode as UTF-8 with
- *  TextDecoder({ fatal: false }) so legacy CP437 files don't blow up. */
-const FLAG_UTF8 = 0x0800
-
 // ---------------------------------------------------------------------------
 // Helpers — little-endian readers
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Box, Download, Headphones, Keyboard, Layers, Loader2, Moon, Music2, Pause, Play, Shield, Sun, Target, Upload, UserCircle, X, Zap } from 'lucide-react'
+import { Activity, Box, Download, Headphones, Keyboard, Loader2, Moon, Music2, Pause, Play, Shield, Sun, Target, Upload, UserCircle, X, Zap } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { RAIN_BRAND, MACROS } from '@/lib/rain/constants'
 import { audioEngine } from '@/lib/rain/audio-engine'

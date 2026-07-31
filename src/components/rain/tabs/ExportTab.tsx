@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Download, FileAudio, Loader2, Box, CheckCircle2, XCircle, Info, MessageSquare, FileArchive, Lock } from 'lucide-react'
+import { Download, FileAudio, Loader2, Box, CheckCircle2, XCircle, Info, FileArchive, Lock } from 'lucide-react'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
   buildSidecarZip,
@@ -139,7 +139,6 @@ export function ExportTab() {
     fingerprint,
   })
 
-  const isAtmos = selectedFormat === 'atmos'
   const isMp3 = selectedFormat === 'mp3_320'
   const isWav = selectedFormat === 'wav24' || selectedFormat === 'wav16'
 

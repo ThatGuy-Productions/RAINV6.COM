@@ -146,9 +146,6 @@ function generateUUIDv7(): string {
 
   // Build the 128-bit UUID
   // timestamp (48) | version (4) | rand_a (12) | variant (2) | rand_b (62)
-  const timeHigh = (timestamp >> 12n) & 0xFFFFFFFFFn // 36 bits
-  const timeMid = (timestamp >> 24n) & 0xFFFn // 12 bits (but we only use bits 24-35)
-  const timeLow = timestamp & 0xFFFn // 12 bits (timestamp bits 0-11)
 
   // Actually, let's reformulate for UUIDv7 layout:
   // time_low (32 bits) = timestamp bits 16-47

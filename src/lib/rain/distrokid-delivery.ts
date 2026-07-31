@@ -31,6 +31,9 @@
 
 import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
 
+// Re-export types for consumers that import from this module
+export type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult }
+
 // ---------------------------------------------------------------------------
 // Step implementations — each returns { ok, error?, screenshot? }
 // ---------------------------------------------------------------------------

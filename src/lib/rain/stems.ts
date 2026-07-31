@@ -370,7 +370,7 @@ function extractFrameFeatures(
   stftMid: Float32Array,
   stftSide: Float32Array,
   bandRanges: Array<{ start: number; end: number }>,
-  sampleRate: number,
+  _sampleRate: number,
   numFrames: number,
 ): FrameFeatures {
   const N = NUM_BANDS

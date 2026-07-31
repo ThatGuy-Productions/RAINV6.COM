@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, memo } from 'react'
 import { useReducedMotion } from 'framer-motion'
 import { audioEngine } from '@/lib/rain/audio-engine'
 
@@ -21,8 +21,12 @@ interface WaveformProps {
  *
  * Reduced-motion: the perspective tilt is dropped (flat) but the depth
  * layering, reflection and glowing playhead are preserved.
+ *
+ * Wrapped in React.memo — props (height, color, showProgress) are stable
+ * across renders, so the component avoids unnecessary re-renders while
+ * its internal RAF loop drives the canvas animation.
  */
-export function Waveform({ height = 120, color = '#AAFF00', showProgress = true }: WaveformProps) {
+export const Waveform = memo(function Waveform({ height = 120, color = '#AAFF00', showProgress = true }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
   const dataRef = useRef<Uint8Array>(new Uint8Array(2048))
@@ -205,4 +209,4 @@ export function Waveform({ height = 120, color = '#AAFF00', showProgress = true 
       </div>
     </div>
   )
-}
+})

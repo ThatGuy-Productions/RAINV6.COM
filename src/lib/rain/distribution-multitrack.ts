@@ -12,8 +12,7 @@
  * ⚠️  ISRC/UPC LOCAL IDENTIFIERS ONLY — see provenance.ts for warning.
  */
 
-import { buildDdexErnXml, validateDdex, type DdexMetadata } from './distribution'
-import type { AiDisclosure } from './types'
+import { buildDdexErnXml, validateDdex, escapeXml, type DdexMetadata } from './distribution'
 
 // ---------------------------------------------------------------------------
 // Multi-track types
@@ -120,15 +119,6 @@ export interface MultiTrackDdexValidation extends ReturnType<typeof validateDdex
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 function isoDurationFromSeconds(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds))

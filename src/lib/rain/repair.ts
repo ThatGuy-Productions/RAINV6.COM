@@ -507,7 +507,7 @@ async function repairDenoise(
 
 async function repairSpectralGate(
   input: Float32Array,
-  sampleRate: number,
+  _sampleRate: number,
   intensity: number,
   onProgress?: (pct: number) => void,
   signal?: AbortSignal,
@@ -645,7 +645,6 @@ async function repairDeclick(
   const sortedDiffs = Array.from(diffs).sort((a, b) => a - b)
   const median = sortedDiffs[Math.floor(sortedDiffs.length / 2)]
   // MAD = median of |diff - median|
-  let madSum = 0
   const absDevs = new Float32Array(n - 1)
   for (let i = 0; i < n - 1; i++) {
     absDevs[i] = Math.abs(diffs[i] - median)

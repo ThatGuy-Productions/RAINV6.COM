@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
+import { apiError, withErrorHandler, logApiRequest } from '@/lib/rain/api-utils'
+import { sanitizeReview, sanitizeDisplayName } from '@/lib/rain/sanitize'
 import { trackEvent } from '@/lib/rain/server-analytics'
 
 export const runtime = 'nodejs'
@@ -34,6 +36,7 @@ const MAX_NAME = 80
 const MAX_ROLE = 120
 
 export async function GET(req: NextRequest) {
+  const start = Date.now()
   const url = new URL(req.url)
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1), 50)
   try {
@@ -51,20 +54,24 @@ export async function GET(req: NextRequest) {
         createdAt: true,
       },
     })
+    logApiRequest('GET', '/api/rain/reviews', 200, Date.now() - start)
     return NextResponse.json({ reviews, count: reviews.length })
   } catch (err) {
     console.error('[api/rain/reviews] GET failed:', err)
+    logApiRequest('GET', '/api/rain/reviews', 200, Date.now() - start)
     return NextResponse.json({ reviews: [], count: 0 }, { status: 200 })
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler(async (req: NextRequest) => {
+  const start = Date.now()
   const user = await getSessionUser(req).catch(() => null)
 
   let body: Record<string, unknown>
   try {
     body = await req.json()
   } catch {
+    logApiRequest('POST', '/api/rain/reviews', 400, Date.now() - start)
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
@@ -74,6 +81,7 @@ export async function POST(req: NextRequest) {
       ? body.name.trim().slice(0, MAX_NAME)
       : user?.name?.slice(0, MAX_NAME) ?? null
   if (!name) {
+    logApiRequest('POST', '/api/rain/reviews', 400, Date.now() - start)
     return NextResponse.json({ error: 'Name is required' }, { status: 400 })
   }
 
@@ -84,6 +92,7 @@ export async function POST(req: NextRequest) {
 
   const ratingNum = typeof body.rating === 'number' ? body.rating : parseInt(String(body.rating), 10)
   if (!Number.isFinite(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+    logApiRequest('POST', '/api/rain/reviews', 400, Date.now() - start)
     return NextResponse.json({ error: 'Rating must be 1-5' }, { status: 400 })
   }
 
@@ -92,6 +101,7 @@ export async function POST(req: NextRequest) {
       ? body.title.trim().slice(0, MAX_TITLE)
       : null
   if (!title) {
+    logApiRequest('POST', '/api/rain/reviews', 400, Date.now() - start)
     return NextResponse.json({ error: 'Title is required' }, { status: 400 })
   }
 
@@ -100,7 +110,23 @@ export async function POST(req: NextRequest) {
       ? body.body.trim().slice(0, MAX_BODY)
       : null
   if (!reviewBody) {
+    logApiRequest('POST', '/api/rain/reviews', 400, Date.now() - start)
     return NextResponse.json({ error: 'Review body is required' }, { status: 400 })
+  }
+
+  // Phase 5 — sanitize user-submitted content
+  const sanitizedName = sanitizeDisplayName(name)
+  const sanitizedTitle = sanitizeReview(title)
+  const sanitizedBody = sanitizeReview(reviewBody)
+  const sanitizedRole = role ? sanitizeDisplayName(role) : null
+
+  if (sanitizedBody.rejected) {
+    logApiRequest('POST', '/api/rain/reviews', 422, Date.now() - start)
+    return NextResponse.json({ error: sanitizedBody.reason ?? 'Review body contains potentially dangerous content' }, { status: 422 })
+  }
+  if (sanitizedTitle.rejected) {
+    logApiRequest('POST', '/api/rain/reviews', 422, Date.now() - start)
+    return NextResponse.json({ error: sanitizedTitle.reason ?? 'Title contains potentially dangerous content' }, { status: 422 })
   }
 
   // Signed-in users auto-approve; anonymous submissions require manual approval.
@@ -110,11 +136,11 @@ export async function POST(req: NextRequest) {
     const review = await db.review.create({
       data: {
         userId: user?.id ?? null,
-        name,
-        role,
+        name: sanitizedName.sanitized.slice(0, MAX_NAME),
+        role: sanitizedRole ? sanitizedRole.sanitized.slice(0, MAX_ROLE) : null,
         rating: ratingNum,
-        title,
-        body: reviewBody,
+        title: sanitizedTitle.sanitized.slice(0, MAX_TITLE),
+        body: sanitizedBody.sanitized.slice(0, MAX_BODY),
         approved,
       },
     })
@@ -126,6 +152,7 @@ export async function POST(req: NextRequest) {
       metadata: { reviewId: review.id, rating: ratingNum, approved },
     })
 
+    logApiRequest('POST', '/api/rain/reviews', 201, Date.now() - start)
     return NextResponse.json(
       {
         ok: true,
@@ -139,6 +166,7 @@ export async function POST(req: NextRequest) {
     )
   } catch (err) {
     console.error('[api/rain/reviews] POST failed:', err)
-    return NextResponse.json({ error: 'Failed to submit review' }, { status: 500 })
+    logApiRequest('POST', '/api/rain/reviews', 500, Date.now() - start)
+    return apiError('Failed to submit review', 500, 'db_write')
   }
-}
+})

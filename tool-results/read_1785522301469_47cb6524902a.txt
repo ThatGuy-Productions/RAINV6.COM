@@ -1,0 +1,708 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — Landing Page Interactive Mastering Demo
+     5→ *
+     6→ * A pure-visual before/after mastering comparison that demonstrates the
+     7→ * product's value without requiring audio playback. Visitors see a waveform
+     8→ * transform, LUFS meters improve, spectrum bars balance, and the RAIN Score
+     9→ * gauge animate from a "before" state to a polished "after" state.
+    10→ *
+    11→ * A draggable toggle slider lets visitors scrub between before/after — the
+    12→ * whole visualization interpolates in real time. This is the landing page's
+    13→ * "show, don't tell" moment.
+    14→ *
+    15→ * No audio engine dependency — all data is synthetic but realistic (the
+    16→ * "before" waveform is quieter/unbalanced, "after" is louder/balanced).
+    17→ */
+    18→
+    19→import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+    20→import { motion, useInView } from 'framer-motion'
+    21→import { ArrowRight, Zap, Gauge, Activity, BarChart3, Sparkles, Play, Pause, Volume2, Loader2 } from 'lucide-react'
+    22→
+    23→// ── Synthetic "before" and "after" data ────────────────────────────────────
+    24→// The waveform is a list of amplitude samples (0..1). "Before" is quiet with
+    25→// uneven dynamics; "after" is louder with controlled peaks.
+    26→
+    27→const SAMPLE_COUNT = 80
+    28→
+    29→function generateWaveform(seed: number, balanced: boolean): number[] {
+    30→  const out: number[] = []
+    31→  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    32→    const t = i / SAMPLE_COUNT
+    33→    // Base waveform shape — a song-like envelope
+    34→    const envelope = Math.sin(t * Math.PI) * 0.8 + 0.2
+    35→    // High-frequency detail
+    36→    const detail = Math.sin(i * 0.7 + seed) * 0.3 + Math.sin(i * 1.3 + seed * 2) * 0.15
+    37→    // "Before": quieter + more dynamic range (some dips)
+    38→    // "After": louder + compressed (more uniform)
+    39→    const base = balanced ? 0.82 : 0.48
+    40→    const variance = balanced ? 0.12 : 0.35
+    41→    const amp = base + detail * variance * envelope
+    42→    out.push(Math.max(0.04, Math.min(1, amp)))
+    43→  }
+    44→  return out
+    45→}
+    46→
+    47→const BEFORE_WAVE = generateWaveform(1.5, false)
+    48→const AFTER_WAVE = generateWaveform(1.5, true)
+    49→
+    50→// Spectrum bars (24 bands) — "before" is muddy (mids heavy), "after" is balanced
+    51→const SPECTRUM_BANDS = 24
+    52→function generateSpectrum(balanced: boolean): number[] {
+    53→  const out: number[] = []
+    54→  for (let i = 0; i < SPECTRUM_BANDS; i++) {
+    55→    const freq = i / SPECTRUM_BANDS // 0..1, low→high
+    56→    if (balanced) {
+    57→      // Balanced: gentle roll-off, full mids + highs
+    58→      out.push(0.45 + Math.sin(freq * Math.PI * 1.5) * 0.3 + Math.random() * 0.08)
+    59→    } else {
+    60→      // Muddy: bass-heavy, scooped mids, rolled-off highs
+    61→      const bass = Math.exp(-freq * 4) * 0.7
+    62→      const scoop = 1 - Math.exp(-Math.pow((freq - 0.35) * 3, 2))
+    63→      out.push(bass + scoop * 0.25 + Math.random() * 0.08)
+    64→    }
+    65→  }
+    66→  return out
+    67→}
+    68→
+    69→const BEFORE_SPECTRUM = generateSpectrum(false)
+    70→const AFTER_SPECTRUM = generateSpectrum(true)
+    71→
+    72→// Metrics
+    73→const BEFORE_METRICS = { lufs: -18.4, truePeak: -3.2, score: 47 }
+    74→const AFTER_METRICS = { lufs: -14.0, truePeak: -1.0, score: 92 }
+    75→
+    76→// ── Helper: linear interpolation ────────────────────────────────────────────
+    77→function lerp(a: number, b: number, t: number): number {
+    78→  return a + (b - a) * t
+    79→}
+    80→
+    81→// ── Audio playback hook ─────────────────────────────────────────────────────
+    82→// Loads the demo WAV and plays it through a Web Audio chain that simulates
+    83→// the before/after mastering difference in real time. The `t` parameter
+    84→// (0..1) drives a GainNode (volume) + BiquadFilter (lowpass cutoff) so the
+    85→// visitor hears the transform as they drag the slider.
+    86→
+    87→interface DemoAudioState {
+    88→  isPlaying: boolean
+    89→  isLoading: boolean
+    90→  error: string | null
+    91→}
+    92→
+    93→function useDemoAudio(tRef: React.MutableRefObject<number>) {
+    94→  const [state, setState] = useState<DemoAudioState>({ isPlaying: false, isLoading: false, error: null })
+    95→  const ctxRef = useRef<AudioContext | null>(null)
+    96→  const bufferRef = useRef<AudioBuffer | null>(null)
+    97→  const sourceRef = useRef<AudioBufferSourceNode | null>(null)
+    98→  const gainRef = useRef<GainNode | null>(null)
+    99→  const filterRef = useRef<BiquadFilterNode | null>(null)
+   100→  const startedAtRef = useRef(0)
+   101→  const offsetRef = useRef(0)
+   102→  const rafRef = useRef<number | null>(null)
+   103→
+   104→  // Sync the audio chain's parameters to the current `t` value.
+   105→  const syncParams = useCallback(() => {
+   106→    const t = tRef.current
+   107→    // Gain: before = 0.35 (quiet), after = 0.85 (loud)
+   108→    if (gainRef.current) {
+   109→      gainRef.current.gain.value = lerp(0.35, 0.85, t)
+   110→    }
+   111→    // Lowpass cutoff: before = 6000 Hz (muffled), after = 20000 Hz (full)
+   112→    if (filterRef.current) {
+   113→      filterRef.current.frequency.value = lerp(6000, 20000, t)
+   114→    }
+   115→  }, [tRef])
+   116→
+   117→  // Continuously sync params while playing (the slider may be dragged).
+   118→  useEffect(() => {
+   119→    if (!state.isPlaying) return
+   120→    const tick = () => {
+   121→      syncParams()
+   122→      rafRef.current = requestAnimationFrame(tick)
+   123→    }
+   124→    rafRef.current = requestAnimationFrame(tick)
+   125→    return () => {
+   126→      if (rafRef.current !== null) {
+   127→        cancelAnimationFrame(rafRef.current)
+   128→        rafRef.current = null
+   129→      }
+   130→    }
+   131→  }, [state.isPlaying, syncParams])
+   132→
+   133→  const load = useCallback(async () => {
+   134→    if (bufferRef.current || ctxRef.current) return
+   135→    setState((s) => ({ ...s, isLoading: true, error: null }))
+   136→    try {
+   137→      const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+   138→      const ctx = new Ctor()
+   139→      ctxRef.current = ctx
+   140→      const res = await fetch('/demo-sample.wav')
+   141→      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+   142→      const arr = await res.arrayBuffer()
+   143→      const buf = await ctx.decodeAudioData(arr)
+   144→      bufferRef.current = buf
+   145→    } catch (e) {
+   146→      setState((s) => ({ ...s, isLoading: false, error: e instanceof Error ? e.message : 'Load failed' }))
+   147→    }
+   148→  }, [])
+   149→
+   150→  const play = useCallback(async () => {
+   151→    await load()
+   152→    const ctx = ctxRef.current
+   153→    const buf = bufferRef.current
+   154→    if (!ctx || !buf) {
+   155→      if (!state.error) setState((s) => ({ ...s, isLoading: false }))
+   156→      return
+   157→    }
+   158→    if (ctx.state === 'suspended') await ctx.resume()
+   159→
+   160→    // Build the chain: source → filter → gain → destination
+   161→    const src = ctx.createBufferSource()
+   162→    src.buffer = buf
+   163→    src.loop = true
+   164→
+   165→    const filter = ctx.createBiquadFilter()
+   166→    filter.type = 'lowpass'
+   167→    filter.Q.value = 0.7
+   168→
+   169→    const gain = ctx.createGain()
+   170→
+   171→    src.connect(filter)
+   172→    filter.connect(gain)
+   173→    gain.connect(ctx.destination)
+   174→
+   175→    sourceRef.current = src
+   176→    filterRef.current = filter
+   177→    gainRef.current = gain
+   178→
+   179→    syncParams()
+   180→    src.start(0, offsetRef.current % buf.duration)
+   181→    startedAtRef.current = ctx.currentTime
+   182→    setState({ isPlaying: true, isLoading: false, error: null })
+   183→  }, [load, syncParams, state.error])
+   184→
+   185→  const stop = useCallback(() => {
+   186→    const ctx = ctxRef.current
+   187→    const src = sourceRef.current
+   188→    if (ctx && src) {
+   189→      // Track playback position for resume
+   190→      const elapsed = ctx.currentTime - startedAtRef.current
+   191→      offsetRef.current = (offsetRef.current + elapsed) % (bufferRef.current?.duration ?? 1)
+   192→      try { src.stop() } catch { /* already stopped */ }
+   193→      src.disconnect()
+   194→    }
+   195→    sourceRef.current = null
+   196→    setState((s) => ({ ...s, isPlaying: false }))
+   197→  }, [])
+   198→
+   199→  // Cleanup on unmount
+   200→  useEffect(() => {
+   201→    return () => {
+   202→      if (sourceRef.current) {
+   203→        try { sourceRef.current.stop() } catch { /* noop */ }
+   204→      }
+   205→      if (ctxRef.current) {
+   206→        ctxRef.current.close().catch(() => {})
+   207→      }
+   208→    }
+   209→  }, [])
+   210→
+   211→  return { ...state, play, stop }
+   212→}
+   213→
+   214→// ── Main component ──────────────────────────────────────────────────────────
+   215→
+   216→export function LandingDemo({ onLaunch }: { onLaunch: () => void }) {
+   217→  const sectionRef = useRef<HTMLDivElement>(null)
+   218→  const isInView = useInView(sectionRef, { once: true, margin: '-80px' })
+   219→  const [t, setT] = useState(0) // 0 = before, 1 = after
+   220→  const autoPlayedRef = useRef(false)
+   221→
+   222→  // Keep a ref of `t` so the audio hook can read the latest value without
+   223→  // re-subscribing on every slider drag.
+   224→  const tRef = useRef(0)
+   225→  useEffect(() => { tRef.current = t }, [t])
+   226→
+   227→  const audio = useDemoAudio(tRef)
+   228→
+   229→  // Auto-play the transition once when scrolled into view.
+   230→  useEffect(() => {
+   231→    if (!isInView || autoPlayedRef.current) return
+   232→    autoPlayedRef.current = true
+   233→    const duration = 2200
+   234→    const startTime = performance.now()
+   235→    let rafId: number
+   236→    const animate = (now: number) => {
+   237→      const elapsed = now - startTime
+   238→      const p = Math.min(elapsed / duration, 1)
+   239→      // ease-in-out cubic
+   240→      const eased = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2
+   241→      setT(eased)
+   242→      if (p < 1) rafId = requestAnimationFrame(animate)
+   243→    }
+   244→    rafId = requestAnimationFrame(animate)
+   245→    return () => cancelAnimationFrame(rafId)
+   246→  }, [isInView])
+   247→
+   248→  // Keyboard shortcut: Space toggles audio playback when the demo section
+   249→  // is in view. Ignores the keypress if the user is typing in an input.
+   250→  useEffect(() => {
+   251→    const onKey = (e: KeyboardEvent) => {
+   252→      if (e.code !== 'Space') return
+   253→      const target = e.target as HTMLElement
+   254→      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+   255→      // Only react when the demo section is in the viewport
+   256→      const rect = sectionRef.current?.getBoundingClientRect()
+   257→      if (!rect) return
+   258→      const inView = rect.top < window.innerHeight * 0.6 && rect.bottom > window.innerHeight * 0.4
+   259→      if (!inView) return
+   260→      e.preventDefault()
+   261→      if (audio.isPlaying) audio.stop()
+   262→      else void audio.play()
+   263→    }
+   264→    window.addEventListener('keydown', onKey)
+   265→    return () => window.removeEventListener('keydown', onKey)
+   266→  }, [audio])
+   267→
+   268→  // Interpolated data
+   269→  const wave = useMemo(
+   270→    () => BEFORE_WAVE.map((v, i) => lerp(v, AFTER_WAVE[i], t)),
+   271→    [t],
+   272→  )
+   273→  const spectrum = useMemo(
+   274→    () => BEFORE_SPECTRUM.map((v, i) => lerp(v, AFTER_SPECTRUM[i], t)),
+   275→    [t],
+   276→  )
+   277→  const metrics = useMemo(
+   278→    () => ({
+   279→      lufs: lerp(BEFORE_METRICS.lufs, AFTER_METRICS.lufs, t),
+   280→      truePeak: lerp(BEFORE_METRICS.truePeak, AFTER_METRICS.truePeak, t),
+   281→      score: Math.round(lerp(BEFORE_METRICS.score, AFTER_METRICS.score, t)),
+   282→    }),
+   283→    [t],
+   284→  )
+   285→
+   286→  const isAfter = t > 0.5
+   287→
+   288→  return (
+   289→    <section
+   290→      ref={sectionRef}
+   291→      className="relative py-24 px-4 overflow-hidden"
+   292→      id="demo"
+   293→    >
+   294→      {/* Ambient glow background */}
+   295→      <div
+   296→        className="absolute inset-0 pointer-events-none"
+   297→        style={{
+   298→          background: `radial-gradient(ellipse 60% 40% at 50% 50%, rgba(170,255,0,${0.04 + t * 0.06}), transparent 70%)`,
+   299→          transition: 'background 0.3s',
+   300→        }}
+   301→      />
+   302→
+   303→      <div className="max-w-6xl mx-auto relative">
+   304→        {/* Section header */}
+   305→        <div className="text-center mb-12">
+   306→          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[rgba(170,255,0,0.25)] bg-[rgba(170,255,0,0.06)] text-[10px] font-mono uppercase tracking-wider text-[#AAFF00] mb-4">
+   307→            <Sparkles className="w-3 h-3" />
+   308→            Live Mastering Demo
+   309→          </div>
+   310→          <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">
+   311→            Watch a track transform in real time.
+   312→          </h2>
+   313→          <p className="text-sm text-muted-foreground max-w-xl mx-auto">
+   314→            Drag the slider to see the 16-stage pipeline at work. Waveform, loudness,
+   315→            spectrum, and RAIN Score — all improve as mastering is applied.
+   316→          </p>
+   317→        </div>
+   318→
+   319→        {/* Main demo panel */}
+   320→        <div className="rounded-2xl border border-[rgba(170,255,0,0.15)] bg-[rgba(14,16,22,0.6)] backdrop-blur-xl overflow-hidden"
+   321→          style={{ boxShadow: '0 24px 80px -20px rgba(0,0,0,0.6), 0 0 0 1px rgba(170,255,0,0.04)' }}
+   322→        >
+   323→          {/* Top bar — before/after labels + audio toggle */}
+   324→          <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+   325→            <div className="flex items-center gap-2">
+   326→              <div
+   327→                className="w-2 h-2 rounded-full transition-colors duration-300"
+   328→                style={{ backgroundColor: isAfter ? '#AAFF00' : '#F59E0B' }}
+   329→              />
+   330→              <span className="text-[11px] font-mono uppercase tracking-wider text-muted-foreground">
+   331→                {isAfter ? 'Mastered' : 'Before Mastering'}
+   332→              </span>
+   333→              {audio.isPlaying && (
+   334→                <span className="flex items-center gap-1 ml-1 text-[10px] font-mono text-[#AAFF00]/80">
+   335→                  <span className="flex gap-px items-end h-3">
+   336→                    {[0.4, 0.7, 0.5, 0.9, 0.6].map((h, i) => (
+   337→                      <span
+   338→                        key={i}
+   339→                        className="w-0.5 bg-[#AAFF00] rounded-full animate-pulse"
+   340→                        style={{ height: `${h * 100}%`, animationDelay: `${i * 80}ms` }}
+   341→                      />
+   342→                    ))}
+   343→                  </span>
+   344→                  live
+   345→                </span>
+   346→              )}
+   347→            </div>
+   348→            <div className="flex items-center gap-3">
+   349→              {/* Audio play/pause button */}
+   350→              <button
+   351→                onClick={() => { if (audio.isPlaying) audio.stop(); else void audio.play() }}
+   352→                disabled={audio.isLoading}
+   353→                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[rgba(170,255,0,0.1)] border border-[rgba(170,255,0,0.25)] text-[10px] font-mono text-[#AAFF00] hover:bg-[rgba(170,255,0,0.18)] hover:border-[rgba(170,255,0,0.45)] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+   354→                aria-label={audio.isPlaying ? 'Pause audio demo' : 'Play audio demo'}
+   355→                title={audio.isPlaying ? 'Pause' : 'Play — hear the difference'}
+   356→              >
+   357→                {audio.isLoading ? (
+   358→                  <Loader2 className="w-3 h-3 animate-spin" />
+   359→                ) : audio.isPlaying ? (
+   360→                  <Pause className="w-3 h-3" />
+   361→                ) : (
+   362→                  <Play className="w-3 h-3" />
+   363→                )}
+   364→                <span className="hidden sm:inline">
+   365→                  {audio.isLoading ? 'Loading' : audio.isPlaying ? 'Pause' : 'Play'}
+   366→                </span>
+   367→              </button>
+   368→              <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground/60">
+   369→                <span className="hidden sm:inline">RAIN ENGINE v6</span>
+   370→                <span>48 kHz · 24-bit</span>
+   371→              </div>
+   372→            </div>
+   373→          </div>
+   374→          {audio.error && (
+   375→            <div className="px-5 py-1.5 text-[10px] font-mono text-amber-400/80 bg-amber-500/5 border-b border-amber-500/10">
+   376→              Audio unavailable: {audio.error}. Visual demo still works.
+   377→            </div>
+   378→          )}
+   379→
+   380→          {/* Visualization grid */}
+   381→          <div className="grid md:grid-cols-2 gap-px bg-white/[0.04]">
+   382→            {/* Waveform panel */}
+   383→            <div className="bg-[rgba(14,16,22,0.4)] p-5">
+   384→              <div className="flex items-center gap-1.5 mb-3">
+   385→                <Activity className="w-3 h-3 text-[#AAFF00]/70" />
+   386→                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+   387→                  Waveform
+   388→                </span>
+   389→              </div>
+   390→              <WaveformBars values={wave} color={isAfter ? '#AAFF00' : '#F59E0B'} />
+   391→            </div>
+   392→
+   393→            {/* Spectrum panel */}
+   394→            <div className="bg-[rgba(14,16,22,0.4)] p-5">
+   395→              <div className="flex items-center gap-1.5 mb-3">
+   396→                <BarChart3 className="w-3 h-3 text-[#AAFF00]/70" />
+   397→                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+   398→                  Spectrum
+   399→                </span>
+   400→              </div>
+   401→              <SpectrumBars values={spectrum} t={t} />
+   402→            </div>
+   403→
+   404→            {/* LUFS meters */}
+   405→            <div className="bg-[rgba(14,16,22,0.4)] p-5">
+   406→              <div className="flex items-center gap-1.5 mb-3">
+   407→                <Gauge className="w-3 h-3 text-[#AAFF00]/70" />
+   408→                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+   409→                  Loudness
+   410→                </span>
+   411→              </div>
+   412→              <div className="space-y-3">
+   413→                <MeterRow
+   414→                  label="LUFS"
+   415→                  value={metrics.lufs.toFixed(1)}
+   416→                  target="-14.0"
+   417→                  min={-24}
+   418→                  max={-6}
+   419→                  current={metrics.lufs}
+   420→                  color={isAfter ? '#AAFF00' : '#F59E0B'}
+   421→                />
+   422→                <MeterRow
+   423→                  label="True Peak"
+   424→                  value={metrics.truePeak.toFixed(1) + ' dB'}
+   425→                  target="-1.0"
+   426→                  min={-6}
+   427→                  max={0}
+   428→                  current={metrics.truePeak}
+   429→                  color={isAfter ? '#10B981' : '#F97316'}
+   430→                />
+   431→              </div>
+   432→            </div>
+   433→
+   434→            {/* RAIN Score gauge */}
+   435→            <div className="bg-[rgba(14,16,22,0.4)] p-5">
+   436→              <div className="flex items-center gap-1.5 mb-3">
+   437→                <Zap className="w-3 h-3 text-[#AAFF00]/70" />
+   438→                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70">
+   439→                  RAIN Score
+   440→                </span>
+   441→              </div>
+   442→              <ScoreGauge score={metrics.score} t={t} />
+   443→            </div>
+   444→          </div>
+   445→
+   446→          {/* Slider control */}
+   447→          <div className="px-5 py-4 border-t border-white/[0.06]">
+   448→            <div className="flex items-center gap-4">
+   449→              <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground w-12">
+   450→                Before
+   451→              </span>
+   452→              <div className="flex-1 relative">
+   453→                <input
+   454→                  type="range"
+   455→                  min={0}
+   456→                  max={1}
+   457→                  step={0.01}
+   458→                  value={t}
+   459→                  onChange={(e) => setT(parseFloat(e.target.value))}
+   460→                  className="rain-demo-slider w-full"
+   461→                  aria-label="Mastering before/after toggle"
+   462→                />
+   463→                {/* Track overlay */}
+   464→                <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1 rounded-full bg-white/[0.08] pointer-events-none">
+   465→                  <div
+   466→                    className="h-full rounded-full transition-none"
+   467→                    style={{
+   468→                      width: `${t * 100}%`,
+   469→                      background: 'linear-gradient(90deg, #F59E0B, #AAFF00)',
+   470→                    }}
+   471→                  />
+   472→                </div>
+   473→              </div>
+   474→              <span className="text-[10px] font-mono uppercase tracking-wider text-[#AAFF00] w-12 text-right">
+   475→                After
+   476→              </span>
+   477→            </div>
+   478→          </div>
+   479→        </div>
+   480→
+   481→        {/* CTA */}
+   482→        <div className="text-center mt-8">
+   483→          <button
+   484→            onClick={onLaunch}
+   485→            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-[#AAFF00] text-black font-semibold text-sm hover:bg-[#c5ff4a] active:scale-95 transition-all"
+   486→          >
+   487→            Try it with your own track
+   488→            <ArrowRight className="w-4 h-4" />
+   489→          </button>
+   490→          <p className="mt-3 text-[11px] text-muted-foreground flex items-center justify-center gap-1.5 flex-wrap">
+   491→            <Volume2 className="w-3 h-3" />
+   492→            Hit <span className="font-mono text-[#AAFF00]/80">Play</span> or press
+   493→            <kbd className="px-1.5 py-0.5 rounded border border-rain-border bg-rain-surface-2/60 text-[9px] font-mono text-foreground/80">Space</kbd>
+   494→            to hear the difference — drag the slider while playing.
+   495→          </p>
+   496→        </div>
+   497→      </div>
+   498→
+   499→      {/* Slider styling */}
+   500→      <style jsx>{`
+   501→        .rain-demo-slider {
+   502→          -webkit-appearance: none;
+   503→          appearance: none;
+   504→          height: 24px;
+   505→          background: transparent;
+   506→          cursor: pointer;
+   507→          position: relative;
+   508→          z-index: 2;
+   509→        }
+   510→        .rain-demo-slider::-webkit-slider-thumb {
+   511→          -webkit-appearance: none;
+   512→          appearance: none;
+   513→          width: 18px;
+   514→          height: 18px;
+   515→          border-radius: 50%;
+   516→          background: #fff;
+   517→          border: 3px solid #aaff00;
+   518→          box-shadow: 0 0 12px rgba(170, 255, 0, 0.5);
+   519→          cursor: grab;
+   520→          transition: transform 0.15s;
+   521→        }
+   522→        .rain-demo-slider::-webkit-slider-thumb:active {
+   523→          cursor: grabbing;
+   524→          transform: scale(1.15);
+   525→        }
+   526→        .rain-demo-slider::-moz-range-thumb {
+   527→          width: 18px;
+   528→          height: 18px;
+   529→          border-radius: 50%;
+   530→          background: #fff;
+   531→          border: 3px solid #aaff00;
+   532→          box-shadow: 0 0 12px rgba(170, 255, 0, 0.5);
+   533→          cursor: grab;
+   534→        }
+   535→      `}</style>
+   536→    </section>
+   537→  )
+   538→}
+   539→
+   540→// ── Sub-components ──────────────────────────────────────────────────────────
+   541→
+   542→function WaveformBars({ values, color }: { values: number[]; color: string }) {
+   543→  return (
+   544→    <div className="flex items-center justify-between gap-px h-20">
+   545→      {values.map((v, i) => (
+   546→        <motion.div
+   547→          key={i}
+   548→          className="flex-1 rounded-sm"
+   549→          style={{
+   550→            height: `${v * 100}%`,
+   551→            background: color,
+   552→            opacity: 0.4 + v * 0.6,
+   553→            boxShadow: v > 0.7 ? `0 0 4px ${color}80` : 'none',
+   554→          }}
+   555→          transition={{ duration: 0.15 }}
+   556→        />
+   557→      ))}
+   558→    </div>
+   559→  )
+   560→}
+   561→
+   562→function SpectrumBars({ values, t }: { values: number[]; t: number }) {
+   563→  const after = t > 0.5
+   564→  return (
+   565→    <div className="flex items-end justify-between gap-px h-20">
+   566→      {values.map((v, i) => {
+   567→        // Color gradient: lows = orange, mids = yellow, highs = lime
+   568→        const freq = i / values.length
+   569→        const hue = lerp(25, 80, freq) // orange → lime
+   570→        const sat = 90
+   571→        const light = after ? 55 : 45
+   572→        return (
+   573→          <motion.div
+   574→            key={i}
+   575→            className="flex-1 rounded-t-sm transition-all duration-150"
+   576→            style={{
+   577→              height: `${v * 100}%`,
+   578→              background: `hsl(${hue}, ${sat}%, ${light}%)`,
+   579→              opacity: 0.5 + v * 0.5,
+   580→            }}
+   581→          />
+   582→        )
+   583→      })}
+   584→    </div>
+   585→  )
+   586→}
+   587→
+   588→function MeterRow({
+   589→  label,
+   590→  value,
+   591→  target,
+   592→  min,
+   593→  max,
+   594→  current,
+   595→  color,
+   596→}: {
+   597→  label: string
+   598→  value: string
+   599→  target: string
+   600→  min: number
+   601→  max: number
+   602→  current: number
+   603→  color: string
+   604→}) {
+   605→  const pct = Math.min(100, Math.max(0, ((current - min) / (max - min)) * 100))
+   606→  const targetPct = ((parseFloat(target) - min) / (max - min)) * 100
+   607→  return (
+   608→    <div>
+   609→      <div className="flex items-center justify-between mb-1">
+   610→        <span className="text-[10px] font-mono text-muted-foreground">{label}</span>
+   611→        <span className="text-[11px] font-mono font-bold" style={{ color }}>
+   612→          {value}
+   613→        </span>
+   614→      </div>
+   615→      <div className="relative h-2 rounded-full bg-white/[0.06] overflow-hidden">
+   616→        <div
+   617→          className="h-full rounded-full transition-all duration-150"
+   618→          style={{
+   619→            width: `${pct}%`,
+   620→            background: `linear-gradient(90deg, ${color}40, ${color})`,
+   621→          }}
+   622→        />
+   623→        {/* Target marker */}
+   624→        <div
+   625→          className="absolute top-0 h-full w-px bg-white/40"
+   626→          style={{ left: `${targetPct}%` }}
+   627→        />
+   628→      </div>
+   629→      <div className="text-[9px] font-mono text-muted-foreground/50 mt-0.5">
+   630→        target: {target}
+   631→      </div>
+   632→    </div>
+   633→  )
+   634→}
+   635→
+   636→function ScoreGauge({ score, t }: { score: number; t: number }) {
+   637→  const radius = 52
+   638→  const circumference = 2 * Math.PI * radius
+   639→  const arcLength = circumference * 0.75 // 270° arc
+   640→  const dashOffset = arcLength - (score / 100) * arcLength
+   641→  const color = score >= 90 ? '#AAFF00' : score >= 75 ? '#84CC16' : score >= 60 ? '#F97316' : '#EF4444'
+   642→
+   643→  return (
+   644→    <div className="flex items-center gap-4">
+   645→      <div className="relative w-32 h-32 flex-shrink-0">
+   646→        <svg className="w-full h-full -rotate-[135deg]" viewBox="0 0 120 120">
+   647→          {/* Track */}
+   648→          <circle
+   649→            cx="60"
+   650→            cy="60"
+   651→            r={radius}
+   652→            fill="none"
+   653→            stroke="rgba(255,255,255,0.06)"
+   654→            strokeWidth="6"
+   655→            strokeLinecap="round"
+   656→            strokeDasharray={`${arcLength} ${circumference}`}
+   657→          />
+   658→          {/* Progress */}
+   659→          <motion.circle
+   660→            cx="60"
+   661→            cy="60"
+   662→            r={radius}
+   663→            fill="none"
+   664→            stroke={color}
+   665→            strokeWidth="6"
+   666→            strokeLinecap="round"
+   667→            strokeDasharray={`${arcLength} ${circumference}`}
+   668→            strokeDashoffset={dashOffset}
+   669→            style={{ filter: `drop-shadow(0 0 6px ${color}80)` }}
+   670→            transition={{ duration: 0.15 }}
+   671→          />
+   672→        </svg>
+   673→        <div className="absolute inset-0 flex flex-col items-center justify-center">
+   674→          <span className="text-2xl font-bold font-mono" style={{ color }}>
+   675→            {score}
+   676→          </span>
+   677→          <span className="text-[8px] font-mono uppercase tracking-wider text-muted-foreground/60">
+   678→            / 100
+   679→          </span>
+   680→        </div>
+   681→      </div>
+   682→      <div className="flex-1 space-y-1.5">
+   683→        <ScoreRow label="Spotify" val={Math.round(lerp(40, 94, t))} color="#AAFF00" />
+   684→        <ScoreRow label="Apple" val={Math.round(lerp(38, 90, t))} color="#00D4FF" />
+   685→        <ScoreRow label="YouTube" val={Math.round(lerp(42, 96, t))} color="#F97316" />
+   686→        <ScoreRow label="Tidal" val={Math.round(lerp(35, 88, t))} color="#8B5CF6" />
+   687→      </div>
+   688→    </div>
+   689→  )
+   690→}
+   691→
+   692→function ScoreRow({ label, val, color }: { label: string; val: number; color: string }) {
+   693→  return (
+   694→    <div className="flex items-center gap-2">
+   695→      <span className="text-[9px] font-mono text-muted-foreground w-14">{label}</span>
+   696→      <div className="flex-1 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+   697→        <div
+   698→          className="h-full rounded-full transition-all duration-150"
+   699→          style={{ width: `${val}%`, background: color }}
+   700→        />
+   701→      </div>
+   702→      <span className="text-[9px] font-mono font-bold w-6 text-right" style={{ color }}>
+   703→        {val}
+   704→      </span>
+   705→    </div>
+   706→  )
+   707→}
+   708→

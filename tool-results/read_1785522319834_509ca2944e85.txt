@@ -1,0 +1,726 @@
+     1→'use client'
+     2→
+     3→import { useState, useEffect, useRef, useCallback } from 'react'
+     4→import { motion } from 'framer-motion'
+     5→import { AlertCircle, ArrowLeftRight, Download, Eye, FileAudio, FileText, Loader2, Play, Sparkles, Wand2, Zap } from 'lucide-react'
+     6→import { audioEngine } from '@/lib/rain/audio-engine'
+     7→import { loadDemoTrack } from '@/lib/rain/demo-loader'
+     8→import { useSessionStore } from '@/lib/rain/store'
+     9→import { GENRES, PLATFORM_TARGETS } from '@/lib/rain/constants'
+    10→import { notifySuccess, notifyError } from '@/lib/rain/notifications'
+    11→import { applySimpleMode } from '@/lib/rain/simple-mode'
+    12→import { UploadZone } from './UploadZone'
+    13→import { CreativeMacros } from './CreativeMacros'
+    14→import { SimpleModePanel } from './SimpleModePanel'
+    15→import { MasteringReportDialog } from './MasteringReportDialog'
+    16→import { GenrePresets } from './GenrePresets'
+    17→import { SnapshotBar } from './SnapshotBar'
+    18→import { SignalChain } from './SignalChain'
+    19→import { MeteringPanel } from './MeteringPanel'
+    20→import { RainScoreGauge } from './RainScoreGauge'
+    21→import { ProcessingProgressPanel } from './ProcessingProgressPanel'
+    22→import { Waveform } from '@/components/rain/visualizers/Waveform'
+    23→import { Spectrum } from '@/components/rain/visualizers/Spectrum'
+    24→import { AssistantPanel } from '@/components/rain/assistant/AssistantPanel'
+    25→import { generateProvenance } from '@/lib/rain/provenance'
+    26→import { recordRenderTelemetry, recordExportDetails, recordQCResult } from '@/lib/rain/analytics'
+    27→import { computeQCResults, summarizeQCResults } from '@/lib/rain/qc'
+    28→import { BeforeAfterOverlay } from './BeforeAfterOverlay'
+    29→import { ABComparisonToggle } from './ABComparisonToggle'
+    30→import { BlindTestModal } from './BlindTestModal'
+    31→import { AiDisclosurePanel, type DisclosureState } from '@/components/rain/forms/AiDisclosurePanel'
+    32→import { Switch } from '@/components/ui/switch'
+    33→import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
+    34→import { getAnonId } from '@/lib/rain/anon-id'
+    35→
+    36→export function MasteringTab() {
+    37→  const fileName = useSessionStore((s) => s.fileName)
+    38→  const isProcessing = useSessionStore((s) => s.isProcessing)
+    39→  const hasProcessed = useSessionStore((s) => s.hasProcessed)
+    40→  const setIsProcessing = useSessionStore((s) => s.setIsProcessing)
+    41→  const setProgress = useSessionStore((s) => s.setProgress)
+    42→  const setResult = useSessionStore((s) => s.setResult)
+    43→  const setError = useSessionStore((s) => s.setError)
+    44→  const setCert = useSessionStore((s) => s.setCert)
+    45→  const rainCert = useSessionStore((s) => s.rainCert)
+    46→  const setInputAnalysis = useSessionStore((s) => s.setInputAnalysis)
+    47→  const addRenderLog = useSessionStore((s) => s.addRenderLog)
+    48→  const inputAnalysis = useSessionStore((s) => s.inputAnalysis)
+    49→  const macros = useSessionStore((s) => s.macros)
+    50→  const genre = useSessionStore((s) => s.genre)
+    51→  const platform = useSessionStore((s) => s.platform)
+    52→  const setGenre = useSessionStore((s) => s.setGenre)
+    53→  const setPlatform = useSessionStore((s) => s.setPlatform)
+    54→  const rainScore = useSessionStore((s) => s.rainScore)
+    55→  const setProcessingStageProgress = useSessionStore((s) => s.setProcessingStageProgress)
+    56→  const triggerCompletionCelebration = useSessionStore((s) => s.triggerCompletionCelebration)
+    57→  const setRenderAbortController = useSessionStore((s) => s.setRenderAbortController)
+    58→  // P3-BSROFORMER: clear stale stems at render start, populate fresh ones
+    59→  // from Stage 7 of the render pipeline via the onStemsReady callback.
+    60→  const setStemResults = useSessionStore((s) => s.setStemResults)
+    61→  // P2-4 Simple Mode state + setter wiring.
+    62→  const simpleMode = useSessionStore((s) => s.simpleMode)
+    63→  const setSimpleMode = useSessionStore((s) => s.setSimpleMode)
+    64→  const simpleIntensity = useSessionStore((s) => s.simpleIntensity)
+    65→  const setMacros = useSessionStore((s) => s.setMacros)
+    66→  const setMacroSource = useSessionStore((s) => s.setMacroSource)
+    67→  const [showAssistant, setShowAssistant] = useState(true)
+    68→  const [aiLoading, setAiLoading] = useState(false)
+    69→  const [showCompare, setShowCompare] = useState(false)
+    70→  const [showBlindTest, setShowBlindTest] = useState(false)
+    71→  const [showReport, setShowReport] = useState(false)
+    72→  const [demoLoading, setDemoLoading] = useState(false)
+    73→  // P4-AI-DISCLOSURE: honest per-field AI disclosure state (EU AI Act Article 50)
+    74→  const [aiDisclosure, setAiDisclosure] = useState<DisclosureState>({
+    75→    vocals: 'none',
+    76→    instrumentation: 'none',
+    77→    composition: 'none',
+    78→    mixing: 'assisted',
+    79→    mastering: 'assisted',
+    80→  })
+    81→  const renderStartTime = useRef<number>(0)
+    82→  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    83→  // BETA-ANALYTICS: server-persisted Session id for the currently loaded
+    84→  // file. Lazily created on first render so anonymous/logged-out demo use
+    85→  // never touches the DB — see ensureBackendSession() below.
+    86→  const backendSessionId = useRef<string | null>(null)
+    87→  const backendSessionFileName = useRef<string | null>(null)
+    88→  // AUDIT2: track the AI-suggest visual-feedback timeout so we can clean it up
+    89→  // on unmount (otherwise a leak if the user navigates away within 1.5s of click).
+    90→  const aiSuggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    91→
+    92→  // Listen for 'rain:compare' custom event (keyboard shortcut 'C' integration)
+    93→  useEffect(() => {
+    94→    const handleCompare = () => setShowCompare((v) => !v)
+    95→    window.addEventListener('rain:compare', handleCompare)
+    96→    return () => window.removeEventListener('rain:compare', handleCompare)
+    97→  }, [])
+    98→
+    99→  // Cleanup progress interval on unmount
+   100→  useEffect(() => {
+   101→    return () => {
+   102→      if (progressIntervalRef.current) {
+   103→        clearInterval(progressIntervalRef.current)
+   104→      }
+   105→      if (aiSuggestTimeoutRef.current) {
+   106→        clearTimeout(aiSuggestTimeoutRef.current)
+   107→      }
+   108→    }
+   109→  }, [])
+   110→
+   111→  const handleLoadDemo = async () => {
+   112→    setDemoLoading(true)
+   113→    await loadDemoTrack()
+   114→    setDemoLoading(false)
+   115→  }
+   116→
+   117→  // P2-4: when Simple Mode is toggled ON, immediately apply the deterministic
+   118→  // macro mapping so the render pipeline sees consistent state. Toggling OFF
+   119→  // preserves the existing macro values (the user can fine-tune via knobs).
+   120→  const handleSimpleModeToggle = useCallback(
+   121→    (next: boolean) => {
+   122→      setSimpleMode(next)
+   123→      if (next) {
+   124→        applySimpleMode(simpleIntensity, genre, setMacros, setMacroSource)
+   125→      }
+   126→    },
+   127→    [simpleIntensity, genre, setMacros, setMacroSource, setSimpleMode],
+   128→  )
+   129→
+   130→  // BETA-ANALYTICS: creates (once per loaded file) a real Session row via
+   131→  // POST /api/rain/session, so activation/retention/funnel math has
+   132→  // something real to read. Silently no-ops if the caller isn't logged in
+   133→  // or the request fails — analytics must never block the mastering flow.
+   134→  const ensureBackendSession = useCallback(async () => {
+   135→    if (backendSessionId.current && backendSessionFileName.current === fileName) {
+   136→      return backendSessionId.current
+   137→    }
+   138→    try {
+   139→      const res = await fetch('/api/rain/session', {
+   140→        method: 'POST',
+   141→        headers: { 'Content-Type': 'application/json' },
+   142→        body: JSON.stringify({ fileName, anonId: getAnonId() }),
+   143→      })
+   144→      if (!res.ok) return null
+   145→      const data = (await res.json()) as { sessionId: string | null }
+   146→      backendSessionId.current = data.sessionId
+   147→      backendSessionFileName.current = fileName
+   148→      return data.sessionId
+   149→    } catch (e) {
+   150→      console.warn('[analytics] ensureBackendSession failed:', e)
+   151→      return null
+   152→    }
+   153→  }, [fileName])
+   154→
+   155→  // BETA-ANALYTICS: fires a render_completed or export_completed ping.
+   156→  // Best-effort — failures are logged, never surfaced to the user.
+   157→  const reportRenderEvent = useCallback(
+   158→    async (
+   159→      kind: 'render' | 'export',
+   160→      details?: {
+   161→        format?: string
+   162→        outputFileHash?: string
+   163→        loudnessLufs?: number
+   164→        truePeakDbfs?: number
+   165→        renderTimeMs?: number
+   166→      },
+   167→    ) => {
+   168→      try {
+   169→        await fetch('/api/rain/render', {
+   170→          method: 'POST',
+   171→          headers: { 'Content-Type': 'application/json' },
+   172→          body: JSON.stringify({ kind, sessionId: backendSessionId.current, anonId: getAnonId(), ...details }),
+   173→        })
+   174→      } catch (e) {
+   175→        console.warn(`[analytics] reportRenderEvent(${kind}) failed:`, e)
+   176→      }
+   177→    },
+   178→    [],
+   179→  )
+   180→
+   181→  const handleRender = async () => {
+   182→    if (!fileName || isProcessing) return
+   183→    setIsProcessing(true)
+   184→    renderStartTime.current = Date.now()
+   185→    // BETA-ANALYTICS: fire-and-forget — don't gate the render on this.
+   186→    void ensureBackendSession()
+   187→
+   188→    // P3-BSROFORMER: clear any stale stem results from a previous render
+   189→    // or manual Stems-tab run. Fresh results are populated from Stage 7
+   190→    // of the render pipeline via the onStemsReady callback (below).
+   191→    setStemResults(null)
+   192→
+   193→    // AUDIT-C5 FIX: create an AbortController for this render and store it so
+   194→    // the Cancel button (ProcessingProgressPanel → cancelProcessing) can abort
+   195→    // the in-flight render. Previously Cancel only flipped a flag the engine
+   196→    // never checked, so the render kept running while the UI returned to idle.
+   197→    const abortController = new AbortController()
+   198→    setRenderAbortController(abortController)
+   199→
+   200→    // AUDIT-M9 FIX: previously used wall-clock time to fake a climbing progress
+   201→    // bar within each stage (`stageProgress = (elapsed / 300) * 100`). That was
+   202→    // fabricated — it filled the bar based on time, not actual DSP work.
+   203→    // Now the within-stage indicator climbs gently toward 90% and resets to 0
+   204→    // whenever the engine reports a real stage boundary (onProgress). The
+   205→    // overall progress bar reflects real stage completion (stage/16 * 100).
+   206→    const stageStartRef = { current: Date.now() }
+   207→    progressIntervalRef.current = setInterval(() => {
+   208→      const elapsedSinceStage = Date.now() - stageStartRef.current
+   209→      // Climb toward 90% over ~2 seconds, then hold. Never reaches 100%
+   210→      // until the engine confirms the next stage — honest "working" state.
+   211→      const stageProgress = Math.min(90, (elapsedSinceStage / 2000) * 90)
+   212→      setProcessingStageProgress(stageProgress)
+   213→    }, 100)
+   214→
+   215→    try {
+   216→      const result = await audioEngine.render(macros, genre, platform, (stage, total, name) => {
+   217→        setProgress(stage, total, name)
+   218→        // Reset the within-stage indicator — real stage boundary reached.
+   219→        stageStartRef.current = Date.now()
+   220→        setProcessingStageProgress(0)
+   221→      }, abortController.signal, (stems) => {
+   222→        // P3-BSROFORMER: Stage 7 emitted BS-RoFormer 4-pass stem results.
+   223→        // Populate the session store so the Stems tab shows them immediately
+   224→        // (no separate "Run Separation" click required).
+   225→        setStemResults(stems)
+   226→      }, simpleMode)
+   227→
+   228→      // Clear the progress interval
+   229→      if (progressIntervalRef.current) {
+   230→        clearInterval(progressIntervalRef.current)
+   231→        progressIntervalRef.current = null
+   232→      }
+   233→      setProcessingStageProgress(100)
+   234→
+   235→      // Generate provenance certificate
+   236→      const inputWavBlob = audioEngine.exportOriginalWav(24)
+   237→      const outputWavBlob = audioEngine.exportWav(24)
+   238→      const inputBuffer = await inputWavBlob.arrayBuffer()
+   239→      const outputBuffer = await outputWavBlob.arrayBuffer()
+   240→      const cert = await generateProvenance({
+   241→        inputBuffer,
+   242→        outputBuffer,
+   243→        params: result.params as unknown as Record<string, unknown>,
+   244→        analysis: {
+   245→          lufs: result.analysis.lufs,
+   246→          truePeak: result.analysis.truePeak,
+   247→          rms: result.analysis.rms,
+   248→          dynamicRange: result.analysis.dynamicRange,
+   249→          bpm: result.analysis.bpm,
+   250→          key: result.analysis.key,
+   251→        },
+   252→        // AUDIT-M8 FIX: pass the real output audio channels so a Chromaprint
+   253→        // fingerprint hash is computed and embedded in the manifest.
+   254→        outputChannels: audioEngine.getProcessedChannels() ?? undefined,
+   255→        // P3-TPDF-MP3: pass the FLOAT32 input/output channels so the RAIN-CERT
+   256→        // SHA-256 input/output hashes are computed over the deterministic DSP
+   257→        // float buffer — NOT over the integer WAV bytes (which now carry TPDF
+   258→        // dither noise at Stage 15 and would otherwise change every render).
+   259→        inputChannels: audioEngine.getInputChannels() ?? undefined,
+   260→        sampleRate: result.analysis.sampleRate,
+   261→      })
+   262→      setCert(cert)
+   263→      setResult(result.analysis, result.score, result.params)
+   264→      setInputAnalysis(audioEngine.currentAnalysis ?? useSessionStore.getState().inputAnalysis!)
+   265→
+   266→      // Log this render to session history
+   267→      // P3-ANALYTICS: `duration` is the AUDIO file duration in SECONDS
+   268→      // (used by computeAnalytics for storage-size + minutes-processed math),
+   269→      // NOT the render wall-clock time. Render time is recorded separately
+   270→      // via recordRenderTelemetry → IndexedDB (both cumulative engineStats
+   271→      // counters AND a per-render telemetry row for the Analytics tab).
+   272→      const renderDuration = Date.now() - renderStartTime.current
+   273→      const audioDurationSec = useSessionStore.getState().fileDuration || 0
+   274→      const renderTimestamp = Date.now()
+   275→      addRenderLog({
+   276→        timestamp: renderTimestamp,
+   277→        fileName: fileName,
+   278→        genre,
+   279→        platform,
+   280→        macroValues: { ...macros },
+   281→        inputLufs: inputAnalysis?.lufs ?? 0,
+   282→        outputLufs: result.analysis.lufs,
+   283→        rainScore: result.score.overall,
+   284→        duration: audioDurationSec,
+   285→      })
+   286→
+   287→      // P2-ANALYTICS: persist a full per-render telemetry record (real
+   288→      // per-stage DSP timings, format, bit depth, macro values, score, etc.)
+   289→      // to IndexedDB. recordRenderTelemetry internally bumps the cumulative
+   290→      // EngineStats counters (totalRenders, totalDspTimeMs, firstRenderAt,
+   291→      // lastRenderAt) — so we no longer call recordRenderStat separately.
+   292→      // The returned id links the QC snapshot below to this render.
+   293→      const fileState = useSessionStore.getState()
+   294→      const telemetryRecord = await recordRenderTelemetry({
+   295→        timestamp: renderTimestamp,
+   296→        renderDurationMs: renderDuration,
+   297→        audioDurationSec,
+   298→        genre,
+   299→        platform,
+   300→        format: 'WAV-24',
+   301→        bitDepth: fileState.fileBitDepth || 24,
+   302→        sampleRate: fileState.fileSampleRate || 48000,
+   303→        channels: fileState.fileChannels || 2,
+   304→        fileName: fileName ?? '(unknown)',
+   305→        rainScore: result.score.overall,
+   306→        inputLufs: inputAnalysis?.lufs ?? 0,
+   307→        outputLufs: result.analysis.lufs,
+   308→        outputTruePeak: result.analysis.truePeak,
+   309→        macroValues: { ...macros },
+   310→        stageTimings: { ...(result.stageTimings ?? {}) },
+   311→      }).catch((e) => {
+   312→        console.warn('[analytics] recordRenderTelemetry failed:', e)
+   313→        return null
+   314→      })
+   315→
+   316→      // P2-ANALYTICS: persist a QC snapshot for this render. Same
+   317→      // computeQCResults() that QCTab uses for live display, summarized
+   318→      // into the persisted QCRecord shape (pass/warn/fail counts + per-
+   319→      // category tally + per-check status). The Analytics tab reads this
+   320→      // from IndexedDB to compute pass/fail rates and common failure
+   321→      // categories across the render history.
+   322→      try {
+   323→        const platformTarget = PLATFORM_TARGETS.find((p) => p.slug === platform) ?? PLATFORM_TARGETS[0]
+   324→        const qcChecks = computeQCResults(result.analysis, platformTarget, cert)
+   325→        const qcBody = summarizeQCResults(
+   326→          qcChecks,
+   327→          platform,
+   328→          telemetryRecord?.id ?? null,
+   329→          renderTimestamp,
+   330→        )
+   331→        void recordQCResult(qcBody).catch((e) =>
+   332→          console.warn('[analytics] recordQCResult failed:', e),
+   333→        )
+   334→      } catch (e) {
+   335→        console.warn('[analytics] QC snapshot computation failed:', e)
+   336→      }
+   337→
+   338→      notifySuccess('Master complete', `RAIN Score: ${result.score.overall}`)
+   339→
+   340→      // BETA-ANALYTICS: mark this master as produced. No format/hash yet —
+   341→      // those are attached per-export in handleExport below.
+   342→      void reportRenderEvent('render', {
+   343→        loudnessLufs: result.analysis.lufs,
+   344→        truePeakDbfs: result.analysis.truePeak,
+   345→        renderTimeMs: renderDuration,
+   346→      })
+   347→
+   348→      // Trigger completion celebration
+   349→      triggerCompletionCelebration()
+   350→    } catch (e) {
+   351→      // Clear the progress interval on error
+   352→      if (progressIntervalRef.current) {
+   353→        clearInterval(progressIntervalRef.current)
+   354→        progressIntervalRef.current = null
+   355→      }
+   356→      // AUDIT-C5 FIX: user-initiated cancel is not an error — exit silently.
+   357→      if (e instanceof Error && (e.name === 'CancelledError' || e.message === 'Render cancelled by user')) {
+   358→        notifyError('Render cancelled', 'Processing was stopped by the user')
+   359→        return
+   360→      }
+   361→      console.error('[RAIN render] error:', e)
+   362→      setError(e instanceof Error ? e.message : 'Render failed')
+   363→      notifyError('Render failed', e instanceof Error ? e.message : 'Unknown error during 16-stage processing')
+   364→    } finally {
+   365→      // Always clear the stored controller so a stale aborted signal can't
+   366→      // leak into the next render.
+   367→      setRenderAbortController(null)
+   368→    }
+   369→    // BUG FIX: removed `finally { setIsProcessing(false) }` — it was overwriting
+   370→    // the `status:'complete'` (set by setResult) and `status:'failed'` (set by
+   371→    // setError) back to `'idle'`, so the footer always showed "Ready" after
+   372→    // every render. setResult and setError both set isProcessing:false already.
+   373→  }
+   374→
+   375→  const handleAiSuggest = async () => {
+   376→    setAiLoading(true)
+   377→    const trigger = (window as unknown as { __rainAiSuggest?: () => void }).__rainAiSuggest
+   378→    if (trigger) trigger()
+   379→    // visual feedback only; actual completion handled in panel
+   380→    aiSuggestTimeoutRef.current = setTimeout(() => setAiLoading(false), 1500)
+   381→  }
+   382→
+   383→  const handleExport = async () => {
+   384→    // P3-ANALYTICS: measure real export wall-clock time + actual byte count
+   385→    // and persist them via recordExportDetails (which writes a row to the
+   386→    // `exports` IndexedDB store AND bumps the cumulative exportCount /
+   387→    // totalExportBytes / totalExportTimeMs counters in engineStats).
+   388→    const exportStart = Date.now()
+   389→    try {
+   390→      const blob = audioEngine.exportWav(24)
+   391→      const url = URL.createObjectURL(blob)
+   392→      const a = document.createElement('a')
+   393→      a.href = url
+   394→      a.download = `${(fileName ?? 'rain-master').replace(/\.[^.]+$/, '')}_RAIN_mastered.wav`
+   395→      document.body.appendChild(a)
+   396→      a.click()
+   397→      document.body.removeChild(a)
+   398→      URL.revokeObjectURL(url)
+   399→      const exportMs = Date.now() - exportStart
+   400→      const fileState = useSessionStore.getState()
+   401→      void recordExportDetails({
+   402→        timestamp: Date.now(),
+   403→        format: 'WAV-24',
+   404→        bytes: blob.size,
+   405→        durationMs: exportMs,
+   406→        sampleRate: fileState.fileSampleRate || 48000,
+   407→        bitDepth: 24,
+   408→        channels: fileState.fileChannels || 2,
+   409→        fileName: fileName ?? '(unknown)',
+   410→      }).catch((e) =>
+   411→        console.warn('[analytics] recordExportDetails failed:', e),
+   412→      )
+   413→      notifySuccess('WAV exported successfully', '24-bit PCM · RAIN mastered')
+   414→
+   415→      // BETA-ANALYTICS: this is the event that counts as "activation" —
+   416→      // signup -> completed export. rainCert is set in the store by
+   417→      // handleRender above, so outputHash is the real RAIN-CERT hash.
+   418→      void reportRenderEvent('export', {
+   419→        format: 'wav24',
+   420→        outputFileHash: rainCert?.outputHash,
+   421→      })
+   422→    } catch (e) {
+   423→      console.error('[RAIN export] error:', e)
+   424→      notifyError('Export failed', e instanceof Error ? e.message : 'Could not export WAV file')
+   425→    }
+   426→  }
+   427→
+   428→  return (
+   429→    <div className="grid lg:grid-cols-12 gap-4">
+   430→      {/* Left column — main workflow */}
+   431→      <div className="lg:col-span-8 space-y-4">
+   432→        <UploadZone />
+   433→
+   434→        {fileName && (
+   435→          <>
+   436→            {/* Genre + Platform selectors */}
+   437→            <div className="rain-panel rounded-lg p-4 grid sm:grid-cols-2 gap-3">
+   438→              <div>
+   439→                <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
+   440→                  Genre
+   441→                </label>
+   442→                <select
+   443→                  value={genre}
+   444→                  onChange={(e) => setGenre(e.target.value)}
+   445→                  className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-rain-accent/50"
+   446→                >
+   447→                  {GENRES.map((g) => (
+   448→                    <option key={g} value={g}>{g.charAt(0).toUpperCase() + g.slice(1)}</option>
+   449→                  ))}
+   450→                </select>
+   451→              </div>
+   452→              <div>
+   453→                <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
+   454→                  Platform Target ({PLATFORM_TARGETS.length})
+   455→                </label>
+   456→                <select
+   457→                  value={platform}
+   458→                  onChange={(e) => setPlatform(e.target.value)}
+   459→                  className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-rain-accent/50"
+   460→                >
+   461→                  {PLATFORM_TARGETS.map((p) => (
+   462→                    <option key={p.slug} value={p.slug}>
+   463→                      {p.label} · {p.targetLufs} LUFS · {p.codec}
+   464→                    </option>
+   465→                  ))}
+   466→                </select>
+   467→              </div>
+   468→            </div>
+   469→
+   470→            {/* Genre Presets */}
+   471→            <GenrePresets />
+   472→
+   473→            {/* P2-4: Simple / Pro mode toggle */}
+   474→            <div className="rain-panel rounded-lg p-3 flex items-center justify-between">
+   475→              <div className="flex items-center gap-3">
+   476→                <Switch
+   477→                  checked={simpleMode}
+   478→                  onCheckedChange={handleSimpleModeToggle}
+   479→                  aria-label="Toggle Simple Mode"
+   480→                />
+   481→                <div>
+   482→                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   483→                    Mode
+   484→                  </div>
+   485→                  <div className="text-sm font-semibold">
+   486→                    {simpleMode ? 'Simple' : 'Pro'}
+   487→                    <span className="ml-2 text-[10px] font-mono text-muted-foreground/70">
+   488→                      {simpleMode
+   489→                        ? 'one-knob intensity + genre tilt'
+   490→                        : '7 macro knobs · full control'}
+   491→                    </span>
+   492→                  </div>
+   493→                </div>
+   494→              </div>
+   495→              <div className="text-[10px] font-mono text-muted-foreground/70">
+   496→                Creator-tier feature
+   497→              </div>
+   498→            </div>
+   499→
+   500→            {/* Creative macros (Pro) or Simple Mode panel (Simple) */}
+   501→            {simpleMode ? (
+   502→              <SimpleModePanel />
+   503→            ) : (
+   504→              <CreativeMacros onAiSuggest={handleAiSuggest} aiLoading={aiLoading} />
+   505→            )}
+   506→
+   507→            {/* A/B Snapshots */}
+   508→            <SnapshotBar />
+   509→
+   510→            {/* Visualizers */}
+   511→            <div className="grid md:grid-cols-2 gap-4">
+   512→              <div className="rain-panel rounded-lg p-4">
+   513→                <div className="flex items-center justify-between mb-2">
+   514→                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   515→                    Waveform · Real-time
+   516→                  </div>
+   517→                  <div className="text-[9px] font-mono text-muted-foreground">Web Audio · 32-bit float</div>
+   518→                </div>
+   519→                <Waveform height={100} />
+   520→              </div>
+   521→              <div className="rain-panel rounded-lg p-4">
+   522→                <div className="flex items-center justify-between mb-2">
+   523→                  <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   524→                    Spectrum · FFT 2048
+   525→                  </div>
+   526→                  <div className="text-[9px] font-mono text-muted-foreground">20 Hz – 20 kHz · log</div>
+   527→                </div>
+   528→                <Spectrum height={100} showReadouts />
+   529→              </div>
+   530→            </div>
+   531→
+   532→            {/* Stereo Correlation Meter — full-width professional phase meter */}
+   533→            <div className="rain-panel rounded-lg p-4">
+   534→              <div className="flex items-center justify-between mb-2">
+   535→                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   536→                  Stereo Correlation · Phase Coherence
+   537→                </div>
+   538→                <div className="text-[9px] font-mono text-muted-foreground">−1 out-of-phase · 0 uncorrelated · +1 mono</div>
+   539→              </div>
+   540→              <div className="grid md:grid-cols-2 gap-4">
+   541→                <div>
+   542→                  <div className="text-[9px] font-mono uppercase text-muted-foreground/70 mb-1">Input</div>
+   543→                  <StereoCorrelationMeter variant="input" />
+   544→                </div>
+   545→                <div>
+   546→                  <div className="text-[9px] font-mono uppercase text-muted-foreground/70 mb-1">Output</div>
+   547→                  <StereoCorrelationMeter variant="output" />
+   548→                </div>
+   549→              </div>
+   550→            </div>
+   551→
+   552→            {/* A/B Comparison Toggle */}
+   553→            <ABComparisonToggle />
+   554→
+   555→            {/* Processing Progress Panel - shows when processing */}
+   556→            <ProcessingProgressPanel />
+   557→
+   558→            {/* Pipeline */}
+   559→            <SignalChain />
+   560→
+   561→            {/* AI Disclosure — honest per-field selections required by EU AI Act Article 50 */}
+   562→            <div className="rain-panel rounded-lg p-4">
+   563→              <div className="flex items-center justify-between mb-3">
+   564→                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   565→                  AI Disclosure · EU AI Act Article 50
+   566→                </div>
+   567→                <div className="text-[9px] font-mono text-muted-foreground">
+   568→                  Honest per-field declaration
+   569→                </div>
+   570→              </div>
+   571→              <AiDisclosurePanel
+   572→                value={aiDisclosure}
+   573→                onChange={setAiDisclosure}
+   574→                showPreamble={false}
+   575→              />
+   576→              <div className="mt-2 text-[10px] text-muted-foreground/60">
+   577→                This disclosure is embedded in your DDEX package and visible to all streaming platforms.
+   578→              </div>
+   579→            </div>
+   580→
+   581→            {/* Action buttons */}
+   582→            <div className="flex flex-wrap gap-2">
+   583→              <button
+   584→                onClick={handleRender}
+   585→                disabled={isProcessing}
+   586→                className="flex items-center gap-2 px-5 py-2.5 rounded-md bg-rain-accent text-black font-semibold hover:scale-[1.02] active:scale-95 transition-transform disabled:opacity-50 disabled:hover:scale-100 rain-glow-soft"
+   587→              >
+   588→                {isProcessing ? (
+   589→                  <Loader2 className="w-4 h-4 animate-spin" />
+   590→                ) : (
+   591→                  <Wand2 className="w-4 h-4" />
+   592→                )}
+   593→                {isProcessing ? 'Mastering...' : hasProcessed ? 'Re-render Master' : 'Run 16-Stage Master'}
+   594→              </button>
+   595→              <button
+   596→                onClick={() => {
+   597→                  void audioEngine.init()
+   598→                  audioEngine.togglePlay()
+   599→                }}
+   600→                disabled={!fileName}
+   601→                className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors text-sm disabled:opacity-50"
+   602→              >
+   603→                <Play className="w-4 h-4" />
+   604→                Preview
+   605→              </button>
+   606→              {hasProcessed && (
+   607→                <button
+   608→                  onClick={handleExport}
+   609→                  className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-rain-accent/40 bg-rain-accent/10 hover:bg-rain-accent/20 transition-colors text-sm"
+   610→                >
+   611→                  <Download className="w-4 h-4 text-rain-accent" />
+   612→                  Export WAV 24-bit
+   613→                </button>
+   614→              )}
+   615→              {hasProcessed && (
+   616→                <button
+   617→                  onClick={() => setShowCompare(true)}
+   618→                  className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-rain-accent/40 bg-rain-accent/10 hover:bg-rain-accent/20 transition-colors text-sm"
+   619→                >
+   620→                  <ArrowLeftRight className="w-4 h-4 text-rain-accent" />
+   621→                  Compare
+   622→                </button>
+   623→              )}
+   624→              {hasProcessed && (
+   625→                <button
+   626→                  onClick={() => setShowBlindTest(true)}
+   627→                  className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 transition-colors text-sm"
+   628→                  title="Unbiased A/B comparison — eliminates confirmation bias"
+   629→                >
+   630→                  <Eye className="w-4 h-4 text-purple-400" />
+   631→                  Blind Test
+   632→                </button>
+   633→              )}
+   634→              {hasProcessed && (
+   635→                <button
+   636→                  onClick={() => setShowReport(true)}
+   637→                  disabled={!hasProcessed}
+   638→                  className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 transition-colors text-sm disabled:opacity-50"
+   639→                  title="Generate an LLM mastering report from this render — Independent tier"
+   640→                >
+   641→                  <FileText className="w-4 h-4 text-cyan-400" />
+   642→                  Mastering Report
+   643→                </button>
+   644→              )}
+   645→              <button
+   646→                onClick={() => setShowAssistant((v) => !v)}
+   647→                className="ml-auto flex items-center gap-2 px-3 py-2.5 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors text-sm"
+   648→              >
+   649→                <Sparkles className="w-4 h-4 text-rain-accent" />
+   650→                {showAssistant ? 'Hide' : 'Show'} AI
+   651→              </button>
+   652→            </div>
+   653→          </>
+   654→        )}
+   655→
+   656→        {!fileName && (
+   657→          <motion.div
+   658→            initial={{ opacity: 0, y: 12 }}
+   659→            animate={{ opacity: 1, y: 0 }}
+   660→            className="rain-panel rounded-lg p-8 text-center"
+   661→          >
+   662→            <FileAudio className="w-12 h-12 mx-auto text-muted-foreground/40 mb-3" />
+   663→            <div className="text-sm text-muted-foreground mb-4">
+   664→              Load an audio file to begin the 16-stage mastering pipeline.
+   665→            </div>
+   666→            {/* Try Demo button with shimmer effect */}
+   667→            <button
+   668→              onClick={handleLoadDemo}
+   669→              disabled={demoLoading}
+   670→              className="relative inline-flex items-center gap-2 px-5 py-3 rounded-md border-2 border-rain-accent/60 bg-transparent hover:bg-rain-accent/10 hover:border-rain-accent transition-all text-sm font-medium group disabled:opacity-50"
+   671→            >
+   672→              {/* Shimmer effect */}
+   673→              <span className="absolute inset-0 overflow-hidden rounded-md">
+   674→                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-rain-accent/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out" />
+   675→              </span>
+   676→              {demoLoading ? (
+   677→                <Loader2 className="w-4 h-4 animate-spin text-rain-accent" />
+   678→              ) : (
+   679→                <Zap className="w-4 h-4 text-rain-accent" />
+   680→              )}
+   681→              <span className="text-rain-accent">{demoLoading ? 'Loading demo...' : 'Try Demo Track'}</span>
+   682→            </button>
+   683→            <div className="text-[10px] font-mono text-muted-foreground/70 mt-4">
+   684→              All processing runs locally in your browser via Web Audio API + WASM.
+   685→            </div>
+   686→          </motion.div>
+   687→        )}
+   688→      </div>
+   689→
+   690→      {/* Right column — metering + score + AI */}
+   691→      <div className="lg:col-span-4 space-y-4">
+   692→        <MeteringPanel variant="input" />
+   693→        {hasProcessed && <MeteringPanel variant="output" />}
+   694→        <RainScoreGauge score={rainScore} size={160} />
+   695→        {showAssistant && fileName && (
+   696→          <motion.div
+   697→            initial={{ opacity: 0, y: 8 }}
+   698→            animate={{ opacity: 1, y: 0 }}
+   699→            className="min-h-[400px]"
+   700→          >
+   701→            <AssistantPanel />
+   702→          </motion.div>
+   703→        )}
+   704→        {!fileName && (
+   705→          <div className="rain-panel rounded-lg p-4 border-l-2 border-l-orange-500/50">
+   706→            <div className="flex items-start gap-2">
+   707→              <AlertCircle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
+   708→              <div className="text-xs text-muted-foreground">
+   709→                <div className="font-semibold text-foreground mb-1">AI Co-Master Engineer</div>
+   710→                Load an audio file to enable natural-language macro suggestions with confidence scoring.
+   711→              </div>
+   712→            </div>
+   713→          </div>
+   714→        )}
+   715→      </div>
+   716→      {/* Before/After Comparison Overlay */}
+   717→      <BeforeAfterOverlay open={showCompare} onClose={() => setShowCompare(false)} />
+   718→      {/* Blind Test Modal */}
+   719→      <BlindTestModal open={showBlindTest} onClose={() => setShowBlindTest(false)} />
+   720→      {/* P2-3: Mastering Report Dialog (calls /api/rain/suggest) */}
+   721→      <MasteringReportDialog open={showReport} onOpenChange={setShowReport} />
+   722→    </div>
+   723→  )
+   724→}
+   725→
+   726→

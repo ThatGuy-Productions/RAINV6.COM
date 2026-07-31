@@ -1,0 +1,1583 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — Real Repair DSP Engine (P3-REPAIR)
+     5→ *
+     6→ * 8 deterministic audio restoration modules implemented entirely in TypeScript
+     7→ * against Float32Array. Every processor performs REAL DSP — no setTimeout
+     8→ * theatre, no fabricated metrics. All measurements are computed from the actual
+     9→ * processed audio.
+    10→ *
+    11→ * Modules (honest DSP names — no fake ML model claims):
+    12→ *  - denoise       : Adaptive Spectral Subtraction (STFT, soft-knee, min-stat noise floor)
+    13→ *  - spectral_gate : Per-band Dynamic Gate (adaptive per-bin threshold, soft transition)
+    14→ *  - declick       : Cubic Spline Interpolation (MAD transient detection, autocorr periodic)
+    15→ *  - decrackle     : MAD Crackler Detector (HF-band detection + overlap-add interpolation)
+    16→ *  - dehum         : Harmonic Notch Cascade (40–70 Hz autocorr fundamental + 7 harmonics)
+    17→ *  - dereverb      : RT60 Envelope Subtraction (envelope-based RT60 + late-reverb suppress)
+    18→ *  - declip        : Hermite Spline Reconstruction (clip-region detect + cubic Hermite + LPF)
+    19→ *  - resonance     : Spectral Flux Peak Suppression (peak prominence detect + narrow notch)
+    20→ *
+    21→ * Architecture:
+    22→ *  - Reusable FFTContext (cos/sin/bitrev tables, real/imag scratch buffers).
+    23→ *  - STFT/ISTFT with Hann window at 75 % overlap (COLA-normalised).
+    24→ *  - Cooperative cancellation via AbortSignal — checked between every chunk.
+    25→ *  - Yields to UI thread between heavy chunks (no main-thread blocking).
+    26→ *  - Deterministic — no Math.random, no Date.now in DSP path.
+    27→ *  - Reuses buffers — no per-frame allocations inside loops.
+    28→ *
+    29→ * The exported `runRepair` is the public entry; `measureRepairMetrics` is
+    30→ * used both internally (before/after) and by the UI for live panel display.
+    31→ */
+    32→
+    33→import { applyBiquad, designBiquad, type BiquadCoef } from './dsp'
+    34→
+    35→// ---------------------------------------------------------------------------
+    36→// Public types
+    37→// ---------------------------------------------------------------------------
+    38→
+    39→export type RepairModuleId =
+    40→  | 'denoise'
+    41→  | 'spectral_gate'
+    42→  | 'declick'
+    43→  | 'decrackle'
+    44→  | 'dehum'
+    45→  | 'dereverb'
+    46→  | 'declip'
+    47→  | 'resonance'
+    48→
+    49→export interface RepairResult {
+    50→  moduleId: RepairModuleId
+    51→  channels: Float32Array[] // processed stereo (always >= 2 channels)
+    52→  sampleRate: number
+    53→  metrics: {
+    54→    before: Record<string, number>
+    55→    after: Record<string, number>
+    56→    improvement: Record<string, number> // per-module specific metrics + standard deltas
+    57→  }
+    58→  duration: number // wall-clock processing time in ms
+    59→}
+    60→
+    61→// ---------------------------------------------------------------------------
+    62→// FFT — reusable radix-2 Cooley–Tukey (complex, in-place)
+    63→// ---------------------------------------------------------------------------
+    64→
+    65→class FFTContext {
+    66→  readonly N: number
+    67→  private readonly cos: Float32Array
+    68→  private readonly sin: Float32Array
+    69→  private readonly bitRev: Uint32Array
+    70→  real: Float32Array
+    71→  imag: Float32Array
+    72→
+    73→  constructor(N: number) {
+    74→    this.N = N
+    75→    this.cos = new Float32Array(N / 2)
+    76→    this.sin = new Float32Array(N / 2)
+    77→    for (let i = 0; i < N / 2; i++) {
+    78→      this.cos[i] = Math.cos((-2 * Math.PI * i) / N)
+    79→      this.sin[i] = Math.sin((-2 * Math.PI * i) / N)
+    80→    }
+    81→    this.bitRev = new Uint32Array(N)
+    82→    for (let i = 0; i < N; i++) {
+    83→      let j = 0
+    84→      let v = i
+    85→      for (let bit = N >> 1; bit; bit >>= 1) {
+    86→        j = (j << 1) | (v & 1)
+    87→        v >>= 1
+    88→      }
+    89→      this.bitRev[i] = j
+    90→    }
+    91→    this.real = new Float32Array(N)
+    92→    this.imag = new Float32Array(N)
+    93→  }
+    94→
+    95→  /** Forward FFT (in-place on real/imag). */
+    96→  forward(): void {
+    97→    const { N, bitRev, cos, sin, real, imag } = this
+    98→    // Bit-reverse permutation
+    99→    for (let i = 0; i < N; i++) {
+   100→      const j = bitRev[i]
+   101→      if (j > i) {
+   102→        const tr = real[i]; real[i] = real[j]; real[j] = tr
+   103→        const ti = imag[i]; imag[i] = imag[j]; imag[j] = ti
+   104→      }
+   105→    }
+   106→    // Butterflies
+   107→    for (let len = 2; len <= N; len <<= 1) {
+   108→      const half = len >> 1
+   109→      const step = N / len
+   110→      for (let i = 0; i < N; i += len) {
+   111→        for (let k = 0; k < half; k++) {
+   112→          const wReal = cos[k * step]
+   113→          const wImag = sin[k * step]
+   114→          const i1 = i + k
+   115→          const i2 = i + k + half
+   116→          const r2 = real[i2]
+   117→          const im2 = imag[i2]
+   118→          const tr = r2 * wReal - im2 * wImag
+   119→          const ti = r2 * wImag + im2 * wReal
+   120→          real[i2] = real[i1] - tr
+   121→          imag[i2] = imag[i1] - ti
+   122→          real[i1] = real[i1] + tr
+   123→          imag[i1] = imag[i1] + ti
+   124→        }
+   125→      }
+   126→    }
+   127→  }
+   128→
+   129→  /** Inverse FFT (in-place on real/imag, normalised by 1/N). */
+   130→  inverse(): void {
+   131→    const { N, imag } = this
+   132→    for (let i = 0; i < N; i++) imag[i] = -imag[i]
+   133→    this.forward()
+   134→    for (let i = 0; i < N; i++) {
+   135→      this.real[i] /= N
+   136→      this.imag[i] = -this.imag[i] / N
+   137→    }
+   138→  }
+   139→}
+   140→
+   141→// ---------------------------------------------------------------------------
+   142→// STFT — Hann window at 75 % overlap, COLA-normalised
+   143→// ---------------------------------------------------------------------------
+   144→
+   145→const FFT_SIZE = 1024
+   146→const HOP = 256 // 75 % overlap
+   147→// For Hann analysis+synthesis at 75 % overlap, sum_k w[n-kHOP]^2 = 1.5
+   148→const COLA_NORM = 1.5
+   149→
+   150→const HANN = new Float32Array(FFT_SIZE)
+   151→for (let i = 0; i < FFT_SIZE; i++) {
+   152→  HANN[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (FFT_SIZE - 1)))
+   153→}
+   154→
+   155→// Yield every N frames so the UI thread can paint + react to abort signals.
+   156→const YIELD_INTERVAL = 64
+   157→
+   158→// ---------------------------------------------------------------------------
+   159→// Yield + abort helpers
+   160→// ---------------------------------------------------------------------------
+   161→
+   162→function yieldToUI(): Promise<void> {
+   163→  return new Promise((r) => setTimeout(r, 0))
+   164→}
+   165→
+   166→function checkAbort(signal?: AbortSignal): void {
+   167→  if (signal?.aborted) {
+   168→    const err = new Error('Repair cancelled by user')
+   169→    err.name = 'CancelledError'
+   170→    throw err
+   171→  }
+   172→}
+   173→
+   174→// ---------------------------------------------------------------------------
+   175→// Metrics — measured from REAL audio, never hardcoded
+   176→// ---------------------------------------------------------------------------
+   177→
+   178→/**
+   179→ * Measure repair-relevant metrics from real audio channels.
+   180→ * Returns: { noiseFloorDb, dcOffsetPct, clippedSamples, sibilanceDb, rumbleDb, phaseCorrelation }
+   181→ *
+   182→ * All values are computed deterministically from the channel data:
+   183→ *  - noiseFloorDb : 20·log10(mean RMS of quietest 10 % of 50 ms blocks)
+   184→ *  - dcOffsetPct   : |mean(left)| × 100 (percentage of full-scale)
+   185→ *  - clippedSamples: count of |s| ≥ 0.999 across both channels
+   186→ *  - sibilanceDb   : average magnitude in 5–8 kHz band (dB)
+   187→ *  - rumbleDb      : average magnitude in 0–30 Hz band (dB)
+   188→ *  - phaseCorrelation: normalised L·R cross-correlation in [-1, +1]
+   189→ */
+   190→export function measureRepairMetrics(
+   191→  channels: Float32Array[],
+   192→  sampleRate: number,
+   193→): Record<string, number> {
+   194→  const empty: Record<string, number> = {
+   195→    noiseFloorDb: -120,
+   196→    dcOffsetPct: 0,
+   197→    clippedSamples: 0,
+   198→    sibilanceDb: -120,
+   199→    rumbleDb: -120,
+   200→    phaseCorrelation: 1,
+   201→  }
+   202→  if (channels.length === 0) return empty
+   203→
+   204→  const left = channels[0]
+   205→  const right = channels[1] ?? channels[0]
+   206→  const n = Math.min(left.length, right.length)
+   207→  if (n === 0) return empty
+   208→
+   209→  // --- DC offset (as % of full-scale) ---
+   210→  let dcSum = 0
+   211→  for (let i = 0; i < n; i++) dcSum += left[i]
+   212→  const dcOffsetPct = (Math.abs(dcSum / n)) * 100
+   213→
+   214→  // --- Clipped samples (across both channels) ---
+   215→  let clippedSamples = 0
+   216→  for (let i = 0; i < n; i++) {
+   217→    if (Math.abs(left[i]) >= 0.999 || Math.abs(right[i]) >= 0.999) clippedSamples++
+   218→  }
+   219→
+   220→  // --- Phase correlation (normalised dot product) ---
+   221→  let dot = 0, lE = 0, rE = 0
+   222→  for (let i = 0; i < n; i++) {
+   223→    dot += left[i] * right[i]
+   224→    lE += left[i] * left[i]
+   225→    rE += right[i] * right[i]
+   226→  }
+   227→  const denom = Math.sqrt(lE * rE)
+   228→  const phaseCorrelation = denom > 1e-12 ? dot / denom : 1
+   229→
+   230→  // --- Noise floor: lowest 10 % of 50 ms RMS blocks ---
+   231→  const blockSize = Math.max(1, Math.floor(sampleRate * 0.05))
+   232→  const numBlocks = Math.floor(n / blockSize)
+   233→  if (numBlocks < 1) {
+   234→    // Very short input — compute single-block RMS
+   235→    let s = 0
+   236→    for (let i = 0; i < n; i++) s += left[i] * left[i]
+   237→    empty.noiseFloorDb = 20 * Math.log10(Math.max(Math.sqrt(s / n), 1e-7))
+   238→    empty.dcOffsetPct = dcOffsetPct
+   239→    empty.clippedSamples = clippedSamples
+   240→    empty.phaseCorrelation = phaseCorrelation
+   241→    return empty
+   242→  }
+   243→  const blockRms: number[] = new Array(numBlocks)
+   244→  for (let b = 0; b < numBlocks; b++) {
+   245→    let s = 0
+   246→    const off = b * blockSize
+   247→    for (let i = 0; i < blockSize; i++) {
+   248→      const v = left[off + i]
+   249→      s += v * v
+   250→    }
+   251→    blockRms[b] = Math.sqrt(s / blockSize)
+   252→  }
+   253→  blockRms.sort((a, b) => a - b)
+   254→  const lowestCount = Math.max(1, Math.floor(numBlocks * 0.1))
+   255→  let sum = 0
+   256→  for (let i = 0; i < lowestCount; i++) sum += blockRms[i]
+   257→  const noiseRms = sum / lowestCount
+   258→  const noiseFloorDb = 20 * Math.log10(Math.max(noiseRms, 1e-7))
+   259→
+   260→  // --- Band energy via averaged FFT magnitude (8 windows, Hann-windowed) ---
+   261→  const fft = new FFTContext(FFT_SIZE)
+   262→  const spectrumMag = new Float32Array(FFT_SIZE / 2)
+   263→  const numWindows = Math.min(8, Math.max(1, Math.floor(n / FFT_SIZE)))
+   264→  for (let w = 0; w < numWindows; w++) {
+   265→    const start = Math.floor(((n - FFT_SIZE) * (w + 0.5)) / numWindows)
+   266→    for (let i = 0; i < FFT_SIZE; i++) {
+   267→      fft.real[i] = left[start + i] * HANN[i]
+   268→      fft.imag[i] = 0
+   269→    }
+   270→    fft.forward()
+   271→    for (let i = 0; i < FFT_SIZE / 2; i++) {
+   272→      const mag = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]) / FFT_SIZE
+   273→      spectrumMag[i] += mag
+   274→    }
+   275→  }
+   276→  for (let i = 0; i < FFT_SIZE / 2; i++) spectrumMag[i] /= numWindows
+   277→
+   278→  const binHz = sampleRate / FFT_SIZE
+   279→  const bandDb = (loHz: number, hiHz: number): number => {
+   280→    const loBin = Math.max(1, Math.floor(loHz / binHz))
+   281→    const hiBin = Math.min(spectrumMag.length - 1, Math.ceil(hiHz / binHz))
+   282→    let sumB = 0, cnt = 0
+   283→    for (let b = loBin; b <= hiBin; b++) { sumB += spectrumMag[b]; cnt++ }
+   284→    const avg = cnt > 0 ? sumB / cnt : 1e-7
+   285→    return 20 * Math.log10(Math.max(avg, 1e-7))
+   286→  }
+   287→
+   288→  const sibilanceDb = bandDb(5000, 8000)
+   289→  const rumbleDb = bandDb(0, 30)
+   290→
+   291→  return {
+   292→    noiseFloorDb,
+   293→    dcOffsetPct,
+   294→    clippedSamples,
+   295→    sibilanceDb,
+   296→    rumbleDb,
+   297→    phaseCorrelation,
+   298→  }
+   299→}
+   300→
+   301→// ---------------------------------------------------------------------------
+   302→// STFT process framework — applies analysis window, FFT, callback, IFFT, OLA
+   303→// ---------------------------------------------------------------------------
+   304→
+   305→/**
+   306→ * Process a signal through STFT → modify spectrum → ISTFT with overlap-add.
+   307→ * `processFrame(real, imag, frameIdx, numFrames)` mutates the spectrum in-place.
+   308→ * Returns a new Float32Array of the same length as `input`.
+   309→ */
+   310→async function stftProcess(
+   311→  input: Float32Array,
+   312→  processFrame: (real: Float32Array, imag: Float32Array, frameIdx: number, numFrames: number) => void,
+   313→  onProgress?: (pct: number) => void,
+   314→  signal?: AbortSignal,
+   315→): Promise<Float32Array> {
+   316→  const n = input.length
+   317→  const output = new Float32Array(n)
+   318→  if (n < FFT_SIZE) {
+   319→    output.set(input)
+   320→    return output
+   321→  }
+   322→
+   323→  const fft = new FFTContext(FFT_SIZE)
+   324→  const numFrames = Math.floor((n - FFT_SIZE) / HOP) + 1
+   325→
+   326→  for (let f = 0; f < numFrames; f++) {
+   327→    if (f % YIELD_INTERVAL === 0) {
+   328→      checkAbort(signal)
+   329→      onProgress?.((f / numFrames) * 100)
+   330→      await yieldToUI()
+   331→    }
+   332→    const start = f * HOP
+   333→    // Window + load into FFT buffers
+   334→    for (let i = 0; i < FFT_SIZE; i++) {
+   335→      fft.real[i] = input[start + i] * HANN[i]
+   336→      fft.imag[i] = 0
+   337→    }
+   338→    fft.forward()
+   339→    processFrame(fft.real, fft.imag, f, numFrames)
+   340→    fft.inverse()
+   341→    // Synthesis window + overlap-add (COLA-normalised)
+   342→    for (let i = 0; i < FFT_SIZE; i++) {
+   343→      const outIdx = start + i
+   344→      if (outIdx < n) {
+   345→        output[outIdx] += (fft.real[i] * HANN[i]) / COLA_NORM
+   346→      }
+   347→    }
+   348→  }
+   349→  onProgress?.(100)
+   350→  return output
+   351→}
+   352→
+   353→// ---------------------------------------------------------------------------
+   354→// Per-module DSP
+   355→// ---------------------------------------------------------------------------
+   356→
+   357→interface ModuleOutput {
+   358→  output: Float32Array
+   359→  specific: Record<string, number> // module-specific measurements
+   360→}
+   361→
+   362→// --- 1. Broadband Denoise (Adaptive Spectral Subtraction) ------------------
+   363→
+   364→async function repairDenoise(
+   365→  input: Float32Array,
+   366→  sampleRate: number,
+   367→  intensity: number,
+   368→  onProgress?: (pct: number) => void,
+   369→  signal?: AbortSignal,
+   370→): Promise<ModuleOutput> {
+   371→  const n = input.length
+   372→  if (n < FFT_SIZE) return { output: input.slice(), specific: { noiseFloorDeltaDb: 0 } }
+   373→
+   374→  const fft = new FFTContext(FFT_SIZE)
+   375→  const numFrames = Math.floor((n - FFT_SIZE) / HOP) + 1
+   376→
+   377→  // Stage 1: compute per-frame energy + per-bin magnitude storage
+   378→  const halfBins = FFT_SIZE / 2
+   379→  const frameEnergy = new Float32Array(numFrames)
+   380→  // per-frame magnitude stored column-major: mag[f * halfBins + b]
+   381→  const allMag = new Float32Array(numFrames * halfBins)
+   382→
+   383→  for (let f = 0; f < numFrames; f++) {
+   384→    if (f % YIELD_INTERVAL === 0) {
+   385→      checkAbort(signal)
+   386→      onProgress?.((f / numFrames) * 40) // 0–40 % analysis
+   387→      await yieldToUI()
+   388→    }
+   389→    const start = f * HOP
+   390→    let energy = 0
+   391→    for (let i = 0; i < FFT_SIZE; i++) {
+   392→      const v = input[start + i] * HANN[i]
+   393→      fft.real[i] = v
+   394→      fft.imag[i] = 0
+   395→      energy += v * v
+   396→    }
+   397→    frameEnergy[f] = energy
+   398→    fft.forward()
+   399→    const off = f * halfBins
+   400→    for (let b = 0; b < halfBins; b++) {
+   401→      allMag[off + b] = Math.sqrt(fft.real[b] * fft.real[b] + fft.imag[b] * fft.imag[b])
+   402→    }
+   403→  }
+   404→
+   405→  // Stage 2: identify quietest 10 % frames, compute per-bin noise floor (mean)
+   406→  const frameOrder = Array.from({ length: numFrames }, (_, i) => i)
+   407→  frameOrder.sort((a, b) => frameEnergy[a] - frameEnergy[b])
+   408→  const quietCount = Math.max(1, Math.floor(numFrames * 0.1))
+   409→  const noiseMag = new Float32Array(halfBins)
+   410→  for (let b = 0; b < halfBins; b++) {
+   411→    let s = 0
+   412→    for (let q = 0; q < quietCount; q++) {
+   413→      s += allMag[frameOrder[q] * halfBins + b]
+   414→    }
+   415→    noiseMag[b] = s / quietCount
+   416→  }
+   417→
+   418→  // Noise floor estimate (overall) — for reporting
+   419→  let noisePow = 0
+   420→  for (let b = 0; b < halfBins; b++) noisePow += noiseMag[b] * noiseMag[b]
+   421→  const noiseFloorBeforeDb = 10 * Math.log10(Math.max(1e-12, noisePow / (halfBins * FFT_SIZE * FFT_SIZE)))
+   422→
+   423→  // Stage 3: spectral subtraction with soft knee
+   424→  // intensity 0..10 → alpha 1..4, oversub 1..5, floor 0.5..0.05
+   425→  const t = Math.max(0, Math.min(10, intensity)) / 10
+   426→  const alpha = 1.0 + t * 3.0
+   427→  const oversub = 1.0 + t * 4.0
+   428→  const floor = 0.5 - t * 0.45 // never below 0.05
+   429→
+   430→  const output = await stftProcess(
+   431→    input,
+   432→    (real, imag) => {
+   433→      for (let b = 0; b < halfBins; b++) {
+   434→        const re = real[b]
+   435→        const im = imag[b]
+   436→        const mag = Math.sqrt(re * re + im * im)
+   437→        if (mag < 1e-10) {
+   438→          // Near-zero bin — attenuate to floor
+   439→          real[b] *= floor
+   440→          imag[b] *= floor
+   441→          const m = FFT_SIZE - b
+   442→          if (m < FFT_SIZE && m !== b) {
+   443→            real[m] *= floor
+   444→            imag[m] *= floor
+   445→          }
+   446→          continue
+   447→        }
+   448→        const noise = noiseMag[b] * oversub
+   449→        const ratio = noise / mag
+   450→        let gain: number
+   451→        if (ratio >= 1) {
+   452→          gain = floor
+   453→        } else {
+   454→          // Soft-knee spectral subtraction: 1 - ratio^alpha, floored
+   455→          gain = Math.max(floor, 1 - Math.pow(ratio, alpha))
+   456→        }
+   457→        real[b] = re * gain
+   458→        imag[b] = im * gain
+   459→        // Mirror bin (preserve Hermitian symmetry for real IFFT)
+   460→        const m = FFT_SIZE - b
+   461→        if (m < FFT_SIZE && m !== b) {
+   462→          real[m] = real[b]
+   463→          imag[m] = -imag[b]
+   464→        }
+   465→      }
+   466→    },
+   467→    (pct) => onProgress?.(40 + pct * 0.6), // 40–100 % processing
+   468→    signal,
+   469→  )
+   470→
+   471→  // Measure post-denoise noise floor (quietest 10 % RMS)
+   472→  let postNoise = 0
+   473→  const blockSize = Math.max(1, Math.floor(sampleRate * 0.05))
+   474→  const numBlocks = Math.floor(n / blockSize)
+   475→  if (numBlocks > 0) {
+   476→    const blockRms: number[] = new Array(numBlocks)
+   477→    for (let b = 0; b < numBlocks; b++) {
+   478→      let s = 0
+   479→      const off = b * blockSize
+   480→      for (let i = 0; i < blockSize; i++) {
+   481→        const v = output[off + i]
+   482→        s += v * v
+   483→      }
+   484→      blockRms[b] = Math.sqrt(s / blockSize)
+   485→    }
+   486→    blockRms.sort((a, b) => a - b)
+   487→    const lowCt = Math.max(1, Math.floor(numBlocks * 0.1))
+   488→    let s = 0
+   489→    for (let i = 0; i < lowCt; i++) s += blockRms[i]
+   490→    postNoise = s / lowCt
+   491→  }
+   492→  const noiseFloorAfterDb = 20 * Math.log10(Math.max(postNoise, 1e-7))
+   493→
+   494→  return {
+   495→    output,
+   496→    specific: {
+   497→      noiseFloorBeforeDb,
+   498→      noiseFloorAfterDb,
+   499→      noiseFloorDeltaDb: noiseFloorBeforeDb - noiseFloorAfterDb,
+   500→      quietFramesAnalyzed: quietCount,
+   501→      oversubtractionFactor: oversub,
+   502→    },
+   503→  }
+   504→}
+   505→
+   506→// --- 2. Adaptive Spectral Gate (Per-band Dynamic Gate) ---------------------
+   507→
+   508→async function repairSpectralGate(
+   509→  input: Float32Array,
+   510→  _sampleRate: number,
+   511→  intensity: number,
+   512→  onProgress?: (pct: number) => void,
+   513→  signal?: AbortSignal,
+   514→): Promise<ModuleOutput> {
+   515→  const n = input.length
+   516→  if (n < FFT_SIZE) return { output: input.slice(), specific: { avgGateAttenDb: 0 } }
+   517→
+   518→  const fft = new FFTContext(FFT_SIZE)
+   519→  const halfBins = FFT_SIZE / 2
+   520→  const numFrames = Math.floor((n - FFT_SIZE) / HOP) + 1
+   521→
+   522→  // Stage 1: per-bin noise floor = mean of quietest 25 % of frames per bin
+   523→  // (slightly more inclusive than denoise for a smoother gate threshold)
+   524→  const frameEnergy = new Float32Array(numFrames)
+   525→  const allMag = new Float32Array(numFrames * halfBins)
+   526→
+   527→  for (let f = 0; f < numFrames; f++) {
+   528→    if (f % YIELD_INTERVAL === 0) {
+   529→      checkAbort(signal)
+   530→      onProgress?.((f / numFrames) * 40)
+   531→      await yieldToUI()
+   532→    }
+   533→    const start = f * HOP
+   534→    let energy = 0
+   535→    for (let i = 0; i < FFT_SIZE; i++) {
+   536→      const v = input[start + i] * HANN[i]
+   537→      fft.real[i] = v
+   538→      fft.imag[i] = 0
+   539→      energy += v * v
+   540→    }
+   541→    frameEnergy[f] = energy
+   542→    fft.forward()
+   543→    const off = f * halfBins
+   544→    for (let b = 0; b < halfBins; b++) {
+   545→      allMag[off + b] = Math.sqrt(fft.real[b] * fft.real[b] + fft.imag[b] * fft.imag[b])
+   546→    }
+   547→  }
+   548→
+   549→  const frameOrder = Array.from({ length: numFrames }, (_, i) => i)
+   550→  frameOrder.sort((a, b) => frameEnergy[a] - frameEnergy[b])
+   551→  const quietCount = Math.max(1, Math.floor(numFrames * 0.25))
+   552→  const noiseMag = new Float32Array(halfBins)
+   553→  for (let b = 0; b < halfBins; b++) {
+   554→    let s = 0
+   555→    for (let q = 0; q < quietCount; q++) {
+   556→      s += allMag[frameOrder[q] * halfBins + b]
+   557→    }
+   558→    noiseMag[b] = s / quietCount
+   559→  }
+   560→
+   561→  // Gate parameters from intensity
+   562→  const t = Math.max(0, Math.min(10, intensity)) / 10
+   563→  const margin = 6 + t * 18 // 6–24 dB above noise floor
+   564→  const slope = 2 + t * 4   // soft gate steepness
+   565→  const marginLin = Math.pow(10, margin / 20)
+   566→
+   567→  // Track total attenuation applied (for reporting)
+   568→  let totalAttenDb = 0
+   569→  let attenCount = 0
+   570→
+   571→  const output = await stftProcess(
+   572→    input,
+   573→    (real, imag) => {
+   574→      for (let b = 0; b < halfBins; b++) {
+   575→        const re = real[b]
+   576→        const im = imag[b]
+   577→        const mag = Math.sqrt(re * re + im * im)
+   578→        const threshold = noiseMag[b] * marginLin
+   579→        if (mag < 1e-10) {
+   580→          real[b] = 0
+   581→          imag[b] = 0
+   582→          const m = FFT_SIZE - b
+   583→          if (m < FFT_SIZE && m !== b) {
+   584→            real[m] = 0
+   585→            imag[m] = 0
+   586→          }
+   587→          totalAttenDb += 60
+   588→          attenCount++
+   589→          continue
+   590→        }
+   591→        // Soft gate: gain = mag^slope / (mag^slope + threshold^slope)
+   592→        // - mag >> threshold → gain ≈ 1
+   593→        // - mag << threshold → gain ≈ 0
+   594→        // - mag == threshold → gain = 0.5
+   595→        const mPow = Math.pow(mag, slope)
+   596→        const tPow = Math.pow(threshold, slope)
+   597→        const gain = mPow / (mPow + tPow)
+   598→        const attenDb = -20 * Math.log10(Math.max(gain, 1e-6))
+   599→        totalAttenDb += attenDb
+   600→        attenCount++
+   601→        real[b] = re * gain
+   602→        imag[b] = im * gain
+   603→        const m = FFT_SIZE - b
+   604→        if (m < FFT_SIZE && m !== b) {
+   605→          real[m] = real[b]
+   606→          imag[m] = -imag[b]
+   607→        }
+   608→      }
+   609→    },
+   610→    (pct) => onProgress?.(40 + pct * 0.6),
+   611→    signal,
+   612→  )
+   613→
+   614→  const avgGateAttenDb = attenCount > 0 ? totalAttenDb / attenCount : 0
+   615→
+   616→  return {
+   617→    output,
+   618→    specific: {
+   619→      avgGateAttenDb,
+   620→      thresholdMarginDb: margin,
+   621→      quietFramesAnalyzed: quietCount,
+   622→    },
+   623→  }
+   624→}
+   625→
+   626→// --- 3. De-click (Cubic Spline Interpolation) ------------------------------
+   627→
+   628→async function repairDeclick(
+   629→  input: Float32Array,
+   630→  sampleRate: number,
+   631→  intensity: number,
+   632→  onProgress?: (pct: number) => void,
+   633→  signal?: AbortSignal,
+   634→): Promise<ModuleOutput> {
+   635→  const n = input.length
+   636→  const output = input.slice()
+   637→  if (n < 4) return { output, specific: { clicksDetected: 0, clicksRepaired: 0 } }
+   638→
+   639→  // Stage 1: compute first differences and their MAD
+   640→  const diffs = new Float32Array(n - 1)
+   641→  for (let i = 0; i < n - 1; i++) {
+   642→    diffs[i] = Math.abs(input[i + 1] - input[i])
+   643→  }
+   644→  // Median of diffs (via sort — O(n log n), fine for typical repair sizes)
+   645→  const sortedDiffs = Array.from(diffs).sort((a, b) => a - b)
+   646→  const median = sortedDiffs[Math.floor(sortedDiffs.length / 2)]
+   647→  // MAD = median of |diff - median|
+   648→  const absDevs = new Float32Array(n - 1)
+   649→  for (let i = 0; i < n - 1; i++) {
+   650→    absDevs[i] = Math.abs(diffs[i] - median)
+   651→  }
+   652→  const sortedAbs = Array.from(absDevs).sort((a, b) => a - b)
+   653→  const mad = sortedAbs[Math.floor(sortedAbs.length / 2)] || 1e-7
+   654→
+   655→  // Detection threshold: median + k * MAD, k from intensity
+   656→  const t = Math.max(0, Math.min(10, intensity)) / 10
+   657→  const k = 8 - t * 4 // 8 (gentle) → 4 (aggressive)
+   658→  const threshold = median + k * mad * 8 // scale up — MAD of first-diffs is small
+   659→
+   660→  // Stage 2: detect clicks (single-sample or short bursts)
+   661→  const isClick = new Uint8Array(n)
+   662→  let clicksDetected = 0
+   663→  for (let i = 1; i < n; i++) {
+   664→    if (diffs[i - 1] > threshold) {
+   665→      // Mark both endpoints of the large diff as potentially clicked
+   666→      // Determine which one is the outlier by comparing to local trend
+   667→      const prev = input[i - 1]
+   668→      const cur = input[i]
+   669→      // If the jump is large but the surrounding context is smooth, mark the
+   670→      // sample that deviates more from its other neighbor.
+   671→      if (i >= 2 && i < n - 1) {
+   672→        const trendPrev = input[i - 2]
+   673→        const trendNext = input[i + 1]
+   674→        const devPrev = Math.abs(prev - trendPrev)
+   675→        const devCur = Math.abs(cur - trendNext)
+   676→        if (devCur > devPrev) {
+   677→          isClick[i] = 1
+   678→        } else {
+   679→          isClick[i - 1] = 1
+   680→        }
+   681→      } else {
+   682→        isClick[i] = 1
+   683→      }
+   684→      clicksDetected++
+   685→    }
+   686→  }
+   687→
+   688→  // Stage 3: periodic click detection (vinyl) via autocorrelation
+   689→  // Downsample to 1 kHz, scan lag range 100Hz..1kHz (1ms..10ms period)
+   690→  const dsRate = 1000
+   691→  const ratio = sampleRate / dsRate
+   692→  const dsLen = Math.floor(n / ratio)
+   693→  if (dsLen > 100) {
+   694→    const ds = new Float32Array(dsLen)
+   695→    for (let i = 0; i < dsLen; i++) ds[i] = input[Math.floor(i * ratio)]
+   696→    // Autocorr in lag range [10, 100] (100Hz..1kHz periodicity)
+   697→    let bestLag = 0
+   698→    let bestCorr = 0
+   699→    for (let lag = 10; lag <= 100 && lag < dsLen / 2; lag++) {
+   700→      let c = 0
+   701→      for (let i = 0; i + lag < dsLen; i++) c += ds[i] * ds[i + lag]
+   702→      if (c > bestCorr) {
+   703→        bestCorr = c
+   704→        bestLag = lag
+   705→      }
+   706→    }
+   707→    // If a strong periodicity is found, also flag samples matching that period
+   708→    // (light touch — only if correlation is significant relative to energy)
+   709→    let energy = 0
+   710→    for (let i = 0; i < dsLen; i++) energy += ds[i] * ds[i]
+   711→    if (bestLag > 0 && bestCorr > energy * 0.05) {
+   712→      const periodSamples = Math.floor(bestLag * ratio)
+   713→      // Find the phase with maximum click energy
+   714→      let bestPhase = 0
+   715→      let bestPhaseEnergy = 0
+   716→      for (let phase = 0; phase < periodSamples && phase < n; phase++) {
+   717→        let e = 0
+   718→        let count = 0
+   719→        for (let pos = phase; pos < n; pos += periodSamples) {
+   720→          if (pos > 0 && diffs[pos - 1] > threshold) { e += diffs[pos - 1]; count++ }
+   721→        }
+   722→        if (count > 0 && e / count > bestPhaseEnergy) {
+   723→          bestPhaseEnergy = e / count
+   724→          bestPhase = phase
+   725→        }
+   726→      }
+   727→      // Mark periodic clicks if they exceed threshold
+   728→      if (bestPhaseEnergy > 0) {
+   729→        for (let pos = bestPhase; pos < n; pos += periodSamples) {
+   730→          if (pos > 0 && diffs[pos - 1] > threshold * 0.7) {
+   731→            if (!isClick[pos]) {
+   732→              isClick[pos] = 1
+   733→              clicksDetected++
+   734→            }
+   735→          }
+   736→        }
+   737→      }
+   738→    }
+   739→  }
+   740→
+   741→  // Stage 4: group consecutive clicks into regions and repair with cubic Hermite
+   742→  let clicksRepaired = 0
+   743→  let i = 0
+   744→  const chunkSize = Math.max(1, Math.floor(n / 50)) // yield ~50 times
+   745→  while (i < n) {
+   746→    if (i % chunkSize === 0) {
+   747→      checkAbort(signal)
+   748→      onProgress?.((i / n) * 100)
+   749→      await yieldToUI()
+   750→    }
+   751→    if (!isClick[i]) { i++; continue }
+   752→    // Find end of click region
+   753→    let j = i
+   754→    while (j < n && isClick[j]) j++
+   755→    // Region [i, j-1] needs repair
+   756→    const regionLen = j - i
+   757→    // Boundary samples (must be clean)
+   758→    const leftIdx = i - 1
+   759→    const rightIdx = j
+   760→    if (leftIdx >= 0 && rightIdx < n) {
+   761→      const x0 = output[leftIdx]
+   762→      const x1 = output[rightIdx]
+   763→      const xPrev = leftIdx >= 1 ? output[leftIdx - 1] : x0
+   764→      const xNext = rightIdx < n - 1 ? output[rightIdx + 1] : x1
+   765→      // Slope estimates (centered differences)
+   766→      const m0 = x0 - xPrev
+   767→      const m1 = xNext - x1
+   768→      // Cubic Hermite interpolation across [0, 1] spanning (regionLen + 1) intervals
+   769→      const span = regionLen + 1
+   770→      for (let k = 0; k < regionLen; k++) {
+   771→        const t = (k + 1) / span
+   772→        const t2 = t * t
+   773→        const t3 = t2 * t
+   774→        const h00 = 2 * t3 - 3 * t2 + 1
+   775→        const h10 = t3 - 2 * t2 + t
+   776→        const h01 = -2 * t3 + 3 * t2
+   777→        const h11 = t3 - t2
+   778→        output[i + k] = h00 * x0 + h10 * m0 + h01 * x1 + h11 * m1
+   779→      }
+   780→      clicksRepaired += regionLen
+   781→    }
+   782→    i = j
+   783→  }
+   784→
+   785→  // Stage 5: gentle lowpass on repaired regions to suppress any spline ringing
+   786→  // (3-tap moving average applied only to repaired samples)
+   787→  const repairMask = isClick
+   788→  const smoothed = output.slice()
+   789→  for (let idx = 1; idx < n - 1; idx++) {
+   790→    if (repairMask[idx]) {
+   791→      smoothed[idx] = (output[idx - 1] + output[idx] * 2 + output[idx + 1]) / 4
+   792→    }
+   793→  }
+   794→  smoothed.forEach((v, idx) => { output[idx] = v })
+   795→
+   796→  onProgress?.(100)
+   797→  return {
+   798→    output,
+   799→    specific: {
+   800→      clicksDetected,
+   801→      clicksRepaired,
+   802→      detectionThreshold: threshold,
+   803→      medianDiff: median,
+   804→      madDiff: mad,
+   805→    },
+   806→  }
+   807→}
+   808→
+   809→// --- 4. De-crackle (MAD Crackler Detector) ---------------------------------
+   810→
+   811→async function repairDecrackle(
+   812→  input: Float32Array,
+   813→  sampleRate: number,
+   814→  intensity: number,
+   815→  onProgress?: (pct: number) => void,
+   816→  signal?: AbortSignal,
+   817→): Promise<ModuleOutput> {
+   818→  const n = input.length
+   819→  if (n < FFT_SIZE) return { output: input.slice(), specific: { cracklesRemoved: 0 } }
+   820→
+   821→  const t = Math.max(0, Math.min(10, intensity)) / 10
+   822→
+   823→  // Stage 1: isolate HF band via 5 kHz HPF
+   824→  const hpf: BiquadCoef = designBiquad('highpass', 5000, sampleRate, 0.7071)
+   825→  const hf = input.slice()
+   826→  applyBiquad(hf, hpf, { x1: 0, x2: 0, y1: 0, y2: 0 })
+   827→
+   828→  // Stage 2: MAD-based crackle detection on HF signal
+   829→  // Compute |hf| and its MAD
+   830→  const absHf = new Float32Array(n)
+   831→  for (let i = 0; i < n; i++) absHf[i] = Math.abs(hf[i])
+   832→  const sortedAbs = Array.from(absHf).sort((a, b) => a - b)
+   833→  const median = sortedAbs[Math.floor(sortedAbs.length / 2)]
+   834→  const absDevs = new Float32Array(n)
+   835→  for (let i = 0; i < n; i++) absDevs[i] = Math.abs(absHf[i] - median)
+   836→  const sortedDevs = Array.from(absDevs).sort((a, b) => a - b)
+   837→  const mad = sortedDevs[Math.floor(sortedDevs.length / 2)] || 1e-7
+   838→
+   839→  // Crackles: short (1-3 sample) bursts where |hf| > median + k * MAD
+   840→  // k from intensity (lower k = more sensitive)
+   841→  const k = 6 - t * 3 // 6 (gentle) → 3 (aggressive)
+   842→  const threshold = median + k * mad
+   843→
+   844→  const isCrackle = new Uint8Array(n)
+   845→  let cracklesDetected = 0
+   846→  for (let i = 0; i < n; i++) {
+   847→    if (absHf[i] > threshold) {
+   848→      isCrackle[i] = 1
+   849→      cracklesDetected++
+   850→    }
+   851→  }
+   852→
+   853→  // Stage 3: overlap-add interpolation — replace cracked samples with
+   854→  // cubic Hermite from neighboring clean samples.
+   855→  const output = input.slice()
+   856→  let cracklesRemoved = 0
+   857→  const chunkSize = Math.max(1, Math.floor(n / 50))
+   858→  let i = 0
+   859→  while (i < n) {
+   860→    if (i % chunkSize === 0) {
+   861→      checkAbort(signal)
+   862→      onProgress?.((i / n) * 100)
+   863→      await yieldToUI()
+   864→    }
+   865→    if (!isCrackle[i]) { i++; continue }
+   866→    let j = i
+   867→    while (j < n && isCrackle[j]) j++
+   868→    // Cap region length to 8 samples (longer = probably not crackle)
+   869→    const regionLen = j - i
+   870→    if (regionLen <= 8) {
+   871→      const leftIdx = i - 1
+   872→      const rightIdx = j
+   873→      if (leftIdx >= 0 && rightIdx < n) {
+   874→        const x0 = output[leftIdx]
+   875→        const x1 = output[rightIdx]
+   876→        const xPrev = leftIdx >= 1 ? output[leftIdx - 1] : x0
+   877→        const xNext = rightIdx < n - 1 ? output[rightIdx + 1] : x1
+   878→        const m0 = x0 - xPrev
+   879→        const m1 = xNext - x1
+   880→        const span = regionLen + 1
+   881→        for (let k = 0; k < regionLen; k++) {
+   882→          const tt = (k + 1) / span
+   883→          const t2 = tt * tt
+   884→          const t3 = t2 * tt
+   885→          const h00 = 2 * t3 - 3 * t2 + 1
+   886→          const h10 = t3 - 2 * t2 + tt
+   887→          const h01 = -2 * t3 + 3 * t2
+   888→          const h11 = t3 - t2
+   889→          output[i + k] = h00 * x0 + h10 * m0 + h01 * x1 + h11 * m1
+   890→        }
+   891→        cracklesRemoved += regionLen
+   892→      }
+   893→    }
+   894→    i = j
+   895→  }
+   896→
+   897→  onProgress?.(100)
+   898→  return {
+   899→    output,
+   900→    specific: {
+   901→      cracklesDetected,
+   902→      cracklesRemoved,
+   903→      detectionThreshold: threshold,
+   904→      hfMad: mad,
+   905→    },
+   906→  }
+   907→}
+   908→
+   909→// --- 5. De-hum (Harmonic Notch Cascade) ------------------------------------
+   910→
+   911→async function repairDehum(
+   912→  input: Float32Array,
+   913→  sampleRate: number,
+   914→  intensity: number,
+   915→  onProgress?: (pct: number) => void,
+   916→  signal?: AbortSignal,
+   917→): Promise<ModuleOutput> {
+   918→  const n = input.length
+   919→  const output = input.slice()
+   920→  if (n < sampleRate) {
+   921→    return { output, specific: { humFrequencyHz: 0, harmonicsNotched: 0 } }
+   922→  }
+   923→
+   924→  const t = Math.max(0, Math.min(10, intensity)) / 10
+   925→
+   926→  // Stage 1: detect fundamental via downsampled autocorrelation in 40–70 Hz
+   927→  const dsRate = 1000
+   928→  const ratio = sampleRate / dsRate
+   929→  const dsLen = Math.floor(n / ratio)
+   930→  const ds = new Float32Array(dsLen)
+   931→  for (let i = 0; i < dsLen; i++) ds[i] = input[Math.floor(i * ratio)]
+   932→
+   933→  const minLag = Math.floor(dsRate / 70) // ~14
+   934→  const maxLag = Math.ceil(dsRate / 40)  // ~25
+   935→  let bestLag = 0
+   936→  let bestCorr = -Infinity
+   937→  for (let lag = minLag; lag <= maxLag && lag < dsLen / 2; lag++) {
+   938→    let c = 0
+   939→    for (let i = 0; i + lag < dsLen; i++) c += ds[i] * ds[i + lag]
+   940→    if (c > bestCorr) { bestCorr = c; bestLag = lag }
+   941→  }
+   942→  const humFrequencyHz = bestLag > 0 ? dsRate / bestLag : 0
+   943→
+   944→  // If no clear hum found, fall back to scanning both 50 and 60 Hz candidates
+   945→  let fundamental = humFrequencyHz
+   946→  if (fundamental < 45 || fundamental > 65) {
+   947→    // Try 50 and 60 Hz directly via Goertzel
+   948→    const pow50 = goertzelPower(input, 50, sampleRate)
+   949→    const pow60 = goertzelPower(input, 60, sampleRate)
+   950→    fundamental = pow60 > pow50 * 1.2 ? 60 : 50
+   951→  }
+   952→
+   953→  onProgress?.(30)
+   954→  await yieldToUI()
+   955→  checkAbort(signal)
+   956→
+   957→  // Stage 2: apply peak-notches at fundamental + 7 harmonics
+   958→  // Each notch: peak biquad with gain=-12 dB, Q=30 (narrow dip).
+   959→  // Depth controlled by intensity (more intensity = deeper).
+   960→  const depthDb = -(6 + t * 9) // -6 to -15 dB
+   961→  const Q = 30
+   962→  const numHarmonics = 8
+   963→  let harmonicsNotched = 0
+   964→  for (let h = 1; h <= numHarmonics; h++) {
+   965→    const freq = fundamental * h
+   966→    if (freq >= sampleRate / 2 - 100) break
+   967→    const coef = designBiquad('peak', freq, sampleRate, Q, depthDb)
+   968→    applyBiquad(output, coef, { x1: 0, x2: 0, y1: 0, y2: 0 })
+   969→    harmonicsNotched++
+   970→    if (h % 2 === 0) {
+   971→      onProgress?.(30 + (h / numHarmonics) * 70)
+   972→      await yieldToUI()
+   973→      checkAbort(signal)
+   974→    }
+   975→  }
+   976→
+   977→  // Measure fundamental attenuation: power at fundamental before vs after
+   978→  const powBefore = goertzelPower(input, fundamental, sampleRate)
+   979→  const powAfter = goertzelPower(output, fundamental, sampleRate)
+   980→  const fundamentalAttenDb = powAfter > 1e-12 && powBefore > 1e-12
+   981→    ? 10 * Math.log10(powBefore / Math.max(powAfter, 1e-12))
+   982→    : 0
+   983→
+   984→  onProgress?.(100)
+   985→  return {
+   986→    output,
+   987→    specific: {
+   988→      humFrequencyHz: fundamental,
+   989→      harmonicsNotched,
+   990→      fundamentalAttenDb,
+   991→      notchDepthDb: depthDb,
+   992→    },
+   993→  }
+   994→}
+   995→
+   996→// Goertzel single-bin power
+   997→function goertzelPower(samples: Float32Array, freq: number, sampleRate: number): number {
+   998→  const k = (2 * Math.PI * freq) / sampleRate
+   999→  const cosK = Math.cos(k)
+  1000→  const coeff = 2 * cosK
+  1001→  let s1 = 0, s2 = 0
+  1002→  for (let i = 0; i < samples.length; i++) {
+  1003→    const s0 = samples[i] + coeff * s1 - s2
+  1004→    s2 = s1
+  1005→    s1 = s0
+  1006→  }
+  1007→  return s1 * s1 + s2 * s2 - coeff * s1 * s2
+  1008→}
+  1009→
+  1010→// --- 6. De-reverb (RT60 Envelope Subtraction) ------------------------------
+  1011→
+  1012→async function repairDereverb(
+  1013→  input: Float32Array,
+  1014→  sampleRate: number,
+  1015→  intensity: number,
+  1016→  onProgress?: (pct: number) => void,
+  1017→  signal?: AbortSignal,
+  1018→): Promise<ModuleOutput> {
+  1019→  const n = input.length
+  1020→  if (n < sampleRate) {
+  1021→    return { output: input.slice(), specific: { rt60BeforeMs: 0, rt60AfterMs: 0 } }
+  1022→  }
+  1023→
+  1024→  const t = Math.max(0, Math.min(10, intensity)) / 10
+  1025→
+  1026→  // Stage 1: estimate RT60 from reverse-integrated energy decay
+  1027→  // Compute energy envelope in 50 ms blocks, then reverse-cumsum the energy.
+  1028→  const blockSize = Math.max(1, Math.floor(sampleRate * 0.05))
+  1029→  const numBlocks = Math.floor(n / blockSize)
+  1030→  const blockEnergy = new Float32Array(numBlocks)
+  1031→  for (let b = 0; b < numBlocks; b++) {
+  1032→    let s = 0
+  1033→    const off = b * blockSize
+  1034→    for (let i = 0; i < blockSize; i++) {
+  1035→      const v = input[off + i]
+  1036→      s += v * v
+  1037→    }
+  1038→    blockEnergy[b] = s / blockSize
+  1039→  }
+  1040→
+  1041→  // Reverse-integrated energy: R[b] = sum_{k>=b} blockEnergy[k]
+  1042→  // Decay curve in dB: 10*log10(R[b] / R[0])
+  1043→  // RT60 = time for decay to drop 60 dB (linear fit in dB domain)
+  1044→  const reverseInteg = new Float32Array(numBlocks)
+  1045→  reverseInteg[numBlocks - 1] = blockEnergy[numBlocks - 1]
+  1046→  for (let b = numBlocks - 2; b >= 0; b--) {
+  1047→    reverseInteg[b] = reverseInteg[b + 1] + blockEnergy[b]
+  1048→  }
+  1049→  // Convert to dB and linear-fit the decay slope
+  1050→  // Find the range where decay is monotonic (from peak to -60 dB)
+  1051→  const peakEnergy = reverseInteg[0]
+  1052→  const targetEnergy = peakEnergy * 1e-6 // -60 dB
+  1053→  let decayEndBlock = numBlocks - 1
+  1054→  for (let b = 0; b < numBlocks; b++) {
+  1055→    if (reverseInteg[b] <= targetEnergy) {
+  1056→      decayEndBlock = b
+  1057→      break
+  1058→    }
+  1059→  }
+  1060→  // Linear fit: dB vs block index, slope = dB per block
+  1061→  // RT60 = -60 / slope (in blocks), then × blockDuration
+  1062→  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, count = 0
+  1063→  for (let b = 0; b <= decayEndBlock && b < numBlocks; b++) {
+  1064→    if (reverseInteg[b] <= 0) continue
+  1065→    const x = b
+  1066→    const y = 10 * Math.log10(reverseInteg[b])
+  1067→    sumX += x; sumY += y; sumXY += x * y; sumX2 += x * x; count++
+  1068→  }
+  1069→  let rt60BeforeMs = 0
+  1070→  if (count > 2) {
+  1071→    const denom = (count * sumX2 - sumX * sumX)
+  1072→    if (Math.abs(denom) > 1e-12) {
+  1073→      const slope = (count * sumXY - sumX * sumY) / denom // dB per block
+  1074→      if (slope < -0.01) {
+  1075→        const rt60Blocks = -60 / slope
+  1076→        const rt60MsUncapped = rt60Blocks * (blockSize / sampleRate) * 1000
+  1077→        // Cap at 10 s — anything beyond means the signal has no real decay
+  1078→        // tail (steady-state tone, sustained noise, etc.) so RT60 is
+  1079→        // effectively undefined. Reporting 0 is more honest than reporting
+  1080→        // a 140-second extrapolation.
+  1081→        rt60BeforeMs = Math.min(10_000, Math.max(0, rt60MsUncapped))
+  1082→      }
+  1083→    }
+  1084→  }
+  1085→
+  1086→  onProgress?.(30)
+  1087→  await yieldToUI()
+  1088→  checkAbort(signal)
+  1089→
+  1090→  // Stage 2: time-varying late-reverb suppression
+  1091→  // Compute envelope, normalize by peak, apply gain = (env/peak)^k where k
+  1092→  // controls suppression strength. Higher k = more aggressive.
+  1093→  // Late reverb (low env relative to peak) gets attenuated more.
+  1094→  // Compute envelope per-sample via block RMS interpolation.
+  1095→  const envGain = new Float32Array(n)
+  1096→  const kPow = 1 + t * 4 // 1..5
+  1097→  // Find peak envelope (95th percentile to be robust to transients)
+  1098→  const sortedEnv = Array.from(blockEnergy).sort((a, b) => a - b)
+  1099→  const peakEnv = sortedEnv[Math.floor(sortedEnv.length * 0.95)] || 1e-7
+  1100→
+  1101→  // Per-sample envelope (linearly interpolated block RMS)
+  1102→  // Then gain = max(floor, (env / peakEnv)^k)
+  1103→  const floor = 0.05 - t * 0.04 // 0.05 to 0.01
+  1104→  for (let b = 0; b < numBlocks; b++) {
+  1105→    const normEnv = Math.min(1, blockEnergy[b] / peakEnv)
+  1106→    const gain = Math.max(floor, Math.pow(normEnv, kPow))
+  1107→    const off = b * blockSize
+  1108→    for (let i = 0; i < blockSize && off + i < n; i++) {
+  1109→      envGain[off + i] = gain
+  1110→    }
+  1111→  }
+  1112→  // Tail beyond numBlocks*blockSize gets floor gain
+  1113→  for (let i = numBlocks * blockSize; i < n; i++) envGain[i] = floor
+  1114→
+  1115→  // Apply gain (smoothed to avoid clicks)
+  1116→  const output = new Float32Array(n)
+  1117→  let smoothedGain = 1
+  1118→  const smoothCoef = Math.exp(-1 / (0.02 * sampleRate)) // 20 ms time constant
+  1119→  const chunkSize = Math.max(1, Math.floor(n / 50))
+  1120→  for (let i = 0; i < n; i++) {
+  1121→    if (i % chunkSize === 0) {
+  1122→      checkAbort(signal)
+  1123→      onProgress?.(30 + (i / n) * 70)
+  1124→      await yieldToUI()
+  1125→    }
+  1126→    const target = envGain[i]
+  1127→    smoothedGain = smoothedGain * smoothCoef + target * (1 - smoothCoef)
+  1128→    output[i] = input[i] * smoothedGain
+  1129→  }
+  1130→
+  1131→  // Measure RT60 after
+  1132→  let rt60AfterMs = 0
+  1133→  {
+  1134→    const be2 = new Float32Array(numBlocks)
+  1135→    for (let b = 0; b < numBlocks; b++) {
+  1136→      let s = 0
+  1137→      const off = b * blockSize
+  1138→      for (let i = 0; i < blockSize; i++) {
+  1139→        const v = output[off + i]
+  1140→        s += v * v
+  1141→      }
+  1142→      be2[b] = s / blockSize
+  1143→    }
+  1144→    const ri2 = new Float32Array(numBlocks)
+  1145→    ri2[numBlocks - 1] = be2[numBlocks - 1]
+  1146→    for (let b = numBlocks - 2; b >= 0; b--) ri2[b] = ri2[b + 1] + be2[b]
+  1147→    const peak2 = ri2[0]
+  1148→    const tgt2 = peak2 * 1e-6
+  1149→    let de2 = numBlocks - 1
+  1150→    for (let b = 0; b < numBlocks; b++) {
+  1151→      if (ri2[b] <= tgt2) { de2 = b; break }
+  1152→    }
+  1153→    let sx = 0, sy = 0, sxy = 0, sx2 = 0, ct = 0
+  1154→    for (let b = 0; b <= de2 && b < numBlocks; b++) {
+  1155→      if (ri2[b] <= 0) continue
+  1156→      const x = b
+  1157→      const y = 10 * Math.log10(ri2[b])
+  1158→      sx += x; sy += y; sxy += x * y; sx2 += x * x; ct++
+  1159→    }
+  1160→    if (ct > 2) {
+  1161→      const dn = (ct * sx2 - sx * sx)
+  1162→      if (Math.abs(dn) > 1e-12) {
+  1163→        const slope = (ct * sxy - sx * sy) / dn
+  1164→        if (slope < -0.01) {
+  1165→          const rt60MsUncapped = (-60 / slope) * (blockSize / sampleRate) * 1000
+  1166→          rt60AfterMs = Math.min(10_000, Math.max(0, rt60MsUncapped))
+  1167→        }
+  1168→      }
+  1169→    }
+  1170→  }
+  1171→
+  1172→  // Late-reverb energy reduction: measure the RMS of the quietest 30 % of
+  1173→  // 50 ms blocks before vs after. Late reverb lives in these quiet regions
+  1174→  // (between transients), so the RMS reduction there directly measures how
+  1175→  // much late-reverb energy the suppressor removed. This is meaningful even
+  1176→  // for steady-state signals where RT60 is undefined.
+  1177→  const computeQuietRms = (buf: Float32Array): number => {
+  1178→    const bs = Math.max(1, Math.floor(sampleRate * 0.05))
+  1179→    const nb = Math.floor(buf.length / bs)
+  1180→    if (nb < 1) return 0
+  1181→    const rmsArr: number[] = new Array(nb)
+  1182→    for (let b = 0; b < nb; b++) {
+  1183→      let s = 0
+  1184→      const off = b * bs
+  1185→      for (let i = 0; i < bs; i++) {
+  1186→        const v = buf[off + i]
+  1187→        s += v * v
+  1188→      }
+  1189→      rmsArr[b] = Math.sqrt(s / bs)
+  1190→    }
+  1191→    rmsArr.sort((a, b) => a - b)
+  1192→    const low = Math.max(1, Math.floor(nb * 0.3))
+  1193→    let s = 0
+  1194→    for (let i = 0; i < low; i++) s += rmsArr[i]
+  1195→    return s / low
+  1196→  }
+  1197→  const quietRmsBefore = computeQuietRms(input)
+  1198→  const quietRmsAfter = computeQuietRms(output)
+  1199→  const lateReverbReductionDb = quietRmsBefore > 1e-7 && quietRmsAfter > 1e-7
+  1200→    ? 20 * Math.log10(quietRmsBefore / Math.max(quietRmsAfter, 1e-7))
+  1201→    : 0
+  1202→
+  1203→  onProgress?.(100)
+  1204→  return {
+  1205→    output,
+  1206→    specific: {
+  1207→      rt60BeforeMs,
+  1208→      rt60AfterMs,
+  1209→      rt60DeltaMs: rt60BeforeMs - rt60AfterMs,
+  1210→      lateReverbReductionDb,
+  1211→      suppressionStrength: kPow,
+  1212→    },
+  1213→  }
+  1214→}
+  1215→
+  1216→// --- 7. Clipping Reconstruction (Hermite Spline) ---------------------------
+  1217→
+  1218→async function repairDeclip(
+  1219→  input: Float32Array,
+  1220→  sampleRate: number,
+  1221→  intensity: number,
+  1222→  onProgress?: (pct: number) => void,
+  1223→  signal?: AbortSignal,
+  1224→): Promise<ModuleOutput> {
+  1225→  const n = input.length
+  1226→  const output = input.slice()
+  1227→  if (n < 4) return { output, specific: { clippedSamplesDetected: 0, clippedSamplesRepaired: 0 } }
+  1228→
+  1229→  const t = Math.max(0, Math.min(10, intensity)) / 10
+  1230→  // Detection threshold: 0.999 default, lower with intensity (more aggressive)
+  1231→  const clipThreshold = 0.999 - t * 0.05 // 0.999 → 0.949
+  1232→
+  1233→  // Stage 1: detect clipped samples (|s| >= threshold)
+  1234→  const isClipped = new Uint8Array(n)
+  1235→  let clippedSamplesDetected = 0
+  1236→  for (let i = 0; i < n; i++) {
+  1237→    if (Math.abs(input[i]) >= clipThreshold) {
+  1238→      isClipped[i] = 1
+  1239→      clippedSamplesDetected++
+  1240→    }
+  1241→  }
+  1242→
+  1243→  // Stage 2: group into regions and reconstruct with cubic Hermite spline
+  1244→  let clippedSamplesRepaired = 0
+  1245→  const chunkSize = Math.max(1, Math.floor(n / 50))
+  1246→  let i = 0
+  1247→  while (i < n) {
+  1248→    if (i % chunkSize === 0) {
+  1249→      checkAbort(signal)
+  1250→      onProgress?.((i / n) * 80)
+  1251→      await yieldToUI()
+  1252→    }
+  1253→    if (!isClipped[i]) { i++; continue }
+  1254→    let j = i
+  1255→    while (j < n && isClipped[j]) j++
+  1256→    // Region [i, j-1]
+  1257→    const regionLen = j - i
+  1258→    // Need clean boundaries — expand left/right to find non-clipped samples
+  1259→    let leftIdx = i - 1
+  1260→    while (leftIdx > 0 && isClipped[leftIdx]) leftIdx--
+  1261→    let rightIdx = j
+  1262→    while (rightIdx < n - 1 && isClipped[rightIdx]) rightIdx++
+  1263→    if (leftIdx >= 0 && rightIdx < n && regionLen <= sampleRate * 0.05) {
+  1264→      // Cap to 50 ms regions (longer = probably not clipping)
+  1265→      const x0 = output[leftIdx]
+  1266→      const x1 = output[rightIdx]
+  1267→      const xPrev = leftIdx >= 1 ? output[leftIdx - 1] : x0
+  1268→      const xNext = rightIdx < n - 1 ? output[rightIdx + 1] : x1
+  1269→      const m0 = x0 - xPrev
+  1270→      const m1 = xNext - x1
+  1271→      // Interpolate from leftIdx (t=0) to rightIdx (t=1)
+  1272→      const span = rightIdx - leftIdx
+  1273→      for (let k = 1; k < span; k++) {
+  1274→        const tt = k / span
+  1275→        const t2 = tt * tt
+  1276→        const t3 = t2 * tt
+  1277→        const h00 = 2 * t3 - 3 * t2 + 1
+  1278→        const h10 = t3 - 2 * t2 + tt
+  1279→        const h01 = -2 * t3 + 3 * t2
+  1280→        const h11 = t3 - t2
+  1281→        output[leftIdx + k] = h00 * x0 + h10 * m0 + h01 * x1 + h11 * m1
+  1282→      }
+  1283→      clippedSamplesRepaired += regionLen
+  1284→    }
+  1285→    i = j
+  1286→  }
+  1287→
+  1288→  // Stage 3: gentle lowpass on reconstructed regions (5-tap moving average)
+  1289→  // to suppress any spline ringing
+  1290→  const tmp = output.slice()
+  1291→  for (let idx = 2; idx < n - 2; idx++) {
+  1292→    if (isClipped[idx]) {
+  1293→      output[idx] =
+  1294→        (tmp[idx - 2] * 0.1 +
+  1295→         tmp[idx - 1] * 0.2 +
+  1296→         tmp[idx] * 0.4 +
+  1297→         tmp[idx + 1] * 0.2 +
+  1298→         tmp[idx + 2] * 0.1)
+  1299→    }
+  1300→  }
+  1301→
+  1302→  // Measure peak before/after
+  1303→  let peakBefore = 0, peakAfter = 0
+  1304→  for (let idx = 0; idx < n; idx++) {
+  1305→    const a = Math.abs(input[idx]); if (a > peakBefore) peakBefore = a
+  1306→    const b = Math.abs(output[idx]); if (b > peakAfter) peakAfter = b
+  1307→  }
+  1308→
+  1309→  onProgress?.(100)
+  1310→  return {
+  1311→    output,
+  1312→    specific: {
+  1313→      clippedSamplesDetected,
+  1314→      clippedSamplesRepaired,
+  1315→      clipThreshold,
+  1316→      peakBeforeDb: 20 * Math.log10(Math.max(peakBefore, 1e-7)),
+  1317→      peakAfterDb: 20 * Math.log10(Math.max(peakAfter, 1e-7)),
+  1318→    },
+  1319→  }
+  1320→}
+  1321→
+  1322→// --- 8. Resonance Suppression (Spectral Flux Peak Suppression) -------------
+  1323→
+  1324→async function repairResonance(
+  1325→  input: Float32Array,
+  1326→  sampleRate: number,
+  1327→  intensity: number,
+  1328→  onProgress?: (pct: number) => void,
+  1329→  signal?: AbortSignal,
+  1330→): Promise<ModuleOutput> {
+  1331→  const n = input.length
+  1332→  const output = input.slice()
+  1333→  if (n < FFT_SIZE) return { output, specific: { resonancePeaksDetected: 0, resonancePeaksSuppressed: 0 } }
+  1334→
+  1335→  const t = Math.max(0, Math.min(10, intensity)) / 10
+  1336→  const halfBins = FFT_SIZE / 2
+  1337→
+  1338→  // Stage 1: compute averaged magnitude spectrum (8 windows)
+  1339→  const fft = new FFTContext(FFT_SIZE)
+  1340→  const avgMag = new Float32Array(halfBins)
+  1341→  const numWindows = Math.min(8, Math.max(1, Math.floor(n / FFT_SIZE)))
+  1342→  for (let w = 0; w < numWindows; w++) {
+  1343→    const start = Math.floor(((n - FFT_SIZE) * (w + 0.5)) / numWindows)
+  1344→    for (let i = 0; i < FFT_SIZE; i++) {
+  1345→      fft.real[i] = input[start + i] * HANN[i]
+  1346→      fft.imag[i] = 0
+  1347→    }
+  1348→    fft.forward()
+  1349→    for (let b = 0; b < halfBins; b++) {
+  1350→      avgMag[b] += Math.sqrt(fft.real[b] * fft.real[b] + fft.imag[b] * fft.imag[b]) / FFT_SIZE
+  1351→    }
+  1352→  }
+  1353→  for (let b = 0; b < halfBins; b++) avgMag[b] /= numWindows
+  1354→
+  1355→  onProgress?.(30)
+  1356→  await yieldToUI()
+  1357→  checkAbort(signal)
+  1358→
+  1359→  // Stage 2: detect peaks via dB-relative local prominence.
+  1360→  //
+  1361→  // FFT main-lobe width for a Hann window is ~4 bins, so a tone that falls
+  1362→  // on a non-integer bin leaks into its ±2 neighbors. To detect resonance
+  1363→  // peaks robustly we use a two-zone test:
+  1364→  //
+  1365→  //   INNER zone (±2 bins): the candidate must be the strict local max —
+  1366→  //   i.e., greater than every bin in [b-2 .. b+2] except itself. This
+  1367→  //   ensures the candidate sits at the apex of the main lobe, not on
+  1368→  //   its shoulder.
+  1369→  //
+  1370→  //   OUTER zone (±3..±5 bins): outside the main lobe, so the bins here
+  1371→  //   reflect the SPECTRAL FLOOR near the peak. The candidate's prominence
+  1372→  //   over the maximum of the outer-zone bins must be ≥ prominenceDb.
+  1373→  //
+  1374→  // This is robust to overall signal amplitude AND to FFT bin alignment —
+  1375→  // a 0.05-amplitude 2 kHz tone at bin 42.67 is detected just as reliably
+  1376→  // as a 0.5-amplitude tone at an integer bin.
+  1377→  const peaks: Array<{ bin: number; freq: number; prominence: number; prominenceDb: number }> = []
+  1378→  const prominenceDb = 6 + t * 6 // 6 dB (gentle) → 12 dB (aggressive)
+  1379→  const floorRatioDb = 3 + t * 3 // peak must also be ≥ floorRatioDb above local floor
+  1380→  const innerHalf = 2
+  1381→  const outerHalf = 5
+  1382→  for (let b = outerHalf + 1; b < halfBins - outerHalf - 1; b++) {
+  1383→    // (1) strict local max in ±innerHalf window (apex of main lobe)
+  1384→    let isApex = true
+  1385→    for (let k = -innerHalf; k <= innerHalf; k++) {
+  1386→      if (k === 0) continue
+  1387→      if (avgMag[b + k] >= avgMag[b]) { isApex = false; break }
+  1388→    }
+  1389→    if (!isApex) continue
+  1390→    // (2) prominence over the outer zone (outside main lobe)
+  1391→    let outerMax = 0
+  1392→    for (let k = -outerHalf; k <= outerHalf; k++) {
+  1393→      if (k >= -innerHalf && k <= innerHalf) continue // skip inner zone
+  1394→      if (avgMag[b + k] > outerMax) outerMax = avgMag[b + k]
+  1395→    }
+  1396→    const promDb = outerMax > 1e-12
+  1397→      ? 20 * Math.log10(avgMag[b] / outerMax)
+  1398→      : 240
+  1399→    if (promDb < prominenceDb) continue
+  1400→    // (3) peak must be ≥ floorRatioDb above the outer-zone floor (min)
+  1401→    let outerMin = Infinity
+  1402→    for (let k = -outerHalf; k <= outerHalf; k++) {
+  1403→      if (k >= -innerHalf && k <= innerHalf) continue
+  1404→      if (avgMag[b + k] < outerMin) outerMin = avgMag[b + k]
+  1405→    }
+  1406→    const floorDb = outerMin > 1e-12
+  1407→      ? 20 * Math.log10(avgMag[b] / outerMin)
+  1408→      : 240
+  1409→    if (floorDb < floorRatioDb) continue
+  1410→    const binHz = sampleRate / FFT_SIZE
+  1411→    peaks.push({
+  1412→      bin: b,
+  1413→      freq: b * binHz,
+  1414→      prominence: avgMag[b] - outerMax, // linear (kept for backwards-compat)
+  1415→      prominenceDb: promDb,
+  1416→    })
+  1417→  }
+  1418→  // Sort by dB prominence descending, take top 8
+  1419→  peaks.sort((a, b) => b.prominenceDb - a.prominenceDb)
+  1420→  const topPeaks = peaks.slice(0, 8)
+  1421→
+  1422→  onProgress?.(50)
+  1423→  await yieldToUI()
+  1424→  checkAbort(signal)
+  1425→
+  1426→  // Stage 3: apply narrow notches at detected resonance frequencies
+  1427→  // Use peak biquad with negative gain, Q=10 (narrow dip).
+  1428→  // Depth controlled by intensity — but no deeper than the measured peak
+  1429→  // prominence above the floor (so we never dig below the spectral floor
+  1430→  // and create a notch artifact).
+  1431→  const notchQ = 10
+  1432→  const maxDepthDb = 6 + t * 9 // 6 to 15 dB
+  1433→  let resonancePeaksSuppressed = 0
+  1434→  let totalDepthAppliedDb = 0
+  1435→  for (const peak of topPeaks) {
+  1436→    if (peak.freq >= sampleRate / 2 - 100 || peak.freq < 20) continue
+  1437→    // Don't notch deeper than the peak's own prominence (would create a hole)
+  1438→    const depthDb = -Math.min(maxDepthDb, Math.max(1, peak.prominenceDb - 1))
+  1439→    const coef = designBiquad('peak', peak.freq, sampleRate, notchQ, depthDb)
+  1440→    applyBiquad(output, coef, { x1: 0, x2: 0, y1: 0, y2: 0 })
+  1441→    resonancePeaksSuppressed++
+  1442→    totalDepthAppliedDb += -depthDb
+  1443→  }
+  1444→
+  1445→  // Measure resonance reduction: sum of |avgMag| at the peak bins before vs after.
+  1446→  // Re-compute averaged spectrum on the processed output (8 windows).
+  1447→  const afterAvgMag = new Float32Array(halfBins)
+  1448→  for (let w = 0; w < numWindows; w++) {
+  1449→    const start = Math.floor(((n - FFT_SIZE) * (w + 0.5)) / numWindows)
+  1450→    for (let i = 0; i < FFT_SIZE; i++) {
+  1451→      fft.real[i] = output[start + i] * HANN[i]
+  1452→      fft.imag[i] = 0
+  1453→    }
+  1454→    fft.forward()
+  1455→    for (let b = 0; b < halfBins; b++) {
+  1456→      afterAvgMag[b] += Math.sqrt(fft.real[b] * fft.real[b] + fft.imag[b] * fft.imag[b]) / FFT_SIZE
+  1457→    }
+  1458→  }
+  1459→  for (let b = 0; b < halfBins; b++) afterAvgMag[b] /= numWindows
+  1460→
+  1461→  let peakEnergyBefore = 0, peakEnergyAfter = 0
+  1462→  for (const peak of topPeaks) {
+  1463→    peakEnergyBefore += avgMag[peak.bin] * avgMag[peak.bin]
+  1464→    peakEnergyAfter += afterAvgMag[peak.bin] * afterAvgMag[peak.bin]
+  1465→  }
+  1466→  const resonanceReductionDb = peakEnergyBefore > 1e-18 && peakEnergyAfter > 1e-18
+  1467→    ? 10 * Math.log10(peakEnergyBefore / Math.max(peakEnergyAfter, 1e-18))
+  1468→    : 0
+  1469→
+  1470→  onProgress?.(100)
+  1471→  return {
+  1472→    output,
+  1473→    specific: {
+  1474→      resonancePeaksDetected: peaks.length,
+  1475→      resonancePeaksSuppressed,
+  1476→      notchDepthDb: resonancePeaksSuppressed > 0
+  1477→        ? -(totalDepthAppliedDb / resonancePeaksSuppressed)
+  1478→        : 0,
+  1479→      peaksList: topPeaks.length,
+  1480→      resonanceReductionDb,
+  1481→      avgPeakProminenceDb: topPeaks.length > 0
+  1482→        ? topPeaks.reduce((s, p) => s + p.prominenceDb, 0) / topPeaks.length
+  1483→        : 0,
+  1484→    },
+  1485→  }
+  1486→}
+  1487→
+  1488→// ---------------------------------------------------------------------------
+  1489→// Public entry — runRepair
+  1490→// ---------------------------------------------------------------------------
+  1491→
+  1492→/**
+  1493→ * Run a single repair module on the input channels.
+  1494→ * - Measures before metrics, runs the module DSP, measures after metrics.
+  1495→ * - Yields to UI thread between heavy chunks.
+  1496→ * - Checks AbortSignal between every chunk; throws CancelledError if aborted.
+  1497→ * - Deterministic — no Math.random, no Date.now in DSP path.
+  1498→ */
+  1499→export async function runRepair(
+  1500→  moduleId: RepairModuleId,
+  1501→  input: Float32Array[],
+  1502→  sampleRate: number,
+  1503→  intensity: number,
+  1504→  onProgress?: (pct: number) => void,
+  1505→  signal?: AbortSignal,
+  1506→): Promise<RepairResult> {
+  1507→  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  1508→
+  1509→  // Measure before
+  1510→  const before = measureRepairMetrics(input, sampleRate)
+  1511→
+  1512→  // Copy input channels (so we never mutate the caller's buffers)
+  1513→  const inputCopy: Float32Array[] = input.map((c) => c.slice())
+  1514→  // Force stereo — repair modules operate per-channel but result is always stereo
+  1515→  if (inputCopy.length === 1) inputCopy.push(inputCopy[0].slice())
+  1516→
+  1517→  const numChannels = inputCopy.length
+  1518→  const outputChannels: Float32Array[] = new Array(numChannels)
+  1519→  let specific: Record<string, number> = {}
+  1520→
+  1521→  // Per-channel progress aggregator
+  1522→  const runModule = async (
+  1523→    ch: number,
+  1524→    mod: RepairModuleId,
+  1525→    samples: Float32Array,
+  1526→  ): Promise<ModuleOutput> => {
+  1527→    const chProgress = (pct: number) =>
+  1528→      onProgress?.(((ch + pct / 100) / numChannels) * 100)
+  1529→    switch (mod) {
+  1530→      case 'denoise':
+  1531→        return repairDenoise(samples, sampleRate, intensity, chProgress, signal)
+  1532→      case 'spectral_gate':
+  1533→        return repairSpectralGate(samples, sampleRate, intensity, chProgress, signal)
+  1534→      case 'declick':
+  1535→        return repairDeclick(samples, sampleRate, intensity, chProgress, signal)
+  1536→      case 'decrackle':
+  1537→        return repairDecrackle(samples, sampleRate, intensity, chProgress, signal)
+  1538→      case 'dehum':
+  1539→        return repairDehum(samples, sampleRate, intensity, chProgress, signal)
+  1540→      case 'dereverb':
+  1541→        return repairDereverb(samples, sampleRate, intensity, chProgress, signal)
+  1542→      case 'declip':
+  1543→        return repairDeclip(samples, sampleRate, intensity, chProgress, signal)
+  1544→      case 'resonance':
+  1545→        return repairResonance(samples, sampleRate, intensity, chProgress, signal)
+  1546→    }
+  1547→  }
+  1548→
+  1549→  // Channel 0
+  1550→  const out0 = await runModule(0, moduleId, inputCopy[0])
+  1551→  outputChannels[0] = out0.output
+  1552→  specific = out0.specific
+  1553→  // Channel 1 (if stereo) — use the same noise floor estimate / settings
+  1554→  // derived from channel 0 for consistency? For simplicity we re-derive per
+  1555→  // channel (deterministic, since each channel's statistics are deterministic).
+  1556→  if (numChannels > 1) {
+  1557→    const out1 = await runModule(1, moduleId, inputCopy[1])
+  1558→    outputChannels[1] = out1.output
+  1559→    // Merge specific metrics: keep channel 0's, but average where it makes sense
+  1560→    // For now, channel 0's specific metrics are the "reported" ones.
+  1561→  }
+  1562→
+  1563→  // Measure after
+  1564→  const after = measureRepairMetrics(outputChannels, sampleRate)
+  1565→
+  1566→  // Improvement: standard metric deltas + module-specific measurements
+  1567→  const improvement: Record<string, number> = { ...specific }
+  1568→  for (const k of Object.keys(before)) {
+  1569→    const delta = (after[k] ?? 0) - (before[k] ?? 0)
+  1570→    improvement[`${k}_delta`] = delta
+  1571→  }
+  1572→
+  1573→  const t1 = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  1574→
+  1575→  return {
+  1576→    moduleId,
+  1577→    channels: outputChannels,
+  1578→    sampleRate,
+  1579→    metrics: { before, after, improvement },
+  1580→    duration: t1 - t0,
+  1581→  }
+  1582→}
+  1583→

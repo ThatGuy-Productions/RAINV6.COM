@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { StudioTopBar } from './StudioTopBar'
 import { StudioSidebar } from './StudioSidebar'
 import { StudioTransportBar } from './StudioTransportBar'
@@ -13,7 +14,6 @@ import { MetadataTab } from '@/components/rain/tabs/MetadataTab'
 import { ExportTab } from '@/components/rain/tabs/ExportTab'
 import { DistributeTab } from '@/components/rain/tabs/DistributeTab'
 import { ProvenanceTab } from '@/components/rain/tabs/ProvenanceTab'
-import { AnalyticsTab } from '@/components/rain/tabs/AnalyticsTab'
 import { SpatialTab, PitchTab, ReferenceTab, AIETab, SettingsTab } from '@/components/rain/tabs/SecondaryTabs'
 import { KeyboardShortcuts } from '@/components/rain/mastering/KeyboardShortcuts'
 import { KeyboardShortcutsOverlay } from '@/components/rain/KeyboardShortcutsOverlay'
@@ -29,6 +29,14 @@ import { WhatsNewPanel } from '@/components/rain/layout/WhatsNewPanel'
 import { StudioTour } from '@/components/rain/layout/StudioTour'
 import { ExitReviewPopup } from '@/components/rain/layout/ExitReviewPopup'
 import { getAnonId } from '@/lib/rain/anon-id'
+
+// ── Lazy-loaded heavy components ──────────────────────────────────────────
+// AnalyticsTab renders heavy chart visualizations; defer until the user
+// navigates to the Analytics tab.
+const AnalyticsTab = dynamic(
+  () => import('@/components/rain/tabs/AnalyticsTab').then((m) => m.AnalyticsTab),
+  { ssr: false },
+)
 
 /* ---------------------------------------------------------------------------
    Ambient background for studio view (Task 10 — replaced particles with data rain)

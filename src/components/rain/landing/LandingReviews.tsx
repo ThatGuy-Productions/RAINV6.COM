@@ -310,6 +310,9 @@ function ReviewFormModal({
       <div
         className="relative w-full max-w-lg rounded-xl border border-[rgba(170,255,0,0.18)] bg-[rgba(14,16,22,0.98)] shadow-2xl overflow-hidden"
         style={{ boxShadow: '0 24px 80px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(170,255,0,0.05)' }}
+        role="dialog"
+        aria-labelledby="review-form-title"
+        aria-modal="true"
       >
         {/* Top accent */}
         <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-[#AAFF00] to-transparent opacity-60" />
@@ -321,7 +324,7 @@ function ReviewFormModal({
               <MessageSquare className="w-5 h-5 text-[#AAFF00]" />
             </div>
             <div>
-              <h2 className="text-base font-semibold tracking-tight">Write a review</h2>
+              <h2 id="review-form-title" className="text-base font-semibold tracking-tight">Write a review</h2>
               <p className="text-[11px] text-muted-foreground font-mono leading-tight mt-0.5">
                 {user ? 'Signed in · publishes instantly' : 'Anonymous · needs approval'}
               </p>

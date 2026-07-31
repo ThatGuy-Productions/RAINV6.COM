@@ -20,9 +20,11 @@
  *     playback is in progress (e.g. after a render but before pressing Play).
  *   - Numeric readout (e.g. "+0.85" / "-0.12") updates in real time next to
  *     the meter bar — see correlationStr below.
+ *
+ * Wrapped in React.memo — props (variant) are stable across renders.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, memo } from 'react'
 import { audioEngine, type AudioEngineState } from '@/lib/rain/audio-engine'
 import { useSessionStore } from '@/lib/rain/store'
 
@@ -42,7 +44,7 @@ function correlationColor(correlation: number): string {
   return '#EF4444' // red — out of phase
 }
 
-export function StereoCorrelationMeter({ variant = 'output' }: StereoCorrelationMeterProps) {
+export const StereoCorrelationMeter = memo(function StereoCorrelationMeter({ variant = 'output' }: StereoCorrelationMeterProps) {
   const inputAnalysis = useSessionStore((s) => s.inputAnalysis)
   const outputAnalysis = useSessionStore((s) => s.outputAnalysis)
 
@@ -89,6 +91,8 @@ export function StereoCorrelationMeter({ variant = 'output' }: StereoCorrelation
         <span
           className="text-sm font-bold font-mono tabular-nums"
           style={{ color: hasAny ? needleColor : '#6B7280' }}
+          role="status"
+          aria-live="polite"
         >
           {correlationStr}
         </span>
@@ -156,4 +160,4 @@ export function StereoCorrelationMeter({ variant = 'output' }: StereoCorrelation
       </div>
     </div>
   )
-}
+})

@@ -230,7 +230,7 @@ function formatDateTime(iso: string): string {
 }
 
 function formatMs(ms: number | null): string {
-  if (ms == null) return '—'
+  if (ms === null) return '—'
   if (ms < 1000) return `${Math.round(ms)}ms`
   const s = ms / 1000
   if (s < 60) return `${s.toFixed(1)}s`
@@ -240,12 +240,12 @@ function formatMs(ms: number | null): string {
 }
 
 function formatLufs(v: number | null): string {
-  if (v == null || !isFinite(v)) return '—'
+  if (v === null || !isFinite(v)) return '—'
   return `${v.toFixed(1)} LUFS`
 }
 
 function formatDb(v: number | null): string {
-  if (v == null || !isFinite(v)) return '—'
+  if (v === null || !isFinite(v)) return '—'
   return `${v.toFixed(1)} dB`
 }
 
@@ -453,7 +453,7 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tierPatchingId, setTierPatchingId] = useState<string | null>(null)
-  const [polling, setPolling] = useState(true)
+  const [polling, _setPolling] = useState(true)
 
   // ---- Data fetching ----
 

@@ -19,7 +19,7 @@ interface LandingHeroProps {
      2. Hero card depth — stronger glow ring, perspective transform,
         layered box shadows, bloom effect.
      3. Breathing room — deliberate vertical spacing between every block.
-     4. Matrix rain at 25 % — background, not foreground.
+     4. Matrix rain at 25 % — background, not foreground.
      5. Purple as accent — targeted rim light, not atmospheric fog.
      6. Multi-source lighting — green ring + neon bloom + top-edge +
         subtle purple reflection.
@@ -30,7 +30,7 @@ export function LandingHero({ onLaunch }: LandingHeroProps) {
     <section className="relative overflow-hidden min-h-[92vh] flex items-center">
       {/* ════════════════════════════════════════════════════════
           Layer 0 — Background
-          Near-black base · grid at 15 % · single green ring glow
+          Near-black base · grid at 15 % · single green ring glow
           ════════════════════════════════════════════════════════ */}
       <div
         className="absolute inset-0"
@@ -40,7 +40,7 @@ export function LandingHero({ onLaunch }: LandingHeroProps) {
       <div className="absolute inset-0 rain-bg-grid opacity-[0.12]" aria-hidden />
 
       {/* ════════════════════════════════════════════════════════
-          Layer 1 — Matrix data rain (25 %, background role only)
+          Layer 1 — Matrix data rain (25 %, background role only)
           ════════════════════════════════════════════════════════ */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
         <DataRain opacity={0.25} fontSize={14} columnWidth={20} speed={0.85} />

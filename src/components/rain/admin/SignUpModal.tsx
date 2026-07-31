@@ -82,6 +82,9 @@ export function SignUpModal({ onClose, onSuccess }: SignUpModalProps) {
       <div
         className="relative w-full max-w-md rounded-xl border border-[rgba(170,255,0,0.18)] bg-[rgba(14,16,22,0.98)] shadow-2xl overflow-hidden"
         style={{ boxShadow: '0 24px 80px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(170,255,0,0.05)' }}
+        role="dialog"
+        aria-labelledby="signup-modal-title"
+        aria-modal="true"
       >
         {/* Top accent gradient line */}
         <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-[#AAFF00] to-transparent opacity-60" />
@@ -100,7 +103,7 @@ export function SignUpModal({ onClose, onSuccess }: SignUpModalProps) {
               <Sparkles className="absolute -bottom-1 -right-1 w-4 h-4 text-[#AAFF00] bg-[rgba(14,16,22,1)] rounded-full p-0.5" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold tracking-tight">
+              <h2 id="signup-modal-title" className="text-base font-semibold tracking-tight">
                 {done ? 'Welcome to RAIN V6' : 'Create your free account'}
               </h2>
               <p className="text-[11px] text-muted-foreground font-mono leading-tight mt-0.5">

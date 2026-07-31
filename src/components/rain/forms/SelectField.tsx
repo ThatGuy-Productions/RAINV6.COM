@@ -7,7 +7,6 @@
  * layout as `Field`. Used for dropdowns like Language, PRO, Genre, etc.
  */
 
-import * as React from 'react'
 import {
   Select,
   SelectContent,

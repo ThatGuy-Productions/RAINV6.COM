@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, memo } from 'react'
 import { useReducedMotion } from 'framer-motion'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import { computeSpectralFeatures } from '@/lib/rain/dsp'
@@ -82,7 +82,7 @@ const FREQ_LABELS = [
  * Reduced-motion: the perspective tilt is dropped (flat) but the 3D extruded
  * bars, reflection and peak-hold caps are preserved.
  */
-export function Spectrum({ height = 140, mode = 'wide', showReadouts = false }: SpectrumProps) {
+export const Spectrum = memo(function Spectrum({ height = 140, mode = 'wide', showReadouts = false }: SpectrumProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
   const rafReadoutsRef = useRef<number | null>(null)
@@ -397,7 +397,7 @@ export function Spectrum({ height = 140, mode = 'wide', showReadouts = false }: 
       )}
     </div>
   )
-}
+})
 
 /** Compact label/value readout for the spectral descriptors strip. */
 function Readout({ label, value }: { label: string; value: string }) {

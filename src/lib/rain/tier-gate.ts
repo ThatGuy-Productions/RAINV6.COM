@@ -18,7 +18,6 @@
  */
 
 import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
 import { getSessionUser } from './auth'
 
 export type TierGateOk = { ok: true; tier: string; userId: string | null }
@@ -69,7 +68,7 @@ const TIER_PRECEDENCE: readonly string[] = [
  * Never throws: any DB / lookup failure degrades to Casual so routes
  * return a deterministic 403 rather than a 500.
  */
-export async function getUserTier(req: NextRequest | null, userId?: string | null): Promise<string> {
+export async function getUserTier(req: NextRequest | null, _userId?: string | null): Promise<string> {
   // 1. Authenticated session cookie — canonical path.
   const sessionUser = await getSessionUser(req)
   if (sessionUser) return sessionUser.tier

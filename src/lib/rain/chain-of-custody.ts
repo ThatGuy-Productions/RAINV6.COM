@@ -31,8 +31,6 @@
  *   - Types are exported for use in WAV/MP3 encoders and C2PA manifest builders
  */
 
-import type { C2PAManifest } from './types'
-
 // ==========================================================================
 // TYPES
 // ==========================================================================
@@ -770,8 +768,6 @@ export function parseId3v2Tags(buffer: ArrayBuffer): ParsedMp3Metadata | null {
   if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null // "ID3"
 
   const version = bytes[3] // 2, 3, or 4
-  const revision = bytes[4]
-  const flags = bytes[5]
 
   // Tag size — synchsafe integer in all versions
   const tagSize =
@@ -804,7 +800,6 @@ export function parseId3v2Tags(buffer: ArrayBuffer): ParsedMp3Metadata | null {
   } else {
     // ID3v2.3/2.4: 4-byte IDs, 4-byte size (BE in v2.3, synchsafe in v2.4), 2 flags
     const useSynchsafeSize = version >= 4
-    const footerSize = (flags & 0x10) ? 10 : 0 // v2.4 optional footer
     let offset = 10
     const tagEnd = 10 + tagSize
     while (offset + 10 <= tagEnd && offset + 10 <= buffer.byteLength) {
@@ -871,7 +866,6 @@ function decodeFrame(
     if (encoding === 0x01) {
       // UTF-16: null is 2 bytes
       for (let i = 0; i < rest.length - 1; i += 2) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         if (rest[i] === 0x00 && rest[i + 1] === 0x00) { nullIdx = i; break }
       }
     }
@@ -1232,7 +1226,6 @@ export function stripAIFromWav(
   // Determine which chunks to remove: bext if AI-marked, junk/PAD always,
   // any non-standard chunk whose ID is in a known AI tool's knownRiffIds
   const chunksToRemove = new Set<number>()
-  let bextRemoved = false
 
   for (let i = 0; i < parsed.chunks.length; i++) {
     const chunk = parsed.chunks[i]
@@ -1254,7 +1247,6 @@ export function stripAIFromWav(
             ]
             if (checkFields.some(f => rule.value.test(f))) {
               chunksToRemove.add(i)
-              bextRemoved = true
               strippedFields.push({
                 id: 'bext',
                 value: `originator=${bext.originator.slice(0, 64)}`,
@@ -1292,7 +1284,6 @@ export function stripAIFromWav(
   }
 
   // Rebuild the WAV
-  const view = new DataView(buffer)
   const fmtChunk = parsed.chunks.find(c => c.id === 'fmt ')
   const dataChunk = parsed.chunks.find(c => c.id === 'data')
 
@@ -1599,7 +1590,7 @@ function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
  */
 export function detectWatermark(
   int16Channel0: Int16Array,
-  bitDepth: 16 | 24 = 16,
+  _bitDepth: 16 | 24 = 16,
 ): string[] {
   const detected: string[] = []
   const WATERMARK_INTERVAL = 1024 // Typical interval for LSB watermark spread
@@ -1724,7 +1715,6 @@ export function generateCustodyCertificate(opts: {
     inputHash,
     outputHash,
     mixedSource,
-    parentCertId,
   } = opts
 
   const now = new Date().toISOString()

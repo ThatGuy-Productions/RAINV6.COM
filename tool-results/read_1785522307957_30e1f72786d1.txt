@@ -1,0 +1,1016 @@
+     1→'use client'
+     2→
+     3→import { useEffect, useMemo, useState } from 'react'
+     4→import {
+     5→  Activity,
+     6→  BarChart3,
+     7→  Boxes,
+     8→  Clock,
+     9→  HardDrive,
+    10→  History,
+    11→  Music,
+    12→  Trash2,
+    13→  TrendingDown,
+    14→  TrendingUp,
+    15→  Zap,
+    16→} from 'lucide-react'
+    17→import { useSessionStore } from '@/lib/rain/store'
+    18→import { RenderHistory } from '@/components/rain/mastering/RenderHistory'
+    19→import {
+    20→  clearAllAnalytics,
+    21→  computeActivityAggregates,
+    22→  computeAnalytics,
+    23→  computeExportAggregates,
+    24→  computeMacroEvolution,
+    25→  computeQCAggregates,
+    26→  computeStageTimingAverages,
+    27→  formatBytes,
+    28→  formatMb,
+    29→  formatMs,
+    30→  loadAllAnalytics,
+    31→  type ActivityRecord,
+    32→  type AllAnalytics,
+    33→  type EngineStats,
+    34→  type PlatformBreakdownEntry,
+    35→} from '@/lib/rain/analytics'
+    36→import { PLATFORM_TARGETS } from '@/lib/rain/constants'
+    37→import type { MacroKey } from '@/lib/rain/types'
+    38→
+    39→const PLATFORM_COLOR: Record<string, string> = {
+    40→  spotify: '#AAFF00',
+    41→  apple_music: '#00D4FF',
+    42→  youtube: '#F97316',
+    43→  tidal: '#8B5CF6',
+    44→  cd: '#D946EF',
+    45→}
+    46→
+    47→// 7 macros → stable color mapping for the evolution chart.
+    48→const MACRO_COLORS: Record<MacroKey, string> = {
+    49→  brighten: '#AAFF00',
+    50→  glue: '#00D4FF',
+    51→  width: '#F97316',
+    52→  punch: '#EF4444',
+    53→  warmth: '#F59E0B',
+    54→  space: '#8B5CF6',
+    55→  repair: '#10B981',
+    56→}
+    57→
+    58→const MACRO_LABELS: Record<MacroKey, string> = {
+    59→  brighten: 'Brighten',
+    60→  glue: 'Glue',
+    61→  width: 'Width',
+    62→  punch: 'Punch',
+    63→  warmth: 'Warmth',
+    64→  space: 'Space',
+    65→  repair: 'Repair',
+    66→}
+    67→
+    68→const ALL_MACROS: MacroKey[] = ['brighten', 'glue', 'width', 'punch', 'warmth', 'space', 'repair']
+    69→
+    70→function platformLabel(slug: string): string {
+    71→  return PLATFORM_TARGETS.find((p) => p.slug === slug)?.label ?? slug.replace(/_/g, ' ')
+    72→}
+    73→
+    74→function platformColor(slug: string): string {
+    75→  return PLATFORM_COLOR[slug] ?? '#84CC16'
+    76→}
+    77→
+    78→function formatTrendPct(pct: number | null): string {
+    79→  if (pct === null || !Number.isFinite(pct)) return '—'
+    80→  const sign = pct > 0 ? '+' : ''
+    81→  return `${sign}${pct.toFixed(0)}%`
+    82→}
+    83→
+    84→function formatTrendScore(delta: number | null): string {
+    85→  if (delta === null || !Number.isFinite(delta)) return '—'
+    86→  const sign = delta > 0 ? '+' : ''
+    87→  return `${sign}${delta.toFixed(1)}`
+    88→}
+    89→
+    90→/** Human-readable label for an ActivityRecord.type. */
+    91→function activityTypeLabel(type: string): string {
+    92→  switch (type) {
+    93→    case 'undo': return 'Undo'
+    94→    case 'redo': return 'Redo'
+    95→    case 'repair': return 'Repair run'
+    96→    case 'ai-query': return 'AI Co-Master query'
+    97→    case 'render': return 'Render'
+    98→    case 'export': return 'Export'
+    99→    case 'preset-apply': return 'Preset applied'
+   100→    default: return type.charAt(0).toUpperCase() + type.slice(1).replace(/-/g, ' ')
+   101→  }
+   102→}
+   103→
+   104→export function AnalyticsTab() {
+   105→  const renderHistory = useSessionStore((s) => s.renderHistory)
+   106→  const clearRenderHistory = useSessionStore((s) => s.clearRenderHistory)
+   107→  const fileSampleRate = useSessionStore((s) => s.fileSampleRate)
+   108→  const fileBitDepth = useSessionStore((s) => s.fileBitDepth)
+   109→  const fileChannels = useSessionStore((s) => s.fileChannels)
+   110→  // macroHistory is the in-memory undo/redo stack (session-only). Used for
+   111→  // the Macro Evolution chart at the bottom — honestly labelled as
+   112→  // "current session" since it's not persisted across reloads.
+   113→  const macroHistory = useSessionStore((s) => s.macroHistory)
+   114→
+   115→  // Real persisted analytics — loaded from IndexedDB on mount + on every
+   116→  // statsVersion bump (post-clear or post-render).
+   117→  const [all, setAll] = useState<AllAnalytics | null>(null)
+   118→  const [statsVersion, setStatsVersion] = useState(0)
+   119→
+   120→  useEffect(() => {
+   121→    let cancelled = false
+   122→    void loadAllAnalytics().then((data) => {
+   123→      if (!cancelled) setAll(data)
+   124→    })
+   125→    return () => {
+   126→      cancelled = true
+   127→    }
+   128→  }, [statsVersion])
+   129→
+   130→  // Pure computeAnalytics() over the in-memory renderHistory (last 20
+   131→  // renders, Zustand store). We overlay the persisted EngineStats from
+   132→  // IndexedDB so the Engine Utilization panel shows real cumulative numbers.
+   133→  const summary = useMemo(() => {
+   134→    const base = computeAnalytics(renderHistory)
+   135→    if (all?.engineStats) {
+   136→      base.engineStats = all.engineStats
+   137→    }
+   138→    return base
+   139→  }, [renderHistory, all, fileSampleRate, fileBitDepth, fileChannels])
+   140→
+   141→  // Persisted-record aggregations — every one of these is a pure function
+   142→  // over real IndexedDB rows. Empty arrays yield zeros / empty arrays.
+   143→  const qcAgg = useMemo(
+   144→    () => computeQCAggregates(all?.qc ?? []),
+   145→    [all?.qc],
+   146→  )
+   147→  const exportAgg = useMemo(
+   148→    () => computeExportAggregates(all?.exports ?? []),
+   149→    [all?.exports],
+   150→  )
+   151→  const activityAgg = useMemo(
+   152→    () => computeActivityAggregates(all?.activity ?? []),
+   153→    [all?.activity],
+   154→  )
+   155→  const stageAgg = useMemo(
+   156→    () => computeStageTimingAverages(all?.renders ?? []),
+   157→    [all?.renders],
+   158→  )
+   159→  const macroEvolution = useMemo(
+   160→    () => computeMacroEvolution(macroHistory),
+   161→    [macroHistory],
+   162→  )
+   163→
+   164→  const engineStats: EngineStats | null = all?.engineStats ?? null
+   165→  const hasRenders = renderHistory.length > 0
+   166→  const hasPersistedRenders = (all?.renders?.length ?? 0) > 0
+   167→  const hasQC = (all?.qc?.length ?? 0) > 0
+   168→  const hasExports = (all?.exports?.length ?? 0) > 0
+   169→  const hasActivity = (all?.activity?.length ?? 0) > 0
+   170→  const hasMacroHistory = macroEvolution.length >= 2
+   171→
+   172→  // Engine utilization averages — REAL data only.
+   173→  const dspAvgMs = engineStats && engineStats.totalRenders > 0
+   174→    ? engineStats.totalDspTimeMs / engineStats.totalRenders
+   175→    : null
+   176→  // aiCallCount is now a real counter (incremented in recordAiStat).
+   177→  const aiCount = engineStats?.aiCallCount ?? 0
+   178→  const aiAvgMs = engineStats && engineStats.totalAiTimeMs > 0 && aiCount > 0
+   179→    ? engineStats.totalAiTimeMs / aiCount
+   180→    : null
+   181→  const exportCount = engineStats?.exportCount ?? 0
+   182→  const exportAvgMs = engineStats && exportCount > 0 && engineStats.totalExportTimeMs > 0
+   183→    ? engineStats.totalExportTimeMs / exportCount
+   184→    : null
+   185→
+   186→  // KPI: "Audio Processed" replaces the fabricated "Minutes Saved" metric.
+   187→  // `summary.totalMinutes` is the real sum of every render's audio-file
+   188→  // duration in seconds / 60 — derived entirely from renderHistory.
+   189→  const totalAudioMinutes = summary.totalMinutes
+   190→
+   191→  const handleClearAnalytics = async () => {
+   192→    if (typeof window !== 'undefined') {
+   193→      const ok = window.confirm(
+   194→        'Clear all persisted analytics?\n\n• IndexedDB engine stats + per-render telemetry + QC history + export history + activity log will all be wiped.\n• In-memory render history will also be cleared.\n\nThis cannot be undone.',
+   195→      )
+   196→      if (!ok) return
+   197→    }
+   198→    await clearAllAnalytics()
+   199→    clearRenderHistory()
+   200→    setAll(null)
+   201→    setStatsVersion((v) => v + 1)
+   202→  }
+   203→
+   204→  return (
+   205→    <div className="space-y-4">
+   206→      {/* Render History */}
+   207→      <RenderHistory />
+   208→
+   209→      {/* KPI cards — every value comes from real persisted data */}
+   210→      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+   211→        <KpiCard
+   212→          icon={<Music className="w-4 h-4" />}
+   213→          label="Renders (30d)"
+   214→          value={String(summary.daily.reduce((a, b) => a + b.renders, 0))}
+   215→          trend={formatTrendPct(summary.trend.rendersDeltaPct)}
+   216→          trendUp={summary.trend.rendersDeltaPct === null ? null : summary.trend.rendersDeltaPct >= 0}
+   217→          color="#AAFF00"
+   218→        />
+   219→        <KpiCard
+   220→          icon={<Clock className="w-4 h-4" />}
+   221→          label="Audio Processed"
+   222→          value={hasRenders ? `${totalAudioMinutes.toFixed(1)}m` : '—'}
+   223→          trend={`real · ${summary.totalRenders} renders`}
+   224→          trendUp={null}
+   225→          color="#00D4FF"
+   226→        />
+   227→        <KpiCard
+   228→          icon={<BarChart3 className="w-4 h-4" />}
+   229→          label="Avg RAIN Score"
+   230→          value={hasRenders ? summary.avgScore.toFixed(1) : '—'}
+   231→          trend={formatTrendScore(summary.trend.scoreDelta)}
+   232→          trendUp={summary.trend.scoreDelta === null ? null : summary.trend.scoreDelta >= 0}
+   233→          color="#8B5CF6"
+   234→        />
+   235→        <KpiCard
+   236→          icon={<HardDrive className="w-4 h-4" />}
+   237→          label="Storage Used"
+   238→          value={hasRenders ? formatMb(summary.totalStorageMb) : '—'}
+   239→          trend={`${fileSampleRate / 1000}k · ${fileBitDepth}-bit · ${fileChannels}ch`}
+   240→          trendUp={null}
+   241→          color="#F97316"
+   242→        />
+   243→      </div>
+   244→
+   245→      {/* Empty-state banner */}
+   246→      {!hasRenders && (
+   247→        <div className="rain-panel rounded-lg p-6 text-center">
+   248→          <BarChart3 className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
+   249→          <div className="text-sm font-semibold mb-1">No renders yet</div>
+   250→          <div className="text-xs text-muted-foreground">
+   251→            Run your first master to populate analytics. Every chart here derives
+   252→            from your real render history — no demo data is ever shown.
+   253→          </div>
+   254→        </div>
+   255→      )}
+   256→
+   257→      {/* Daily activity chart — real per-day counts from renderHistory */}
+   258→      <div className="rain-panel rounded-lg p-4">
+   259→        <div className="flex items-center justify-between mb-3">
+   260→          <div>
+   261→            <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-0.5">
+   262→              Render Activity · last 30 days
+   263→            </div>
+   264→            <div className="text-sm font-semibold">Daily renders with RAIN Score trend</div>
+   265→          </div>
+   266→          <TrendingUp className="w-4 h-4 text-rain-accent" />
+   267→        </div>
+   268→        {hasRenders ? (
+   269→          <DailyActivityChart
+   270→            days={summary.daily}
+   271→            maxRenders={Math.max(1, ...summary.daily.map((d) => d.renders))}
+   272→          />
+   273→        ) : (
+   274→          <div className="h-40 flex items-center justify-center text-[10px] font-mono text-muted-foreground">
+   275→            No renders in the last 30 days
+   276→          </div>
+   277→        )}
+   278→      </div>
+   279→
+   280→      <div className="grid lg:grid-cols-2 gap-4">
+   281→        {/* RAIN Score history — real per-render series */}
+   282→        <div className="rain-panel rounded-lg p-4">
+   283→          <div className="flex items-center justify-between mb-3">
+   284→            <div className="text-sm font-semibold">RAIN Score History</div>
+   285→            <div className="text-[9px] font-mono text-muted-foreground">
+   286→              {summary.scoreHistory.length} renders
+   287→            </div>
+   288→          </div>
+   289→          {summary.scoreHistory.length >= 2 ? (
+   290→            <ScoreHistoryChart entries={summary.scoreHistory} />
+   291→          ) : (
+   292→            <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   293→              Run more masters to see history
+   294→            </div>
+   295→          )}
+   296→        </div>
+   297→
+   298→        {/* Platform distribution — real counts */}
+   299→        <div className="rain-panel rounded-lg p-4">
+   300→          <div className="flex items-center justify-between mb-3">
+   301→            <div className="text-sm font-semibold">Platform Distribution</div>
+   302→            <div className="text-[9px] font-mono text-muted-foreground">
+   303→              {summary.platformBreakdown.length} platforms
+   304→            </div>
+   305→          </div>
+   306→          {summary.platformBreakdown.length > 0 ? (
+   307→            <div className="space-y-2">
+   308→              {summary.platformBreakdown.map((p) => (
+   309→                <PlatformRow key={p.platform} entry={p} />
+   310→              ))}
+   311→            </div>
+   312→          ) : (
+   313→            <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground">
+   314→              No data — render a master to populate platform breakdown
+   315→            </div>
+   316→          )}
+   317→        </div>
+   318→      </div>
+   319→
+   320→      {/* Per-platform breakdown table */}
+   321→      {hasRenders && summary.platformBreakdown.length > 0 && (
+   322→        <div className="rain-panel rounded-lg p-4">
+   323→          <div className="text-sm font-semibold mb-3">Per-Platform Breakdown</div>
+   324→          <div className="overflow-x-auto max-h-80 overflow-y-auto">
+   325→            <table className="w-full text-[11px] font-mono">
+   326→              <thead className="text-[9px] uppercase tracking-wider text-muted-foreground sticky top-0 bg-rain-surface-2/95 backdrop-blur">
+   327→                <tr>
+   328→                  <th className="text-left p-2">Platform</th>
+   329→                  <th className="text-right p-2">Renders</th>
+   330→                  <th className="text-right p-2">Avg Score</th>
+   331→                  <th className="text-right p-2">Avg LUFS Δ</th>
+   332→                  <th className="text-right p-2">Share</th>
+   333→                </tr>
+   334→              </thead>
+   335→              <tbody>
+   336→                {summary.platformBreakdown.map((p) => {
+   337→                  const targetLufs = PLATFORM_TARGETS.find((t) => t.slug === p.platform)?.targetLufs ?? null
+   338→                  return (
+   339→                    <tr key={p.platform} className="border-t border-rain-border/40">
+   340→                      <td className="p-2 flex items-center gap-2">
+   341→                        <span
+   342→                          className="w-2 h-2 rounded-full"
+   343→                          style={{ background: platformColor(p.platform) }}
+   344→                          aria-hidden
+   345→                        />
+   346→                        <span className="text-foreground">{platformLabel(p.platform)}</span>
+   347→                        {targetLufs !== null && (
+   348→                          <span className="text-muted-foreground/60">({targetLufs} LUFS)</span>
+   349→                        )}
+   350→                      </td>
+   351→                      <td className="text-right p-2 text-foreground">{p.count}</td>
+   352→                      <td className="text-right p-2 text-rain-accent">{p.avgScore.toFixed(1)}</td>
+   353→                      <td
+   354→                        className="text-right p-2"
+   355→                        style={{
+   356→                          color: Math.abs(p.avgLufsDelta) < 1 ? '#AAFF00' : Math.abs(p.avgLufsDelta) < 2 ? '#F97316' : '#EF4444',
+   357→                        }}
+   358→                      >
+   359→                        {p.avgLufsDelta >= 0 ? '+' : ''}{p.avgLufsDelta.toFixed(2)} LU
+   360→                      </td>
+   361→                      <td className="text-right p-2 text-muted-foreground">{p.pct.toFixed(0)}%</td>
+   362→                    </tr>
+   363→                  )
+   364→                })}
+   365→              </tbody>
+   366→            </table>
+   367→          </div>
+   368→        </div>
+   369→      )}
+   370→
+   371→      {/* Engine Utilization — REAL timings from IndexedDB */}
+   372→      <div className="rain-panel rounded-lg p-4">
+   373→        <div className="flex items-center gap-2 mb-3">
+   374→          <Zap className="w-4 h-4 text-rain-accent" />
+   375→          <div className="text-sm font-semibold">Engine Utilization</div>
+   376→          <div className="ml-auto text-[9px] font-mono text-muted-foreground">
+   377→            persisted · IndexedDB
+   378→          </div>
+   379→        </div>
+   380→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+   381→          <EngineMetric
+   382→            label="DSP avg"
+   383→            value={dspAvgMs !== null ? formatMs(dspAvgMs) : '—'}
+   384→            sub={engineStats && engineStats.totalRenders > 0 ? `${engineStats.totalRenders} renders` : 'no renders yet'}
+   385→          />
+   386→          <EngineMetric
+   387→            label="AI avg"
+   388→            value={aiAvgMs !== null ? formatMs(aiAvgMs) : '—'}
+   389→            sub={aiCount > 0 ? `${aiCount} queries · ${(engineStats?.totalAiTimeMs ?? 0 / 1000).toFixed(1)}s total` : 'no AI calls yet'}
+   390→          />
+   391→          <EngineMetric
+   392→            label="Export avg"
+   393→            value={exportAvgMs !== null ? formatMs(exportAvgMs) : '—'}
+   394→            sub={exportCount > 0 ? `${exportCount} exports · ${formatBytes(engineStats?.totalExportBytes ?? 0)} total` : 'no exports yet'}
+   395→          />
+   396→          <EngineMetric
+   397→            label="Engine mode"
+   398→            value="CPU"
+   399→            sub="WebAudio · no GPU"
+   400→          />
+   401→        </div>
+   402→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 pt-3 border-t border-rain-border/30">
+   403→          <EngineMetric
+   404→            label="Memory"
+   405→            value={summary.memoryMb !== null ? formatMb(summary.memoryMb) : 'N/A'}
+   406→            sub={summary.memoryMb !== null ? 'usedJSHeapSize' : 'not exposed'}
+   407→          />
+   408→          <EngineMetric
+   409→            label="Total DSP"
+   410→            value={engineStats ? formatMs(engineStats.totalDspTimeMs) : '—'}
+   411→            sub="cumulative"
+   412→          />
+   413→          <EngineMetric
+   414→            label="First render"
+   415→            value={engineStats?.firstRenderAt ? new Date(engineStats.firstRenderAt).toLocaleDateString() : '—'}
+   416→            sub={engineStats?.firstRenderAt ? new Date(engineStats.firstRenderAt).toLocaleTimeString() : 'never'}
+   417→          />
+   418→          <EngineMetric
+   419→            label="Last render"
+   420→            value={engineStats?.lastRenderAt ? new Date(engineStats.lastRenderAt).toLocaleDateString() : '—'}
+   421→            sub={engineStats?.lastRenderAt ? new Date(engineStats.lastRenderAt).toLocaleTimeString() : 'never'}
+   422→          />
+   423→        </div>
+   424→      </div>
+   425→
+   426→      {/* Per-stage DSP time — real averages from per-render telemetry */}
+   427→      <div className="rain-panel rounded-lg p-4">
+   428→        <div className="flex items-center justify-between mb-3">
+   429→          <div>
+   430→            <div className="text-sm font-semibold">Per-Stage DSP Time</div>
+   431→            <div className="text-[10px] font-mono text-muted-foreground">
+   432→              Averaged across {stageAgg.sampleCount} persisted render{stageAgg.sampleCount === 1 ? '' : 's'}
+   433→            </div>
+   434→          </div>
+   435→          <Clock className="w-4 h-4 text-rain-accent" />
+   436→        </div>
+   437→        {hasPersistedRenders ? (
+   438→          <StageTimingChart averages={stageAgg.averages} />
+   439→        ) : (
+   440→          <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   441→            No persisted renders yet — run a master to populate per-stage timings
+   442→          </div>
+   443→        )}
+   444→      </div>
+   445→
+   446→      {/* QC history — real pass / warn / fail rates from IndexedDB */}
+   447→      <div className="grid lg:grid-cols-2 gap-4">
+   448→        <div className="rain-panel rounded-lg p-4">
+   449→          <div className="flex items-center justify-between mb-3">
+   450→            <div>
+   451→              <div className="text-sm font-semibold">QC Pass Rate</div>
+   452→              <div className="text-[10px] font-mono text-muted-foreground">
+   453→                {qcAgg.total} checks across {all?.qc?.length ?? 0} render{((all?.qc?.length ?? 0) === 1) ? '' : 's'}
+   454→              </div>
+   455→            </div>
+   456→            <History className="w-4 h-4 text-rain-accent" />
+   457→          </div>
+   458→          {hasQC ? (
+   459→            <QCChart
+   460→              passRate={qcAgg.passRate}
+   461→              warnRate={qcAgg.warnRate}
+   462→              failRate={qcAgg.failRate}
+   463→              topFailures={qcAgg.topFailures}
+   464→            />
+   465→          ) : (
+   466→            <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   467→              No QC history yet — run a master to populate QC pass/fail rates
+   468→            </div>
+   469→          )}
+   470→        </div>
+   471→
+   472→        {/* Export format distribution — real per-format counts + bytes */}
+   473→        <div className="rain-panel rounded-lg p-4">
+   474→          <div className="flex items-center justify-between mb-3">
+   475→            <div>
+   476→              <div className="text-sm font-semibold">Export Format Distribution</div>
+   477→              <div className="text-[10px] font-mono text-muted-foreground">
+   478→                {exportAgg.total} exports · {formatBytes(exportAgg.totalBytes)} total
+   479→              </div>
+   480→            </div>
+   481→            <Boxes className="w-4 h-4 text-rain-accent" />
+   482→          </div>
+   483→          {hasExports ? (
+   484→            <ExportChart byFormat={exportAgg.byFormat} avgMs={exportAgg.avgMs} />
+   485→          ) : (
+   486→            <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   487→              No exports yet — export a master to populate format distribution
+   488→            </div>
+   489→          )}
+   490→        </div>
+   491→      </div>
+   492→
+   493→      {/* Macro Evolution — session-only macroHistory (honestly labelled) */}
+   494→      <div className="rain-panel rounded-lg p-4">
+   495→        <div className="flex items-center justify-between mb-3">
+   496→          <div>
+   497→            <div className="text-sm font-semibold">Macro Evolution</div>
+   498→            <div className="text-[10px] font-mono text-muted-foreground">
+   499→              Current session · {macroEvolution.length} state{macroEvolution.length === 1 ? '' : 's'} captured · resets on reload
+   500→            </div>
+   501→          </div>
+   502→          <Activity className="w-4 h-4 text-rain-accent" />
+   503→        </div>
+   504→        {hasMacroHistory ? (
+   505→          <MacroEvolutionChart points={macroEvolution} />
+   506→        ) : (
+   507→          <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   508→            Adjust macros in the Mastering tab to see evolution (undo/redo history)
+   509→          </div>
+   510→        )}
+   511→      </div>
+   512→
+   513→      {/* User Activity Log — real per-event records from IndexedDB */}
+   514→      <div className="rain-panel rounded-lg p-4">
+   515→        <div className="flex items-center justify-between mb-3">
+   516→          <div>
+   517→            <div className="text-sm font-semibold">User Activity Log</div>
+   518→            <div className="text-[10px] font-mono text-muted-foreground">
+   519→              {activityAgg.total} event{activityAgg.total === 1 ? '' : 's'} persisted · {activityAgg.byType.length} type{activityAgg.byType.length === 1 ? '' : 's'}
+   520→            </div>
+   521→          </div>
+   522→          <Activity className="w-4 h-4 text-rain-accent" />
+   523→        </div>
+   524→        {hasActivity ? (
+   525→          <ActivityPanel
+   526→            byType={activityAgg.byType}
+   527→            recent={activityAgg.recent}
+   528→            engineStats={engineStats}
+   529→          />
+   530→        ) : (
+   531→          <div className="h-32 flex items-center justify-center text-[10px] font-mono text-muted-foreground text-center">
+   532→            No user activity recorded yet — undo/redo, run repair modules, or query the AI Co-Master to populate
+   533→          </div>
+   534→        )}
+   535→      </div>
+   536→
+   537→      {/* Clear Analytics */}
+   538→      <div className="rain-panel rounded-lg p-3 flex items-center justify-between">
+   539→        <div className="text-[10px] text-muted-foreground">
+   540→          <span className="font-semibold text-foreground">Reset analytics:</span>{' '}
+   541→          clears IndexedDB engine stats, per-render telemetry, QC history, export history, activity log, and in-memory render history.
+   542→        </div>
+   543→        <button
+   544→          onClick={handleClearAnalytics}
+   545→          className="flex items-center gap-1.5 text-[10px] font-mono px-3 py-1.5 rounded border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:border-red-500/60 transition-colors"
+   546→          aria-label="Clear analytics data"
+   547→        >
+   548→          <Trash2 className="w-3 h-3" />
+   549→          Clear Analytics
+   550→        </button>
+   551→      </div>
+   552→    </div>
+   553→  )
+   554→}
+   555→
+   556→// ---------------------------------------------------------------------------
+   557→// Daily activity chart — bars sized by real per-day render count
+   558→// ---------------------------------------------------------------------------
+   559→
+   560→function DailyActivityChart({
+   561→  days,
+   562→  maxRenders,
+   563→}: {
+   564→  days: Array<{ date: string; renders: number; score: number; storageMb: number }>
+   565→  maxRenders: number
+   566→}) {
+   567→  return (
+   568→    <>
+   569→      <div className="h-40 flex items-end gap-1">
+   570→        {days.map((d, i) => {
+   571→          const h = maxRenders > 0 ? (d.renders / maxRenders) * 100 : 0
+   572→          const hasRenders = d.renders > 0
+   573→          return (
+   574→            <div key={i} className="flex-1 group relative">
+   575→              <div
+   576→                className="rounded-t transition-all"
+   577→                style={{
+   578→                  height: `${hasRenders ? Math.max(h, 4) : 2}%`,
+   579→                  background: hasRenders
+   580→                    ? 'linear-gradient(180deg, #AAFF00 0%, #84CC16 100%)'
+   581→                    : 'rgba(255,255,255,0.05)',
+   582→                  minHeight: '2px',
+   583→                  opacity: hasRenders ? 0.85 : 1,
+   584→                }}
+   585→              />
+   586→              <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block">
+   587→                <div className="bg-rain-surface-3 border border-rain-border rounded p-2 text-[10px] whitespace-nowrap shadow-xl">
+   588→                  <div className="font-mono text-muted-foreground">{d.date}</div>
+   589→                  <div className="font-mono text-rain-accent">
+   590→                    {d.renders} renders · score {d.score.toFixed(1)}
+   591→                  </div>
+   592→                  <div className="font-mono text-muted-foreground/80">
+   593→                    {formatMb(d.storageMb)} cumulative
+   594→                  </div>
+   595→                </div>
+   596→              </div>
+   597→            </div>
+   598→          )
+   599→        })}
+   600→      </div>
+   601→      <div className="flex justify-between text-[9px] font-mono text-muted-foreground mt-2">
+   602→        <span>{days[0]?.date ?? ''}</span>
+   603→        <span>Today</span>
+   604→      </div>
+   605→    </>
+   606→  )
+   607→}
+   608→
+   609→// ---------------------------------------------------------------------------
+   610→// Score history chart — real per-render score line over time
+   611→// ---------------------------------------------------------------------------
+   612→
+   613→function ScoreHistoryChart({
+   614→  entries,
+   615→}: {
+   616→  entries: Array<{ timestamp: number; score: number; platform: string }>
+   617→}) {
+   618→  const W = 300
+   619→  const H = 120
+   620→  const PAD = 8
+   621→  const minScore = 50
+   622→  const maxScore = 100
+   623→
+   624→  if (entries.length < 2) return null
+   625→
+   626→  const xs = entries.map((_, i) =>
+   627→    PAD + (i / (entries.length - 1)) * (W - 2 * PAD),
+   628→  )
+   629→  const ys = entries.map((e) => {
+   630→    const clamped = Math.max(minScore, Math.min(maxScore, e.score))
+   631→    return H - PAD - ((clamped - minScore) / (maxScore - minScore)) * (H - 2 * PAD)
+   632→  })
+   633→
+   634→  const points = xs.map((x, i) => `${x.toFixed(2)},${ys[i].toFixed(2)}`).join(' ')
+   635→  const areaPoints = `${xs[0].toFixed(2)},${H - PAD} ${points} ${xs[xs.length - 1].toFixed(2)},${H - PAD}`
+   636→
+   637→  const refLine = (score: number) => {
+   638→    const clamped = Math.max(minScore, Math.min(maxScore, score))
+   639→    return H - PAD - ((clamped - minScore) / (maxScore - minScore)) * (H - 2 * PAD)
+   640→  }
+   641→
+   642→  return (
+   643→    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32" preserveAspectRatio="none">
+   644→      <defs>
+   645→        <linearGradient id="scoreFillReal" x1="0" y1="0" x2="0" y2="1">
+   646→          <stop offset="0%" stopColor="#AAFF00" stopOpacity="0.3" />
+   647→          <stop offset="100%" stopColor="#AAFF00" stopOpacity="0" />
+   648→        </linearGradient>
+   649→      </defs>
+   650→      <line x1={PAD} x2={W - PAD} y1={refLine(90)} y2={refLine(90)}
+   651→        stroke="#AAFF00" strokeOpacity="0.2" strokeDasharray="2 3" />
+   652→      <line x1={PAD} x2={W - PAD} y1={refLine(75)} y2={refLine(75)}
+   653→        stroke="#F97316" strokeOpacity="0.2" strokeDasharray="2 3" />
+   654→      <polygon points={areaPoints} fill="url(#scoreFillReal)" />
+   655→      <polyline points={points} fill="none" stroke="#AAFF00" strokeWidth="2" />
+   656→      {xs.map((x, i) => (
+   657→        <circle key={i} cx={x} cy={ys[i]} r="2" fill="#AAFF00" />
+   658→      ))}
+   659→    </svg>
+   660→  )
+   661→}
+   662→
+   663→// ---------------------------------------------------------------------------
+   664→// Platform distribution row
+   665→// ---------------------------------------------------------------------------
+   666→
+   667→function PlatformRow({ entry }: { entry: PlatformBreakdownEntry }) {
+   668→  const color = platformColor(entry.platform)
+   669→  return (
+   670→    <div>
+   671→      <div className="flex justify-between text-[10px] font-mono mb-0.5">
+   672→        <span className="text-muted-foreground">{platformLabel(entry.platform)}</span>
+   673→        <span style={{ color }}>
+   674→          {entry.pct.toFixed(0)}% · {entry.count}
+   675→        </span>
+   676→      </div>
+   677→      <div className="h-1.5 bg-rain-surface-3 rounded-full overflow-hidden">
+   678→        <div
+   679→          className="h-full rounded-full transition-all"
+   680→          style={{ width: `${entry.pct}%`, background: color }}
+   681→        />
+   682→      </div>
+   683→      <div className="flex justify-between text-[9px] font-mono text-muted-foreground/60 mt-0.5">
+   684→        <span>avg {entry.avgScore.toFixed(1)}</span>
+   685→        <span>
+   686→          Δ {entry.avgLufsDelta >= 0 ? '+' : ''}{entry.avgLufsDelta.toFixed(1)} LU
+   687→        </span>
+   688→      </div>
+   689→    </div>
+   690→  )
+   691→}
+   692→
+   693→// ---------------------------------------------------------------------------
+   694→// Per-stage DSP time chart — real averages from RenderTelemetryRecord[]
+   695→// ---------------------------------------------------------------------------
+   696→
+   697→function StageTimingChart({
+   698→  averages,
+   699→}: {
+   700→  averages: Array<{ id: number; name: string; avgMs: number; samples: number }>
+   701→}) {
+   702→  const maxMs = Math.max(1, ...averages.map((a) => a.avgMs))
+   703→  return (
+   704→    <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+   705→      {averages.map((a) => {
+   706→        const pct = (a.avgMs / maxMs) * 100
+   707→        return (
+   708→          <div key={a.id} className="flex items-center gap-2 text-[10px] font-mono">
+   709→            <div className="w-6 text-muted-foreground/70 text-right shrink-0">{a.id}</div>
+   710→            <div className="w-32 text-foreground/80 truncate" title={a.name}>{a.name}</div>
+   711→            <div className="flex-1 h-3 bg-rain-surface-3 rounded-sm overflow-hidden relative">
+   712→              <div
+   713→                className="h-full rounded-sm transition-all"
+   714→                style={{
+   715→                  width: `${Math.max(2, pct)}%`,
+   716→                  background: 'linear-gradient(90deg, #AAFF00 0%, #84CC16 100%)',
+   717→                }}
+   718→              />
+   719→            </div>
+   720→            <div className="w-16 text-right text-rain-accent shrink-0">
+   721→              {formatMs(a.avgMs)}
+   722→            </div>
+   723→          </div>
+   724→        )
+   725→      })}
+   726→    </div>
+   727→  )
+   728→}
+   729→
+   730→// ---------------------------------------------------------------------------
+   731→// QC chart — real pass/warn/fail rates + top failures
+   732→// ---------------------------------------------------------------------------
+   733→
+   734→function QCChart({
+   735→  passRate,
+   736→  warnRate,
+   737→  failRate,
+   738→  topFailures,
+   739→}: {
+   740→  passRate: number
+   741→  warnRate: number
+   742→  failRate: number
+   743→  topFailures: Array<{ id: string; fails: number; occurrences: number }>
+   744→}) {
+   745→  const fmtPct = (r: number) => `${(r * 100).toFixed(1)}%`
+   746→  return (
+   747→    <div className="space-y-3">
+   748→      {/* Horizontal stacked bar */}
+   749→      <div>
+   750→        <div className="flex h-3 rounded-sm overflow-hidden bg-rain-surface-3">
+   751→          <div style={{ width: `${passRate * 100}%`, background: '#AAFF00' }} title={`Pass ${fmtPct(passRate)}`} />
+   752→          <div style={{ width: `${warnRate * 100}%`, background: '#F59E0B' }} title={`Warn ${fmtPct(warnRate)}`} />
+   753→          <div style={{ width: `${failRate * 100}%`, background: '#EF4444' }} title={`Fail ${fmtPct(failRate)}`} />
+   754→        </div>
+   755→        <div className="flex justify-between text-[9px] font-mono mt-1">
+   756→          <span className="text-rain-accent">Pass {fmtPct(passRate)}</span>
+   757→          <span className="text-orange-400">Warn {fmtPct(warnRate)}</span>
+   758→          <span className="text-red-400">Fail {fmtPct(failRate)}</span>
+   759→        </div>
+   760→      </div>
+   761→      {/* Top failures list */}
+   762→      {topFailures.length > 0 && topFailures.some((f) => f.fails > 0) && (
+   763→        <div>
+   764→          <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-1">
+   765→            Most-failed checks
+   766→          </div>
+   767→          <div className="space-y-0.5">
+   768→            {topFailures
+   769→              .filter((f) => f.fails > 0)
+   770→              .map((f) => (
+   771→                <div key={f.id} className="flex justify-between text-[10px] font-mono">
+   772→                  <span className="text-foreground/80 truncate" title={f.id}>{f.id.replace(/^qc_/, '').replace(/_/g, ' ')}</span>
+   773→                  <span className="text-red-400 shrink-0 ml-2">
+   774→                    {f.fails}/{f.occurrences} fail
+   775→                  </span>
+   776→                </div>
+   777→              ))}
+   778→          </div>
+   779→        </div>
+   780→      )}
+   781→    </div>
+   782→  )
+   783→}
+   784→
+   785→// ---------------------------------------------------------------------------
+   786→// Export format distribution chart
+   787→// ---------------------------------------------------------------------------
+   788→
+   789→function ExportChart({
+   790→  byFormat,
+   791→  avgMs,
+   792→}: {
+   793→  byFormat: Array<{ format: string; count: number; bytes: number; pct: number }>
+   794→  avgMs: number
+   795→}) {
+   796→  const maxCount = Math.max(1, ...byFormat.map((b) => b.count))
+   797→  return (
+   798→    <div className="space-y-2">
+   799→      {byFormat.map((f) => {
+   800→        const pct = (f.count / maxCount) * 100
+   801→        return (
+   802→          <div key={f.format}>
+   803→            <div className="flex justify-between text-[10px] font-mono mb-0.5">
+   804→              <span className="text-foreground/80">{f.format}</span>
+   805→              <span className="text-rain-accent">
+   806→                {f.count} · {formatBytes(f.bytes)} · {f.pct.toFixed(0)}%
+   807→              </span>
+   808→            </div>
+   809→            <div className="h-1.5 bg-rain-surface-3 rounded-full overflow-hidden">
+   810→              <div
+   811→                className="h-full rounded-full transition-all"
+   812→                style={{ width: `${Math.max(2, pct)}%`, background: '#00D4FF' }}
+   813→              />
+   814→            </div>
+   815→          </div>
+   816→        )
+   817→      })}
+   818→      <div className="text-[9px] font-mono text-muted-foreground/70 pt-1 border-t border-rain-border/30 mt-2">
+   819→        Avg export time: {formatMs(avgMs)}
+   820→      </div>
+   821→    </div>
+   822→  )
+   823→}
+   824→
+   825→// ---------------------------------------------------------------------------
+   826→// Macro Evolution chart — 7-line sparkline over macroHistory indices
+   827→// ---------------------------------------------------------------------------
+   828→
+   829→function MacroEvolutionChart({
+   830→  points,
+   831→}: {
+   832→  points: Array<{ index: number; macros: Record<MacroKey, number> }>
+   833→}) {
+   834→  const W = 600
+   835→  const H = 140
+   836→  const PAD = 24
+   837→  const MIN = 0
+   838→  const MAX = 10
+   839→  if (points.length < 2) return null
+   840→
+   841→  const xFor = (i: number) => PAD + (i / (points.length - 1)) * (W - 2 * PAD)
+   842→  const yFor = (v: number) => H - PAD - ((v - MIN) / (MAX - MIN)) * (H - 2 * PAD)
+   843→
+   844→  return (
+   845→    <div>
+   846→      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-32" preserveAspectRatio="none">
+   847→        {/* gridlines at 0, 5, 10 */}
+   848→        {[0, 5, 10].map((v) => (
+   849→          <line key={v} x1={PAD} x2={W - PAD} y1={yFor(v)} y2={yFor(v)}
+   850→            stroke="#ffffff" strokeOpacity="0.06" strokeWidth="1" />
+   851→        ))}
+   852→        {ALL_MACROS.map((key) => {
+   853→          const path = points
+   854→            .map((p, i) => `${xFor(i).toFixed(2)},${yFor(p.macros[key]).toFixed(2)}`)
+   855→            .join(' ')
+   856→          return (
+   857→            <polyline
+   858→              key={key}
+   859→              points={path}
+   860→              fill="none"
+   861→              stroke={MACRO_COLORS[key]}
+   862→              strokeWidth="1.5"
+   863→              strokeOpacity="0.85"
+   864→            />
+   865→          )
+   866→        })}
+   867→        {/* Latest-value markers */}
+   868→        {ALL_MACROS.map((key) => {
+   869→          const last = points[points.length - 1]
+   870→          return (
+   871→            <circle
+   872→              key={`dot-${key}`}
+   873→              cx={xFor(points.length - 1)}
+   874→              cy={yFor(last.macros[key])}
+   875→              r="2.5"
+   876→              fill={MACRO_COLORS[key]}
+   877→            />
+   878→          )
+   879→        })}
+   880→      </svg>
+   881→      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] font-mono mt-1">
+   882→        {ALL_MACROS.map((key) => (
+   883→          <span key={key} className="flex items-center gap-1">
+   884→            <span className="w-2 h-2 rounded-full" style={{ background: MACRO_COLORS[key] }} aria-hidden />
+   885→            <span className="text-muted-foreground">{MACRO_LABELS[key]}</span>
+   886→          </span>
+   887→        ))}
+   888→      </div>
+   889→      <div className="text-[9px] font-mono text-muted-foreground/60 mt-1">
+   890→        Macro history is in-memory (Zustand store) — it tracks every distinct
+   891→        macro state the UI displayed, including undos/redos and AI suggestions.
+   892→        Not persisted across browser reloads.
+   893→      </div>
+   894→    </div>
+   895→  )
+   896→}
+   897→
+   898→// ---------------------------------------------------------------------------
+   899→// Activity log panel — per-type counts + recent events
+   900→// ---------------------------------------------------------------------------
+   901→
+   902→function ActivityPanel({
+   903→  byType,
+   904→  recent,
+   905→  engineStats,
+   906→}: {
+   907→  byType: Array<{ type: string; count: number; lastAt: number | null }>
+   908→  recent: ActivityRecord[]
+   909→  engineStats: EngineStats | null
+   910→}) {
+   911→  return (
+   912→    <div className="grid sm:grid-cols-2 gap-4">
+   913→      {/* Per-type counts */}
+   914→      <div>
+   915→        <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
+   916→          Activity by type
+   917→        </div>
+   918→        <div className="space-y-1">
+   919→          {byType.map((t) => (
+   920→            <div key={t.type} className="flex justify-between text-[10px] font-mono">
+   921→              <span className="text-foreground/80">{activityTypeLabel(t.type)}</span>
+   922→              <span className="text-rain-accent">{t.count}</span>
+   923→            </div>
+   924→          ))}
+   925→          {byType.length === 0 && (
+   926→            <div className="text-[10px] font-mono text-muted-foreground/60">No events recorded</div>
+   927→          )}
+   928→        </div>
+   929→        {engineStats && (
+   930→          <div className="text-[9px] font-mono text-muted-foreground/60 mt-3 pt-2 border-t border-rain-border/30">
+   931→            Undo: {engineStats.undoCount} · Redo: {engineStats.redoCount} · Repair: {engineStats.repairCount} · AI: {engineStats.aiCallCount}
+   932→          </div>
+   933→        )}
+   934→      </div>
+   935→      {/* Recent events */}
+   936→      <div>
+   937→        <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-2">
+   938→          Recent events
+   939→        </div>
+   940→        <div className="space-y-1 max-h-48 overflow-y-auto">
+   941→          {recent.map((r) => (
+   942→            <div key={r.id} className="text-[10px] font-mono flex justify-between gap-2">
+   943→              <span className="text-foreground/80 truncate">
+   944→                {activityTypeLabel(r.type)}
+   945→                {r.details && 'moduleId' in r.details ? ` · ${String(r.details.moduleId)}` : ''}
+   946→              </span>
+   947→              <span className="text-muted-foreground/60 shrink-0">
+   948→                {new Date(r.timestamp).toLocaleTimeString()}
+   949→              </span>
+   950→            </div>
+   951→          ))}
+   952→        </div>
+   953→      </div>
+   954→    </div>
+   955→  )
+   956→}
+   957→
+   958→// ---------------------------------------------------------------------------
+   959→// Sub-components
+   960→// ---------------------------------------------------------------------------
+   961→
+   962→function KpiCard({
+   963→  icon,
+   964→  label,
+   965→  value,
+   966→  trend,
+   967→  trendUp,
+   968→  color,
+   969→}: {
+   970→  icon: React.ReactNode
+   971→  label: string
+   972→  value: string
+   973→  trend: string
+   974→  trendUp: boolean | null
+   975→  color: string
+   976→}) {
+   977→  return (
+   978→    <div className="rain-panel rounded-lg p-3">
+   979→      <div className="flex items-center justify-between mb-2">
+   980→        <div
+   981→          className="w-7 h-7 rounded-md flex items-center justify-center"
+   982→          style={{ color, background: `${color}15`, border: `1px solid ${color}40` }}
+   983→        >
+   984→          {icon}
+   985→        </div>
+   986→        {trendUp !== null && (
+   987→          <span
+   988→            className="text-[10px] font-mono flex items-center gap-0.5"
+   989→            style={{ color: trendUp ? '#AAFF00' : '#F97316' }}
+   990→          >
+   991→            {trendUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+   992→            {trend}
+   993→          </span>
+   994→        )}
+   995→        {trendUp === null && (
+   996→          <span className="text-[10px] font-mono text-muted-foreground">{trend}</span>
+   997→        )}
+   998→      </div>
+   999→      <div className="text-2xl font-bold font-mono tabular-nums">{value}</div>
+  1000→      <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</div>
+  1001→    </div>
+  1002→  )
+  1003→}
+  1004→
+  1005→function EngineMetric({ label, value, sub }: { label: string; value: string; sub: string }) {
+  1006→  return (
+  1007→    <div className="bg-rain-surface-2/60 rounded p-2">
+  1008→      <div className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground mb-0.5">
+  1009→        {label}
+  1010→      </div>
+  1011→      <div className="text-sm font-mono font-bold">{value}</div>
+  1012→      <div className="text-[9px] text-muted-foreground">{sub}</div>
+  1013→    </div>
+  1014→  )
+  1015→}
+  1016→

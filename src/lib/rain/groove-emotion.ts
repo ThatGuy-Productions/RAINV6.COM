@@ -22,7 +22,7 @@
  * analysis via real FFT (imported from dsp.ts).
  */
 
-import { fftInPlace, hannWindow } from './dsp'
+import { fftInPlace } from './dsp'
 import type { ProcessingParams, SpectralFeatures } from './types'
 
 // ---------------------------------------------------------------------------
@@ -171,7 +171,6 @@ const BPM_MAX = 220
 /** Inter-onset interval (IOI) thresholds for groove classification. */
 const SWING_THRESHOLD = 1.35 // ratio > 1.35 = swing feel
 const SHUFFLE_THRESHOLD = 1.65 // ratio > 1.65 = shuffle/triplet feel
-const HALF_TIME_THRESHOLD = 0.75 // ratio < 0.75 from expected = half-time
 
 /** Section detection thresholds. */
 const SECTION_MIN_BARS = 4 // minimum bars per section
@@ -186,7 +185,7 @@ const TRANSIENT_CHANGE_THRESHOLD = 0.5 // factor change in transient density
  * Compute the spectral flux onset detection function over a mono channel.
  * Returns an onset strength envelope at the STFT hop rate.
  */
-function computeOnsetEnvelope(samples: Float32Array, sampleRate: number): Float32Array {
+function computeOnsetEnvelope(samples: Float32Array, _sampleRate: number): Float32Array {
   const len = samples.length
   const numFrames = Math.max(1, Math.floor((len - FFT_SIZE) / HOP_SIZE) + 1)
   const onsetEnv = new Float32Array(numFrames)
@@ -606,7 +605,7 @@ export function classifyBeatPosition(
   onsetTimeS: number,
   barStartS: number,
   barDurationS: number,
-  bpm: number,
+  _bpm: number,
   grooveType: GrooveType,
 ): BeatPosition {
   const relativeS = onsetTimeS - barStartS
@@ -864,7 +863,7 @@ function classifySection(
   meanEnergy: number,
   meanTransient: number,
   energyTrend: number,
-  energyRange: number,
+  _energyRange: number,
   maxEnergy: number,
 ): SectionType {
   const isFirst = index === 0
@@ -921,7 +920,6 @@ export function estimateValenceArousal(
   rmsDb: number,
 ): { valence: number; arousal: number; harmonicity: number; spectralCentroidRatio: number } {
   const left = channels[0]
-  const right = channels[1] ?? channels[0]
 
   // --- Harmonic-to-noise ratio (HNR) estimate ---
   // Simplified: ratio of autocorrelation peak to total energy
@@ -1115,7 +1113,7 @@ export function computeEmotionTemper(
  */
 export function buildTensionArc(
   barEnergies: Array<{ startS: number; energyDb: number; transientCount: number }>,
-  bpm: number,
+  _bpm: number,
 ): { tensionArc: Array<{ timeS: number; tension: number; label: string }>; hasDrop: boolean; dropPositionS: number | null } {
   if (barEnergies.length < 4) {
     return { tensionArc: [], hasDrop: false, dropPositionS: null }
@@ -1130,8 +1128,6 @@ export function buildTensionArc(
 
   const maxTransient = Math.max(...transientValues)
   const minTransient = Math.min(...transientValues)
-
-  const barDurationS = (60 / bpm) * 4
 
   // Compute energy derivative (2-bar window)
   const energyDerivative: number[] = []
@@ -1432,7 +1428,6 @@ export function estimateEmotion(
   const rmsDb = 20 * Math.log10(Math.max(rmsLin, 1e-7))
 
   // Estimate transient density from onset envelope
-  const hopRate = sampleRate / HOP_SIZE
   const onsetEnv = computeOnsetEnvelope(left, sampleRate)
   const threshold = computeAdaptiveThreshold(onsetEnv)
   let transientCount = 0

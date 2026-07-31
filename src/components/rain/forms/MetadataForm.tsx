@@ -127,6 +127,7 @@ export function MetadataForm() {
   const metadata = useSessionStore((s) => s.metadata)
   const setMetadata = useSessionStore((s) => s.setMetadata)
   const reset = useSessionStore((s) => s.reset)
+  const sessionId = useSessionStore((s) => s.sessionId)
 
   const [resetOpen, setResetOpen] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
@@ -269,9 +270,9 @@ export function MetadataForm() {
 
   // ---- Toolbar actions ----
   const handleGenerateIds = React.useCallback(() => {
-    update({ isrc: generateIsrc(), upc: generateUpc() })
+    update({ isrc: generateIsrc(sessionId || 'default'), upc: generateUpc(sessionId || 'default') })
     notifyInfo('Identifiers generated', 'ISRC + UPC populated with valid check digits.')
-  }, [update])
+  }, [update, sessionId])
 
   const handleSave = React.useCallback(() => {
     setSaving(true)
@@ -627,7 +628,7 @@ export function MetadataForm() {
                   suffix={
                     <button
                       type="button"
-                      onClick={() => update({ isrc: generateIsrc() })}
+                      onClick={() => update({ isrc: generateIsrc(sessionId || 'default') })}
                       className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
                     >
                       <Sparkles className="w-3 h-3 inline mr-1" />Gen
@@ -655,7 +656,7 @@ export function MetadataForm() {
                   suffix={
                     <button
                       type="button"
-                      onClick={() => update({ upc: generateUpc() })}
+                      onClick={() => update({ upc: generateUpc(sessionId || 'default') })}
                       className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
                     >
                       <Sparkles className="w-3 h-3 inline mr-1" />Gen

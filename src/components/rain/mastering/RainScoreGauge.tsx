@@ -1,5 +1,6 @@
 'use client'
 
+import { memo, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { TrendingDown, TrendingUp, Minus } from 'lucide-react'
 import type { RainScore } from '@/lib/rain/types'
@@ -39,20 +40,29 @@ function sparklinePath(scores: number[], w: number, h: number): string {
     .join(' ')
 }
 
-export function RainScoreGauge({ score, size = 180 }: RainScoreGaugeProps) {
+export const RainScoreGauge = memo(function RainScoreGauge({ score, size = 180 }: RainScoreGaugeProps) {
   const overall = score?.overall ?? 0
   const radius = size / 2 - 16
   const circumference = 2 * Math.PI * radius
   const dashOffset = circumference - (overall / 100) * circumference * 0.75
 
+  const sparkW = 120
+  const sparkH = 28
+
   // Score history sparkline — pulls from renderHistory in the store.
   const renderHistory = useSessionStore((s) => s.renderHistory)
-  const scoreHistory = renderHistory.map((r) => r.rainScore).slice(0, 12).reverse()
+  const scoreHistory = useMemo(
+    () => renderHistory.map((r) => r.rainScore).slice(0, 12).reverse(),
+    [renderHistory],
+  )
   const prevScore = scoreHistory.length >= 2 ? scoreHistory[scoreHistory.length - 2] : null
   const delta = prevScore !== null ? overall - prevScore : null
 
-  const sparkW = 120
-  const sparkH = 28
+  // Memoize the sparkline path computation to avoid recalculating on every render
+  const sparkPath = useMemo(
+    () => sparklinePath(scoreHistory, sparkW, sparkH),
+    [scoreHistory, sparkW, sparkH],
+  )
 
   return (
     <div className="rain-panel rounded-lg p-4 relative overflow-hidden">
@@ -143,6 +153,9 @@ export function RainScoreGauge({ score, size = 180 }: RainScoreGaugeProps) {
               transition={{ duration: 0.5, ease: 'easeOut' }}
               className="text-5xl font-bold rain-gradient-text-lime font-mono tabular-nums"
               style={{ color: scoreColor(overall) }}
+              role="status"
+              aria-live="polite"
+              aria-label={`RAIN Score: ${overall} out of 100`}
             >
               {overall}
             </motion.div>
@@ -179,13 +192,13 @@ export function RainScoreGauge({ score, size = 180 }: RainScoreGaugeProps) {
             })()}
             {/* Area fill */}
             <path
-              d={`${sparklinePath(scoreHistory, sparkW, sparkH)} L ${sparkW} ${sparkH} L 0 ${sparkH} Z`}
+              d={`${sparkPath} L ${sparkW} ${sparkH} L 0 ${sparkH} Z`}
               fill="url(#sparkFill)"
               opacity="0.3"
             />
             {/* Line */}
             <path
-              d={sparklinePath(scoreHistory, sparkW, sparkH)}
+              d={sparkPath}
               fill="none"
               stroke="#AAFF00"
               strokeWidth="1.5"
@@ -259,4 +272,4 @@ export function RainScoreGauge({ score, size = 180 }: RainScoreGaugeProps) {
       </div>
     </div>
   )
-}
+})

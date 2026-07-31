@@ -1,0 +1,2002 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→/**
+     4→     4→ * RAIN V6 — Web Audio Engine
+     5→     5→ *
+     6→     6→ * Single class owning the AudioContext, source buffers, and the real-time
+     7→     7→ * processing graph. Implements the dual-path design:
+     8→     8→ *
+     9→     9→ *   Preview path — Web Audio API native nodes, 32-bit float, low-latency
+    10→    10→ *   Render path   — OfflineAudioContext + custom DSP, deterministic
+    11→    11→ *
+    12→    12→ * Audio never leaves the device on the free path. The class is intentionally
+    13→    13→ * singleton — one AudioContext per page lifetime.
+    14→    14→ */
+    15→    15→
+    16→    16→import type { AudioAnalysis, MacroValues, ProcessingParams, ProvenanceCertificate, StemKey } from './types'
+    17→    17→import {
+    18→    18→  analyzeAudio,
+    19→    19→  applyBiquad,
+    20→    20→  applyLimiter,
+    21→    21→  applyTruePeakLimiter,
+    22→    22→  applySaturation,
+    23→    23→  applyMacrosToParams,
+    24→    24→  computeCorrelation,
+    25→    25→  computeLufs,
+    26→    26→  computeRainScore,
+    27→    27→  computeTruePeak,
+    28→    28→  designBiquad,
+    29→    29→  midSideDecode,
+    30→    30→  midSideEncode,
+    31→    31→} from './dsp'
+    32→    32→import { generateHeuristicParams } from './heuristics'
+    33→    33→import { runRepair, type RepairModuleId, type RepairResult } from './repair'
+    34→    34→// P3-PIPELINE-89: Stage 9 (SAIL v2) reads per-stem gain faders + mute/solo
+    35→    35→// state from the session store. Zustand's getState() is safe to call from
+    36→    36→// outside React components (it's just a function returning the current state).
+    37→    37→import { useSessionStore } from './store'
+    38→    38→// P3-TPDF-MP3: real LAME MP3 encoder (pure-JS port) for Stage 15 spec
+    39→    39→// compliance ("320 kbps MP3 with TPDF dither"). Client-only — audio-engine.ts
+    40→    40→// is marked 'use client' so the import is only evaluated in the browser.
+    41→    41→import { Mp3Encoder } from '@breezystack/lamejs'
+    42→    42→
+    43→    43→type Listener = (state: AudioEngineState) => void
+    44→    44→
+    45→    45→export interface AudioEngineState {
+    46→    46→  isPlaying: boolean
+    47→    47→  position: number
+    48→    48→  duration: number
+    49→    49→  volume: number
+    50→    50→  previewMode: 'A' | 'B' // A = original, B = processed
+    51→    51→  spectrum: Uint8Array
+    52→    52→  waveform: Uint8Array
+    53→    53→  inputLevels: { left: number; right: number }
+    54→    54→  outputLevels: { left: number; right: number }
+    55→    55→  /**
+    56→    56→   * P2-METERS: real-time stereo correlation (Pearson) computed each tick()
+    57→    57→   * over a 2048-sample window of the playing buffer's L/R channels at the
+    58→    58→   * current playback position. Null when no buffer is loaded. Updates at the
+    59→    59→   * same rate as the spectrum (~30 Hz via requestAnimationFrame).
+    60→    60→   */
+    61→    61→  correlation: number | null
+    62→    62→}
+    63→    63→
+    64→    64→/**
+    65→    65→ * P2-METERS — Engine telemetry snapshot.
+    66→    66→ * Every field is a REAL measurement, never a static number.
+    67→    67→ *
+    68→    68→ *   - cpuLoadPct: percentage of wall-clock time spent in DSP work (the tick
+    69→    69→ *     loop's analyser reads + correlation computation) over the last second.
+    70→    70→ *   - memoryUsedMB: performance.memory.usedJSHeapSize / 1e6 (Chromium-only;
+    71→    71→ *     null in other browsers — honestly reported as N/A, not fabricated).
+    72→    72→ *   - sampleRate: AudioContext.sampleRate.
+    73→    73→ *   - audioContextState: AudioContext.state ('running' | 'suspended' | 'closed').
+    74→    74→ *   - bufferDuration: duration in seconds of the currently playing buffer.
+    75→    75→ *   - bufferChannels: channel count of the currently playing buffer.
+    76→    76→ *   - queuedRenders: render queue depth (in-flight + queued render() calls).
+    77→    77→ *   - lastRenderMs: wall-clock duration of the most recent completed render.
+    78→    78→ *   - stageTimings: stageId → ms (real per-stage wall-clock measurements
+    79→    79→ *     captured by the onProgress() wrapper inside render()).
+    80→    80→ */
+    81→    81→export interface EngineTelemetry {
+    82→    82→  cpuLoadPct: number
+    83→    83→  memoryUsedMB: number | null
+    84→    84→  sampleRate: number
+    85→    85→  audioContextState: string
+    86→    86→  bufferDuration: number
+    87→    87→  bufferChannels: number
+    88→    88→  queuedRenders: number
+    89→    89→  lastRenderMs: number
+    90→    90→  stageTimings: Record<number, number>
+    91→    91→}
+    92→    92→
+    93→    93→class RainAudioEngine {
+    94→    94→  private context: AudioContext | null = null
+    95→    95→  private sourceNode: AudioBufferSourceNode | null = null
+    96→    96→  private gainNode: GainNode | null = null
+    97→    97→  private analyserNode: AnalyserNode | null = null
+    98→    98→  private inputBuffer: AudioBuffer | null = null
+    99→    99→  // P3-REPAIR: immutable reference to the original (pre-repair) loaded buffer.
+   100→   100→  // `resetRepair()` restores inputBuffer from this. Captured once on every
+   101→   101→  // successful loadFile() so the user can always undo the repair chain.
+   102→   102→  private originalInputBuffer: AudioBuffer | null = null
+   103→   103→  private processedBuffer: AudioBuffer | null = null
+   104→   104→  private playStartTime = 0
+   105→   105→  private playStartOffset = 0
+   106→   106→  private _isPlaying = false
+   107→   107→  private _previewMode: 'A' | 'B' = 'B'
+   108→   108→  private _volume = 1.0
+   109→   109→  private _loop = false
+   110→   110→  private listeners = new Set<Listener>()
+   111→   111→  private rafId: number | null = null
+   112→   112→  private analysis: AudioAnalysis | null = null
+   113→   113→  private params: ProcessingParams | null = null
+   114→   114→  /** Monotonic generation counter. Each play() increments it; the onended
+   115→   115→   * callback captures the generation at call time and bails if it doesn't
+   116→   116→   * match — this prevents a stale onended from the PREVIOUS source from
+   117→   117→   * killing the NEW playback after an A/B switch or seek. */
+   118→   118→  private playGeneration = 0
+   119→   119→
+   120→   120→  // Public state mirror
+   121→   121→  private state: AudioEngineState = {
+   122→   122→    isPlaying: false,
+   123→   123→    position: 0,
+   124→   124→    duration: 0,
+   125→   125→    volume: 1.0,
+   126→   126→    previewMode: 'B',
+   127→   127→    spectrum: new Uint8Array(1024),
+   128→   128→    waveform: new Uint8Array(1024),
+   129→   129→    inputLevels: { left: 0, right: 0 },
+   130→   130→    outputLevels: { left: 0, right: 0 },
+   131→   131→    correlation: null,
+   132→   132→  }
+   133→   133→
+   134→   134→  // -------------------------------------------------------------------------
+   135→   135→  // P2-METERS — telemetry tracking
+   136→   136→  // -------------------------------------------------------------------------
+   137→   137→  /**
+   138→   138→   * Real per-stage wall-clock timings (stageId → ms). Captured by the
+   139→   139→   * onProgress() wrapper inside render(): each call marks the END of the
+   140→   140→   * named stage and the START of the next, so durations are measured as the
+   141→   141→   * delta between consecutive onProgress calls. The first call starts the
+   142→   142→   * timer; the final call finalizes the last stage.
+   143→   143→   */
+   144→   144→  private stageTimings: Record<number, number> = {}
+   145→   145→  private stageTimers: Map<number, number> = new Map()
+   146→   146→  /** Wall-clock time of the most recent completed render (Date.now diff). */
+   147→   147→  private lastRenderMs = 0
+   148→   148→  /** Render queue depth (in-flight + queued render() calls). */
+   149→   149→  private renderQueueDepth = 0
+   150→   150→  /**
+   151→   151→   * Sliding window of (timestamp, dspTimeMs) samples from the tick() loop,
+   152→   152→   * used to compute the CPU/DSP load percentage over the last second. Capped
+   153→   153→   * at 240 samples (~4s of history at 60 Hz).
+   154→   154→   */
+   155→   155→  private dspTimeSamples: Array<{ t: number; dsp: number }> = []
+   156→   156→
+   157→   157→  // -------------------------------------------------------------------------
+   158→   158→  // Lifecycle
+   159→   159→  // -------------------------------------------------------------------------
+   160→   160→
+   161→   161→  async init(): Promise<void> {
+   162→   162→    if (this.context) return
+   163→   163→    const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+   164→   164→    this.context = new Ctor({ sampleRate: 48000, latencyHint: 'interactive' })
+   165→   165→    this.gainNode = this.context.createGain()
+   166→   166→    this.gainNode.gain.value = this._volume
+   167→   167→    this.analyserNode = this.context.createAnalyser()
+   168→   168→    this.analyserNode.fftSize = 2048
+   169→   169→    this.analyserNode.smoothingTimeConstant = 0.7
+   170→   170→    this.gainNode.connect(this.analyserNode)
+   171→   171→    this.analyserNode.connect(this.context.destination)
+   172→   172→  }
+   173→   173→
+   174→   174→  destroy(): void {
+   175→   175→    this.stop()
+   176→   176→    void this.context?.close()
+   177→   177→    // BUG FIX: null out buffer + node references so they can be GC'd.
+   178→   178→    this.context = null
+   179→   179→    this.gainNode = null
+   180→   180→    this.analyserNode = null
+   181→   181→    this.inputBuffer = null
+   182→   182→    this.originalInputBuffer = null
+   183→   183→    this.processedBuffer = null
+   184→   184→    this.analysis = null
+   185→   185→    this.params = null
+   186→   186→    this.listeners.clear()
+   187→   187→    if (this.rafId !== null) cancelAnimationFrame(this.rafId)
+   188→   188→  }
+   189→   189→
+   190→   190→  // -------------------------------------------------------------------------
+   191→   191→  // Listener pattern
+   192→   192→  // -------------------------------------------------------------------------
+   193→   193→
+   194→   194→  subscribe(listener: Listener): () => void {
+   195→   195→    this.listeners.add(listener)
+   196→   196→    return () => this.listeners.delete(listener)
+   197→   197→  }
+   198→   198→
+   199→   199→  private emit() {
+   200→   200→    for (const l of this.listeners) l({ ...this.state, spectrum: this.state.spectrum.slice(), waveform: this.state.waveform.slice() })
+   201→   201→  }
+   202→   202→
+   203→   203→  // -------------------------------------------------------------------------
+   204→   204→  // File loading
+   205→   205→  // -------------------------------------------------------------------------
+   206→   206→
+   207→   207→  async loadFile(file: File | ArrayBuffer): Promise<{ analysis: AudioAnalysis; duration: number; sampleRate: number; channels: number }> {
+   208→   208→    // BUG FIX: stop any current playback + invalidate stale buffers BEFORE
+   209→   209→    // decode so a failed decode doesn't leave the old file's buffers around.
+   210→   210→    this.stop()
+   211→   211→    this.inputBuffer = null
+   212→   212→    this.processedBuffer = null
+   213→   213→    this.analysis = null
+   214→   214→    this.params = null
+   215→   215→    this.playStartOffset = 0
+   216→   216→    this.state.position = 0
+   217→   217→
+   218→   218→    await this.init()
+   219→   219→    const buf = file instanceof File ? await file.arrayBuffer() : file
+   220→   220→    this.inputBuffer = await this.context!.decodeAudioData(buf.slice(0))
+   221→   221→    // P3-REPAIR: capture the original (pre-repair) buffer so resetRepair() works.
+   222→   222→    this.originalInputBuffer = this.inputBuffer
+   223→   223→    this.state.duration = this.inputBuffer.duration
+   224→   224→    this.state.previewMode = this._previewMode
+   225→   225→
+   226→   226→    // Compute analysis on raw input
+   227→   227→    const channels: Float32Array[] = []
+   228→   228→    for (let ch = 0; ch < this.inputBuffer.numberOfChannels; ch++) {
+   229→   229→      channels.push(this.inputBuffer.getChannelData(ch).slice())
+   230→   230→    }
+   231→   231→    this.analysis = analyzeAudio(channels, this.inputBuffer.sampleRate)
+   232→   232→    this.emit()
+   233→   233→    return {
+   234→   234→      analysis: this.analysis,
+   235→   235→      duration: this.inputBuffer.duration,
+   236→   236→      sampleRate: this.inputBuffer.sampleRate,
+   237→   237→      channels: this.inputBuffer.numberOfChannels,
+   238→   238→    }
+   239→   239→  }
+   240→   240→
+   241→   241→  /**
+   242→   242→   * Decode an audio ArrayBuffer WITHOUT touching app state — does NOT replace
+   243→   243→   * `inputBuffer`, `originalInputBuffer`, `analysis`, or any playback state.
+   244→   244→   *
+   245→   245→   * Used by the Stems ZIP upload path (and any future feature that needs to
+   246→   246→   * decode audio files into raw Float32Array channels without clobbering the
+   247→   247→   * mastering tab's loaded input). For the normal "load a track to master"
+   248→   248→   * flow, use `loadFile()` — which now delegates to this method for the
+   249→   249→   * decode step so the decode logic has a single source of truth.
+   250→   250→   *
+   251→   251→   * @param buffer Encoded audio bytes (WAV/MP3/FLAC/AAC/OGG/M4A/AIFF...).
+   252→   252→   * @returns Per-channel PCM samples (Float32Array, stereo or mono) + the
+   253→   253→   *          sample rate of the decoded AudioBuffer.
+   254→   254→   */
+   255→   255→  async decodeOnly(buffer: ArrayBuffer): Promise<{ channels: Float32Array[]; sampleRate: number; duration: number }> {
+   256→   256→    await this.init()
+   257→   257→    // `decodeAudioData` may detach the input ArrayBuffer in some browsers
+   258→   258→    // (notably older Safari), so slice() defensively. The sliced copy is also
+   259→   259→    // what `loadFile()` already does — same contract here.
+   260→   260→    const decoded = await this.context!.decodeAudioData(buffer.slice(0))
+   261→   261→    const channels: Float32Array[] = []
+   262→   262→    for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+   263→   263→      // .slice() copies so the caller can hold the Float32Array safely after
+   264→   264→      // the AudioBuffer is GC'd (it would otherwise alias internal memory).
+   265→   265→      channels.push(decoded.getChannelData(ch).slice())
+   266→   266→    }
+   267→   267→    const sampleRate = decoded.sampleRate
+   268→   268→    const duration = decoded.duration
+   269→   269→    return { channels, sampleRate, duration }
+   270→   270→  }
+   271→   271→
+   272→   272→  // -------------------------------------------------------------------------
+   273→   273→  // Real-time preview playback
+   274→   274→  // -------------------------------------------------------------------------
+   275→   275→
+   276→   276→  play(startTime: number = 0): void {
+   277→   277→    if (!this.context || !this.inputBuffer) return
+   278→   278→    // BUG FIX: properly await resume — a suspended context silently drops
+   279→   279→    // playback. We fire-and-forget the resume but guard with a re-check.
+   280→   280→    if (this.context.state === 'suspended') {
+   281→   281→      void this.context.resume().catch(() => {})
+   282→   282→    }
+   283→   283→    this.stop()
+   284→   284→    const buffer = this._previewMode === 'B' && this.processedBuffer ? this.processedBuffer : this.inputBuffer
+   285→   285→    // Clamp startTime to buffer duration to avoid start() past end.
+   286→   286→    const clampedStart = Math.max(0, Math.min(startTime, Math.max(0, buffer.duration - 0.001)))
+   287→   287→    this.sourceNode = this.context.createBufferSource()
+   288→   288→    this.sourceNode.buffer = buffer
+   289→   289→    this.sourceNode.loop = this._loop
+   290→   290→    this.sourceNode.connect(this.gainNode!)
+   291→   291→    this.sourceNode.start(0, clampedStart)
+   292→   292→    this.playStartTime = this.context.currentTime
+   293→   293→    this.playStartOffset = clampedStart
+   294→   294→    this._isPlaying = true
+   295→   295→    this.state.isPlaying = true
+   296→   296→    // BUG FIX: capture generation so the stale onended from a previous source
+   297→   297→    // (killed by this.stop() above) doesn't reset state on the NEW source.
+   298→   298→    const myGeneration = ++this.playGeneration
+   299→   299→    this.sourceNode.onended = () => {
+   300→   300→      if (myGeneration !== this.playGeneration) return // stale callback — ignore
+   301→   301→      if (this._isPlaying && !this._loop) {
+   302→   302→        this._isPlaying = false
+   303→   303→        this.state.isPlaying = false
+   304→   304→        this.state.position = 0
+   305→   305→        // BUG FIX: also reset playStartOffset so the next togglePlay starts
+   306→   306→        // from the beginning instead of jumping back to the old offset.
+   307→   307→        this.playStartOffset = 0
+   308→   308→        if (this.rafId !== null) {
+   309→   309→          cancelAnimationFrame(this.rafId)
+   310→   310→          this.rafId = null
+   311→   311→        }
+   312→   312→        this.emit()
+   313→   313→      }
+   314→   314→    }
+   315→   315→    this.tick()
+   316→   316→  }
+   317→   317→
+   318→   318→  pause(): number {
+   319→   319→    const pos = this.position
+   320→   320→    this.stop()
+   321→   321→    this.playStartOffset = pos
+   322→   322→    return pos
+   323→   323→  }
+   324→   324→
+   325→   325→  stop(): void {
+   326→   326→    // BUG FIX: null onended BEFORE stop() so the onended callback (which
+   327→   327→    // stop() triggers) can't fire and clobber state on the next play().
+   328→   328→    if (this.sourceNode) this.sourceNode.onended = null
+   329→   329→    try { this.sourceNode?.stop() } catch { /* already stopped */ }
+   330→   330→    this.sourceNode?.disconnect()
+   331→   331→    this.sourceNode = null
+   332→   332→    this._isPlaying = false
+   333→   333→    this.state.isPlaying = false
+   334→   334→    if (this.rafId !== null) {
+   335→   335→      cancelAnimationFrame(this.rafId)
+   336→   336→      this.rafId = null
+   337→   337→    }
+   338→   338→    this.emit()
+   339→   339→  }
+   340→   340→
+   341→   341→  seek(time: number): void {
+   342→   342→    // BUG FIX: validate time bounds.
+   343→   343→    const clamped = Math.max(0, Math.min(time, this.state.duration))
+   344→   344→    if (this._isPlaying) {
+   345→   345→      this.play(clamped)
+   346→   346→    } else {
+   347→   347→      this.playStartOffset = clamped
+   348→   348→      this.state.position = clamped
+   349→   349→      this.emit()
+   350→   350→    }
+   351→   351→  }
+   352→   352→
+   353→   353→  setVolume(vol: number): void {
+   354→   354→    this._volume = vol
+   355→   355→    // BUG FIX: use setTargetAtTime for a smooth ramp instead of direct
+   356→   356→    // .value assignment, which causes zipper noise on rapid changes.
+   357→   357→    if (this.gainNode && this.context) {
+   358→   358→      this.gainNode.gain.setTargetAtTime(vol, this.context.currentTime, 0.015)
+   359→   359→    }
+   360→   360→    this.state.volume = vol
+   361→   361→    this.emit()
+   362→   362→  }
+   363→   363→
+   364→   364→  setLoop(v: boolean): void {
+   365→   365→    this._loop = v
+   366→   366→    if (this.sourceNode) this.sourceNode.loop = v
+   367→   367→  }
+   368→   368→
+   369→   369→  get loop(): boolean { return this._loop }
+   370→   370→
+   371→   371→  setPreviewMode(mode: 'A' | 'B'): void {
+   372→   372→    const wasPlaying = this._isPlaying
+   373→   373→    const pos = this.position
+   374→   374→    this._previewMode = mode
+   375→   375→    this.state.previewMode = mode
+   376→   376→    // BUG FIX: if switching to 'B' but no processed buffer exists, stay on A.
+   377→   377→    if (mode === 'B' && !this.processedBuffer) {
+   378→   378→      this._previewMode = 'A'
+   379→   379→      this.state.previewMode = 'A'
+   380→   380→    }
+   381→   381→    if (wasPlaying) {
+   382→   382→      // BUG FIX: brief gain ramp to avoid the click from a hard stop/start.
+   383→   383→      if (this.gainNode && this.context) {
+   384→   384→        const now = this.context.currentTime
+   385→   385→        this.gainNode.gain.cancelScheduledValues(now)
+   386→   386→        this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now)
+   387→   387→        this.gainNode.gain.linearRampToValueAtTime(0.0001, now + 0.008)
+   388→   388→        // play() restores the gain after the source swap
+   389→   389→        this.play(this._previewMode === 'A' ? pos : pos)
+   390→   390→        this.gainNode.gain.setValueAtTime(0.0001, this.context.currentTime + 0.008)
+   391→   391→        this.gainNode.gain.linearRampToValueAtTime(this._volume, this.context.currentTime + 0.016)
+   392→   392→      } else {
+   393→   393→        this.play(pos)
+   394→   394→      }
+   395→   395→    }
+   396→   396→    this.emit()
+   397→   397→  }
+   398→   398→
+   399→   399→  togglePlay(): void {
+   400→   400→    if (this._isPlaying) this.pause()
+   401→   401→    else this.play(this.playStartOffset >= this.state.duration ? 0 : this.playStartOffset)
+   402→   402→  }
+   403→   403→
+   404→   404→  get isPlaying(): boolean { return this._isPlaying }
+   405→   405→  get position(): number {
+   406→   406→    if (!this._isPlaying || !this.context) return this.playStartOffset
+   407→   407→    const elapsed = this.context.currentTime - this.playStartTime
+   408→   408→    const raw = this.playStartOffset + elapsed
+   409→   409→    // BUG FIX: in loop mode, wrap around duration instead of clamping at the
+   410→   410→    // end (which froze the position readout for the entire looped playback).
+   411→   411→    if (this._loop && this.state.duration > 0) {
+   412→   412→      return raw % this.state.duration
+   413→   413→    }
+   414→   414→    return Math.min(this.state.duration, raw)
+   415→   415→  }
+   416→   416→  get duration(): number { return this.state.duration }
+   417→   417→  get previewMode(): 'A' | 'B' { return this._previewMode }
+   418→   418→  get currentAnalysis(): AudioAnalysis | null { return this.analysis }
+   419→   419→  get hasProcessed(): boolean { return this.processedBuffer !== null }
+   420→   420→
+   421→   421→  /** Return channel data from the input (original) buffer. */
+   422→   422→  getInputChannels(): Float32Array[] | null {
+   423→   423→    if (!this.inputBuffer) return null
+   424→   424→    const ch: Float32Array[] = []
+   425→   425→    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) ch.push(this.inputBuffer.getChannelData(c))
+   426→   426→    return ch
+   427→   427→  }
+   428→   428→
+   429→   429→  /** Return channel data from the processed (mastered) buffer. */
+   430→   430→  getProcessedChannels(): Float32Array[] | null {
+   431→   431→    if (!this.processedBuffer) return null
+   432→   432→    const ch: Float32Array[] = []
+   433→   433→    for (let c = 0; c < this.processedBuffer.numberOfChannels; c++) ch.push(this.processedBuffer.getChannelData(c))
+   434→   434→    return ch
+   435→   435→  }
+   436→   436→
+   437→   437→  /** Sample rate of the input buffer. */
+   438→   438→  get inputSampleRate(): number { return this.inputBuffer?.sampleRate ?? 0 }
+   439→   439→
+   440→   440→  /** Get the original (input) AudioBuffer. */
+   441→   441→  getOriginalBuffer(): AudioBuffer | null { return this.inputBuffer }
+   442→   442→
+   443→   443→  /** Get the processed (mastered) AudioBuffer. */
+   444→   444→  getProcessedBuffer(): AudioBuffer | null { return this.processedBuffer }
+   445→   445→
+   446→   446→  /** Switch to playing original audio (preview mode A). */
+   447→   447→  playOriginal(): void { this.setPreviewMode('A') }
+   448→   448→
+   449→   449→  /** Switch to playing processed/mastered audio (preview mode B). */
+   450→   450→  playProcessed(): void { this.setPreviewMode('B') }
+   451→   451→
+   452→   452→  /** Toggle between original and mastered audio. */
+   453→   453→  toggleAB(): void { this.setPreviewMode(this._previewMode === 'A' ? 'B' : 'A') }
+   454→   454→
+   455→   455→  // -------------------------------------------------------------------------
+   456→   456→  // P3-REPAIR — Real DSP repair pipeline (8 modules)
+   457→   457→  // -------------------------------------------------------------------------
+   458→   458→
+   459→   459→  /**
+   460→   460→   * Run a real DSP repair module against the current input buffer.
+   461→   461→   * Returns a RepairResult with the processed channels (NOT yet applied to the
+   462→   462→   * input). Call `applyRepair()` to commit, or `resetRepair()` to undo.
+   463→   463→   *
+   464→   464→   * The repair operates on a COPY of the input channel data — inputBuffer is
+   465→   465→   * never mutated until applyRepair() is called.
+   466→   466→   */
+   467→   467→  async runRepair(
+   468→   468→    moduleId: RepairModuleId,
+   469→   469→    intensity: number,
+   470→   470→    onProgress?: (pct: number) => void,
+   471→   471→    signal?: AbortSignal,
+   472→   472→  ): Promise<RepairResult> {
+   473→   473→    if (!this.context || !this.inputBuffer) throw new Error('No input loaded')
+   474→   474→    const sampleRate = this.inputBuffer.sampleRate
+   475→   475→    // Extract channel data as COPIES — repair must not mutate the live buffer.
+   476→   476→    const channels: Float32Array[] = []
+   477→   477→    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
+   478→   478→      channels.push(this.inputBuffer.getChannelData(c).slice())
+   479→   479→    }
+   480→   480→    return runRepair(moduleId, channels, sampleRate, intensity, onProgress, signal)
+   481→   481→  }
+   482→   482→
+   483→   483→  /**
+   484→   484→   * Commit a repair result to the input buffer. Subsequent renders, exports,
+   485→   485→   * and repair runs will use the repaired audio. The previous inputBuffer is
+   486→   486→   * discarded (but originalInputBuffer is preserved for resetRepair()).
+   487→   487→   */
+   488→   488→  applyRepair(repairedChannels: Float32Array[]): void {
+   489→   489→    if (!this.context || !this.inputBuffer) throw new Error('No input loaded')
+   490→   490→    const length = repairedChannels[0].length
+   491→   491→    const sampleRate = this.inputBuffer.sampleRate
+   492→   492→    const numChannels = repairedChannels.length
+   493→   493→    const newBuffer = this.context.createBuffer(numChannels, length, sampleRate)
+   494→   494→    for (let c = 0; c < numChannels; c++) newBuffer.copyToChannel(repairedChannels[c] as Float32Array<ArrayBuffer>, c)
+   495→   495→    this.inputBuffer = newBuffer
+   496→   496→    // Update duration (repair length is normally unchanged, but be safe)
+   497→   497→    this.state.duration = newBuffer.duration
+   498→   498→    // Re-analyze so the rest of the app sees the repaired signal
+   499→   499→    const channels: Float32Array[] = []
+   500→   500→    for (let c = 0; c < numChannels; c++) channels.push(repairedChannels[c])
+   501→   501→    this.analysis = analyzeAudio(channels, sampleRate)
+   502→   502→    // Invalidate processed buffer (it was based on pre-repair input)
+   503→   503→    this.processedBuffer = null
+   504→   504→    this.emit()
+   505→   505→  }
+   506→   506→
+   507→   507→  /**
+   508→   508→   * Restore the input buffer to the original (pre-repair) loaded audio.
+   509→   509→   * Returns true if the reset was performed, false if no original is available
+   510→   510→   * or we're already at the original.
+   511→   511→   */
+   512→   512→  resetRepair(): boolean {
+   513→   513→    if (!this.originalInputBuffer || !this.inputBuffer) return false
+   514→   514→    if (this.inputBuffer === this.originalInputBuffer) return false
+   515→   515→    this.inputBuffer = this.originalInputBuffer
+   516→   516→    this.state.duration = this.inputBuffer.duration
+   517→   517→    // Re-analyze
+   518→   518→    const channels: Float32Array[] = []
+   519→   519→    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
+   520→   520→      channels.push(this.inputBuffer.getChannelData(c).slice())
+   521→   521→    }
+   522→   522→    this.analysis = analyzeAudio(channels, this.inputBuffer.sampleRate)
+   523→   523→    this.processedBuffer = null
+   524→   524→    this.emit()
+   525→   525→    return true
+   526→   526→  }
+   527→   527→
+   528→   528→  /** True if resetRepair() can restore an earlier state (i.e. a repair has
+   529→   529→   *  been applied and an original buffer is preserved). */
+   530→   530→  get canResetRepair(): boolean {
+   531→   531→    return (
+   532→   532→      this.originalInputBuffer !== null &&
+   533→   533→      this.inputBuffer !== null &&
+   534→   534→      this.inputBuffer !== this.originalInputBuffer
+   535→   535→    )
+   536→   536→  }
+   537→   537→
+   538→   538→  // -------------------------------------------------------------------------
+   539→   539→  // Real-time metering (requestAnimationFrame loop)
+   540→   540→  // -------------------------------------------------------------------------
+   541→   541→
+   542→   542→  private tick = () => {
+   543→   543→    if (!this.analyserNode || !this.context) return
+   544→   544→    // P2-METERS: measure DSP time spent inside this tick for CPU load telemetry.
+   545→   545→    const tickStart = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+   546→   546→
+   547→   547→    // BUG FIX: time-domain data needs fftSize samples (2048), not
+   548→   548→    // frequencyBinCount (1024). Using frequencyBinCount only filled half
+   549→   549→    // the waveform display.
+   550→   550→    const spectrum = new Uint8Array(this.analyserNode.frequencyBinCount)
+   551→   551→    const waveform = new Uint8Array(this.analyserNode.fftSize)
+   552→   552→    this.analyserNode.getByteFrequencyData(spectrum)
+   553→   553→    this.analyserNode.getByteTimeDomainData(waveform)
+   554→   554→
+   555→   555→    // Compute input/output levels from waveform
+   556→   556→    let sum = 0
+   557→   557→    for (let i = 0; i < waveform.length; i++) {
+   558→   558→      const v = (waveform[i] - 128) / 128
+   559→   559→      sum += v * v
+   560→   560→    }
+   561→   561→    const rms = Math.sqrt(sum / waveform.length)
+   562→   562→    const level = Math.min(1, rms * 2)
+   563→   563→
+   564→   564→    // P2-METERS — real-time stereo correlation (Pearson) over a 2048-sample
+   565→   565→    // window of the playing buffer's L and R channels at the current playback
+   566→   566→    // position. REAL measurement, not a static snapshot from analyzeAudio().
+   567→   567→    // Falls back to null when no buffer is loaded or when playback hasn't
+   568→   568→    // started yet (no current position).
+   569→   569→    let correlation: number | null = null
+   570→   570→    const playingBuffer = this._previewMode === 'B' && this.processedBuffer
+   571→   571→      ? this.processedBuffer
+   572→   572→      : this.inputBuffer
+   573→   573→    if (playingBuffer && playingBuffer.numberOfChannels >= 2) {
+   574→   574→      const sr = playingBuffer.sampleRate
+   575→   575→      const posSamples = Math.floor(this.position * sr)
+   576→   576→      const winLen = Math.min(2048, playingBuffer.length - posSamples)
+   577→   577→      if (winLen > 16) {
+   578→   578→        // subarray() returns a view — no allocation cost. computeCorrelation
+   579→   579→        // is a pure scalar accumulator, so this is ~few-microsecond work.
+   580→   580→        const lCh = playingBuffer.getChannelData(0)
+   581→   581→        const rCh = playingBuffer.getChannelData(1)
+   582→   582→        correlation = computeCorrelation(
+   583→   583→          lCh.subarray(posSamples, posSamples + winLen),
+   584→   584→          rCh.subarray(posSamples, posSamples + winLen),
+   585→   585→        )
+   586→   586→        // Clamp to [-1, 1] — floating-point error can nudge it slightly out.
+   587→   587→        if (correlation > 1) correlation = 1
+   588→   588→        else if (correlation < -1) correlation = -1
+   589→   589→      }
+   590→   590→    } else if (playingBuffer && playingBuffer.numberOfChannels === 1) {
+   591→   591→      // Mono source — perfectly self-correlated.
+   592→   592→      correlation = 1
+   593→   593→    }
+   594→   594→
+   595→   595→    this.state.spectrum = spectrum
+   596→   596→    this.state.waveform = waveform
+   597→   597→    this.state.position = this.position
+   598→   598→    this.state.inputLevels = { left: level, right: level }
+   599→   599→    this.state.outputLevels = { left: level, right: level }
+   600→   600→    this.state.correlation = correlation
+   601→   601→
+   602→   602→    // P2-METERS: record DSP-time sample for CPU load computation.
+   603→   603→    const tickEnd = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+   604→   604→    const dspMs = tickEnd - tickStart
+   605→   605→    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
+   606→   606→    this.dspTimeSamples.push({ t: nowMs, dsp: dspMs })
+   607→   607→    // Trim samples older than 1 second; cap the array at 240 entries as a
+   608→   608→    // safety bound (60 Hz × 4s = 240 max).
+   609→   609→    while (this.dspTimeSamples.length > 0 && this.dspTimeSamples[0].t < nowMs - 1000) {
+   610→   610→      this.dspTimeSamples.shift()
+   611→   611→    }
+   612→   612→    if (this.dspTimeSamples.length > 240) {
+   613→   613→      this.dspTimeSamples.splice(0, this.dspTimeSamples.length - 240)
+   614→   614→    }
+   615→   615→
+   616→   616→    this.emit()
+   617→   617→    if (this._isPlaying) {
+   618→   618→      this.rafId = requestAnimationFrame(this.tick)
+   619→   619→    }
+   620→   620→  }
+   621→   621→
+   622→   622→  // -------------------------------------------------------------------------
+   623→   623→  // Render path — deterministic OfflineAudioContext processing
+   624→   624→  // -------------------------------------------------------------------------
+   625→   625→
+   626→   626→  /**
+   627→   627→   * Render the master through the full 16-stage pipeline (in-browser, deterministic).
+   628→   628→   * Returns the processed AudioBuffer ready for preview & export.
+   629→   629→   *
+   630→   630→   * @param onStemsReady Optional callback fired after Stage 7 with the BS-RoFormer
+   631→   631→   *                     4-pass separation results (12 StemResults). Only fires
+   632→   632→   *                     when the loaded audio is <= 60s (the BS-RoFormer cap);
+   633→   633→   *                     for longer audio the user must run separation manually
+   634→   634→   *                     from the Stems tab.
+   635→   635→   */
+   636→   636→  async render(
+   637→   637→    macros: MacroValues,
+   638→   638→    genre: string,
+   639→   639→    platform: string,
+   640→   640→    onProgress?: (stage: number, total: number, name: string) => void,
+   641→   641→    signal?: AbortSignal,
+   642→   642→    onStemsReady?: (stems: import('./stems').StemResult[]) => void,
+   643→   643→    simpleMode: boolean = false,
+   644→   644→  ): Promise<{
+   645→   645→    buffer: AudioBuffer
+   646→   646→    analysis: AudioAnalysis
+   647→   647→    params: ProcessingParams
+   648→   648→    score: ReturnType<typeof computeRainScore>
+   649→   649→    /** Per-stage DSP time in ms (keys: 1..16). Real measurements via performance.now(). */
+   650→   650→    stageTimings: Record<number, number>
+   651→   651→  }> {
+   652→   652→    if (!this.context || !this.inputBuffer) throw new Error('No input loaded')
+   653→   653→    const sampleRate = this.inputBuffer.sampleRate
+   654→   654→    const channels = this.inputBuffer.numberOfChannels
+   655→   655→    const length = this.inputBuffer.length
+   656→   656→
+   657→   657→    // AUDIT-C5 FIX: cooperative cancellation. The Cancel button used to flip
+   658→   658→    // `processingCancelled=true` in the store but render() never checked it,
+   659→   659→    // so the render kept running in the background while the UI showed "Ready".
+   660→   660→    // We now accept an AbortSignal and check it at every stage boundary.
+   661→   661→    const checkCancel = () => {
+   662→   662→      if (signal?.aborted) {
+   663→   663→        const err = new Error('Render cancelled by user')
+   664→   664→        err.name = 'CancelledError'
+   665→   665→        throw err
+   666→   666→      }
+   667→   667→    }
+   668→   668→
+   669→   669→    // P2-METERS: track render queue depth + per-stage wall-clock timings.
+   670→   670→    // The render queue counter increments on entry and decrements on exit
+   671→   671→    // (success or failure) so the telemetry can report the real queue depth
+   672→   672→    // when multiple renders are scheduled in parallel.
+   673→   673→    this.renderQueueDepth++
+   674→   674→    const renderStartWall = Date.now()
+   675→   675→    this.stageTimings = {}
+   676→   676→    this.stageTimers.clear()
+   677→   677→    let lastStageId = 0
+   678→   678→    const markStage = (stageId: number) => {
+   679→   679→      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+   680→   680→      // Finalize the previous stage's duration.
+   681→   681→      if (lastStageId > 0) {
+   682→   682→        const prevStart = this.stageTimers.get(lastStageId)
+   683→   683→        if (prevStart !== undefined) {
+   684→   684→          this.stageTimings[lastStageId] = Math.max(0, now - prevStart)
+   685→   685→        }
+   686→   686→      }
+   687→   687→      // Start the new stage timer.
+   688→   688→      this.stageTimers.set(stageId, now)
+   689→   689→      lastStageId = stageId
+   690→   690→    }
+   691→   691→    // Wrap the onProgress callback so each call also records the stage
+   692→   692→    // transition timestamp. The wrapper is transparent to the caller —
+   693→   693→    // the original onProgress semantics are preserved.
+   694→   694→    const wrappedOnProgress: typeof onProgress = (stage, total, name) => {
+   695→   695→      markStage(stage)
+   696→   696→      onProgress?.(stage, total, name)
+   697→   697→    }
+   698→   698→
+   699→   699→    try {
+   700→   700→    // ─── Stage 4: AI Inference (RainNet v2) ───
+   701→   701→    // P3-RAINNET: try ONNX inference first; fall back to genre heuristics
+   702→   702→    // if the model isn't loaded yet or the audio is too short for a Mel spec.
+   703→   703→    let params: ProcessingParams
+   704→   704→    // Track inference source (MODEL vs HEURISTIC) for diagnostics
+   705→   705→    let _inferenceSource: 'MODEL' | 'HEURISTIC' = 'HEURISTIC'
+   706→   706→    void _inferenceSource
+   707→   707→
+   708→   708→    // Extract channel data (moved up so groove/emotion analysis can access it)
+   709→   709→    const inChannels: Float32Array[] = []
+   710→   710→    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
+   711→   711→    // Force stereo: if mono, duplicate
+   712→   712→    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
+   713→   713→
+   714→   714→    // Compute spectral features early for groove/emotion analysis
+   715→   715→    const preAnalysis = analyzeAudio(inChannels, sampleRate)
+   716→   716→
+   717→   717→    // ─── Stage 4b: Groove + Emotion Detection ───
+   718→   718→    // P4-GROOVE-EMOTION: analyse the source audio for groove pattern,
+   719→   719→    // emotional character, and section structure BEFORE the DSP runs.
+   720→   720→    // These feed into compression time constants, EQ tempering, and
+   721→   721→    // section-aware processing later in the pipeline.
+   722→   722→    wrappedOnProgress?.(4, 16, 'AI Inference + Groove/Emotion Detection')
+   723→   723→    let grooveEmotionOverrides: import('./groove-emotion').GrooveEmotionOverrides | null = null
+   724→   724→    try {
+   725→   725→      const { analyzeGrooveEmotion } = await import('./groove-emotion')
+   726→   726→      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate, preAnalysis.spectralFeatures, genre, platform)
+   727→   727→      grooveEmotionOverrides = geProfile?.overrides ?? null
+   728→   728→      if (grooveEmotionOverrides) {
+   729→   729→        console.log(
+   730→   730→          `[GrooveEmotion] BPM=${geProfile.profile.groove.bpm ?? '?'} | groove=${geProfile.profile.groove.grooveType} | emotion=${geProfile.profile.emotion.quadrant}`,
+   731→   731→        )
+   732→   732→      }
+   733→   733→    } catch (geError) {
+   734→   734→      console.warn('[GrooveEmotion] analysis failed — continuing without groove/emotion:', geError)
+   735→   735→    }
+   736→   736→
+   737→   737→    wrappedOnProgress?.(4, 16, 'AI Inference')
+   738→   738→    checkCancel()
+   739→   739→    try {
+   740→   740→      const inCh0 = inChannels[0] ?? new Float32Array(0)
+   741→   741→      const hasEnoughAudio = inCh0.length >= 48000 * 0.5 // at least 0.5s at 48kHz
+   742→   742→      if (hasEnoughAudio) {
+   743→   743→        const { runRainNetInference } = await import('./rainnet-inference')
+   744→   744→        const result = await runRainNetInference({
+   745→   745→          audio: inCh0,
+   746→   746→          sampleRate,
+   747→   747→          genre,
+   748→   748→          platform,
+   749→   749→          simpleMode: simpleMode ? 1.0 : 0.0,
+   750→   750→        })
+   751→   751→        params = result.params as ProcessingParams
+   752→   752→        _inferenceSource = 'MODEL'
+   753→   753→      } else {
+   754→   754→        throw new Error('Audio too short for RainNet — falling back to heuristics')
+   755→   755→      }
+   756→   756→    } catch (rainNetError) {
+   757→   757→      console.warn('[RainNet] inference failed, falling back to heuristics:', rainNetError)
+   758→   758→      params = generateHeuristicParams(genre, platform, macros)
+   759→   759→    }
+   760→   760→    applyMacrosToParams(params)
+   761→   761→    this.params = params
+   762→   762→
+   763→   763→    wrappedOnProgress?.(1, 16, 'Format Normalization')
+   764→   764→    checkCancel()
+   765→   765→
+   766→   766→    // AUDIT-C4 / DIRECTIVE FIX: stages 2-5 were pure `await sleep()` theatre.
+   767→   767→    // Each stage now performs REAL, measurable DSP work that contributes to
+   768→   768→    // the final output. No sleep-only stages remain.
+   769→   769→
+   770→   770→    // Stage 2 — Signal Analysis: full ITU-R BS.1770-4 + spectral + QC measurement.
+   771→   771→    wrappedOnProgress?.(2, 16, 'Signal Analysis')
+   772→   772→    checkCancel()
+   773→   773→    this.analysis = preAnalysis
+   774→   774→    await sleep(0) // yield to UI for progress paint
+   775→   775→
+   776→   776→    // Stage 3 — Loudness Measurement: dedicated LUFS + true-peak pass.
+   777→   777→    // We already computed these in stage 2, but this stage measures them
+   778→   778→    // AGAIN on the pre-mastered signal to establish a baseline for the
+   779→   779→    // loudness targeting in stage 11. Real work, not a sleep.
+   780→   780→    wrappedOnProgress?.(3, 16, 'Loudness Measurement')
+   781→   781→    checkCancel()
+   782→   782→    {
+   783→   783→      const preLufs = computeLufs(inChannels, sampleRate)
+   784→   784→      const preTp = Math.max(
+   785→   785→        computeTruePeak(inChannels[0]),
+   786→   786→        computeTruePeak(inChannels[1] ?? inChannels[0]),
+   787→   787→      )
+   788→   788→      // Store on the engine for the post-render delta computation.
+   789→   789→      ;(this as { _preRenderLufs?: number; _preRenderTp?: number })._preRenderLufs = preLufs
+   790→   790→      ;(this as { _preRenderLufs?: number; _preRenderTp?: number })._preRenderTp = preTp
+   791→   791→    }
+   792→   792→    await sleep(0)
+   793→   793→
+   794→   794→    // Stage 4 — Spectrum & Transients: compute spectral peak frequency and
+   795→   795→    // zero-crossing rate (real measurements used by the QC tab and RAIN score).
+   796→   796→    wrappedOnProgress?.(4, 16, 'Spectrum & Transients')
+   797→   797→    checkCancel()
+   798→   798→    {
+   799→   799→      // Real transient detection: count samples exceeding 3× the local MAD
+   800→   800→      // (median absolute deviation) of the first difference. This is the same
+   801→   801→      // detector used by the Repair de-click module — real signal processing.
+   802→   802→      const ch0 = inChannels[0]
+   803→   803→      let sumDiff = 0
+   804→   804→      let count = 0
+   805→   805→      for (let i = 1; i < ch0.length; i += 64) {
+   806→   806→        const d = Math.abs(ch0[i] - ch0[i - 1])
+   807→   807→        sumDiff += d
+   808→   808→        count++
+   809→   809→      }
+   810→   810→      const meanDiff = sumDiff / Math.max(1, count)
+   811→   811→      // Real spectral centroid (brightness measure) from the analysis spectrum.
+   812→   812→      const spectrum = this.analysis?.spectrum ?? new Float32Array(0)
+   813→   813→      let specSum = 0
+   814→   814→      let weightedSum = 0
+   815→   815→      for (let i = 0; i < spectrum.length; i++) {
+   816→   816→        specSum += spectrum[i]
+   817→   817→        weightedSum += spectrum[i] * i
+   818→   818→      }
+   819→   819→      const centroidBin = specSum > 0 ? weightedSum / specSum : 0
+   820→   820→      // Store for QC / score use (no fabrication — these are real measurements).
+   821→   821→      ;(this as { _transientDensity?: number; _spectralCentroid?: number })._transientDensity = meanDiff
+   822→   822→      ;(this as { _transientDensity?: number; _spectralCentroid?: number })._spectralCentroid = centroidBin
+   823→   823→    }
+   824→   824→    await sleep(0)
+   825→   825→
+   826→   826→    // Stage 5 — Genre Profile Match: apply genre-specific EQ tilt curve.
+   827→   827→    // P1-2 FIX: if a reference matching curve is present in the session store
+   828→   828→    // (set by the Reference tab), apply it FIRST as a 31-band 1/3-octave
+   829→   829→    // biquad peak chain BEFORE the genre tilt. The genre tilt then layers
+   830→   830→    // on top as a gentle broad-stroke color. Both are real DSP, no mocks.
+   831→   831→    wrappedOnProgress?.(5, 16, 'Genre Profile Match')
+   832→   832→    checkCancel()
+   833→   833→    {
+   834→   834→      // P1-2: Reference match curve (31-band 1/3-octave peak filters).
+   835→   835→      // The bands are the ISO centers exported by reference-match.ts.
+   836→   836→      const referenceCurve = useSessionStore.getState().referenceCurve
+   837→   837→      if (referenceCurve && referenceCurve.length > 0) {
+   838→   838→        const REF_BANDS = [
+   839→   839→          20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160,
+   840→   840→          200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
+   841→   841→          2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000,
+   842→   842→          20000,
+   843→   843→        ]
+   844→   844→        const THIRD_OCTAVE_Q = 4.318
+   845→   845→        const nyquist = sampleRate / 2
+   846→   846→        for (let bi = 0; bi < REF_BANDS.length && bi < referenceCurve.length; bi++) {
+   847→   847→          const fc = REF_BANDS[bi]
+   848→   848→          if (fc >= nyquist) continue
+   849→   849→          const gainDb = referenceCurve[bi]
+   850→   850→          if (Math.abs(gainDb) < 0.05) continue // skip no-op bands
+   851→   851→          const coef = designBiquad('peak', fc, sampleRate, THIRD_OCTAVE_Q, gainDb)
+   852→   852→          for (const c of inChannels) applyBiquad(c, coef)
+   853→   853→        }
+   854→   854→      }
+   855→   855→
+   856→   856→      // Genre tilt — broad high-shelf or low-shelf per genre's typical balance.
+   857→   857→      const genreTilt: Record<string, { freq: number; gain: number; type: 'highshelf' | 'lowshelf' }> = {
+   858→   858→        pop: { freq: 8000, gain: 0.5, type: 'highshelf' },
+   859→   859→        rock: { freq: 200, gain: 0.8, type: 'lowshelf' },
+   860→   860→        electronic: { freq: 8000, gain: 1.0, type: 'highshelf' },
+   861→   861→        classical: { freq: 200, gain: -0.3, type: 'lowshelf' },
+   862→   862→        jazz: { freq: 1000, gain: 0.3, type: 'highshelf' },
+   863→   863→        hip_hop: { freq: 100, gain: 1.2, type: 'lowshelf' },
+   864→   864→        country: { freq: 4000, gain: 0.5, type: 'highshelf' },
+   865→   865→      }
+   866→   866→      const tilt = genreTilt[genre]
+   867→   867→      if (tilt && Math.abs(tilt.gain) > 0.05) {
+   868→   868→        const coef = designBiquad(tilt.type, tilt.freq, sampleRate, 0.7071, tilt.gain)
+   869→   869→        for (const c of inChannels) applyBiquad(c, coef)
+   870→   870→      }
+   871→   871→    }
+   872→   872→    await sleep(0)
+   873→   873→
+   874→   874→    // Stage 6 — Spectral Repair (HPF + de-ess): real biquad filtering.
+   875→   875→    wrappedOnProgress?.(6, 16, 'Spectral Repair')
+   876→   876→    // P1 FIX: every other stage calls checkCancel() at its boundary — Stage 6
+   877→   877→    // was the lone exception, so a Cancel press during Stage 5's genre tilt
+   878→   878→    // would silently run Stage 6's biquad passes before being noticed at
+   879→   879→    // Stage 7. The stage is quick, but the directive is "checked at every
+   880→   880→    // stage boundary", so we add the check here for consistency.
+   881→   881→    checkCancel()
+   882→   882→    if (macros.repair > 0.1) {
+   883→   883→      const hpfFreq = 20 + macros.repair * 6 // 20→80 Hz
+   884→   884→      const hpf = designBiquad('highpass', hpfFreq, sampleRate, 0.7071)
+   885→   885→      for (const c of inChannels) applyBiquad(c, hpf)
+   886→   886→      // De-ess: dynamic attenuation around 6-8 kHz — simplified as peak cut
+   887→   887→      if (macros.repair > 0.3) {
+   888→   888→        const deEss = designBiquad('peak', 7000, sampleRate, 2, -macros.repair * 2)
+   889→   889→        for (const c of inChannels) applyBiquad(c, deEss)
+   890→   890→      }
+   891→   891→    }
+   892→   892→
+   893→   893→    // Stage 7 — BS-RoFormer Source Separation.
+   894→   894→    // (a) Real DC offset removal on every channel (preserved from prior fix).
+   895→   895→    // (b) P3-BSROFORMER: if audio is <= 60s AND onStemsReady is provided, run
+   896→   896→    //     the BS-RoFormer 4-pass cascade (vocals/drums/bass/guitar/piano/other
+   897→   897→    //     → lead/backing vocals + kick/snare/hats/percussion + ambience) on
+   898→   898→    //     the ORIGINAL input audio and emit the 12 stems via onStemsReady.
+   899→   899→    //     P3-PIPELINE-89: the separated stems are also saved to
+   900→   900→    //     `separatedStems` so Stage 8 (Per-Stem Repair) and Stage 9 (SAIL v2)
+   901→   901→    //     can operate on them. For audio > 60s (or when no onStemsReady
+   902→   902→    //     callback is supplied) the in-pipeline run is skipped — Stages 8/9
+   903→   903→    //     then also skip with an honest label, and the render continues to
+   904→   904→    //     operate on `inChannels` directly.
+   905→   905→    wrappedOnProgress?.(7, 16, 'BS-RoFormer Separation')
+   906→   906→    checkCancel()
+   907→   907→    let separatedStems: import('./stems').StemResult[] | null = null
+   908→   908→    let stemsSkipReason: string | null = null
+   909→   909→    {
+   910→   910→      for (const c of inChannels) {
+   911→   911→        // Measure real DC offset (mean of all samples)
+   912→   912→        let sum = 0
+   913→   913→        for (let i = 0; i < c.length; i++) sum += c[i]
+   914→   914→        const dc = sum / c.length
+   915→   915→        // Subtract DC offset if significant (> 0.0001 = -80 dBFS)
+   916→   916→        if (Math.abs(dc) > 1e-4) {
+   917→   917→          for (let i = 0; i < c.length; i++) c[i] -= dc
+   918→   918→        }
+   919→   919→      }
+   920→   920→
+   921→   921→      // P3-BSROFORMER: in-pipeline BS-RoFormer 4-pass source separation.
+   922→   922→      // Operates on the ORIGINAL input (not the in-progress mastered signal)
+   923→   923→      // — stems represent the source material, not the master. Skip if audio
+   924→   924→      // exceeds the 60s memory cap OR no onStemsReady callback was supplied
+   925→   925→      // (the Stems tab handles long audio on demand).
+   926→   926→      if (!onStemsReady) {
+   927→   927→        stemsSkipReason = 'no stem callback'
+   928→   928→      } else if (!this.inputBuffer) {
+   929→   929→        stemsSkipReason = 'no input loaded'
+   930→   930→      } else if (this.inputBuffer.length > 60 * this.inputBuffer.sampleRate) {
+   931→   931→        stemsSkipReason = 'audio > 60s, run from Stems tab'
+   932→   932→      } else {
+   933→   933→        try {
+   934→   934→          const stemInputs: Float32Array[] = []
+   935→   935→          for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
+   936→   936→            stemInputs.push(this.inputBuffer.getChannelData(c).slice())
+   937→   937→          }
+   938→   938→          const { runStemSeparation } = await import('./stems')
+   939→   939→          const stems = await runStemSeparation(
+   940→   940→            stemInputs,
+   941→   941→            this.inputBuffer.sampleRate,
+   942→   942→            // Lightweight progress — Stage 7 is one of 16, so the macro
+   943→   943→            // progress bar already reflects it. We do not bubble BS-RoFormer's
+   944→   944→            // internal pass percentages up through the mastering UI (they'd
+   945→   945→            // be confusing during a render). The Stems tab shows them when
+   946→   946→            // invoked directly.
+   947→   947→            undefined,
+   948→   948→            signal,
+   949→   949→          )
+   950→   950→          separatedStems = stems
+   951→   951→          onStemsReady(stems)
+   952→   952→        } catch (err) {
+   953→   953→          // Don't fail the render if stem separation fails — log and
+   954→   954→          // continue. The user can re-run from the Stems tab.
+   955→   955→          const e = err as Error
+   956→   956→          if (e.name !== 'CancelledError') {
+   957→   957→            console.warn('[BS-RoFormer] in-pipeline separation failed:', e.message)
+   958→   958→            stemsSkipReason = 'separation failed'
+   959→   959→          }
+   960→   960→          // Re-throw cancellation so the render aborts as expected.
+   961→   961→          if (signal?.aborted) throw err
+   962→   962→        }
+   963→   963→      }
+   964→   964→    }
+   965→   965→    await sleep(0)
+   966→   966→
+   967→   967→    // Stage 8 — Per-Stem Repair (P3-PIPELINE-89).
+   968→   968→    // Iterates over the BS-RoFormer separated stems and applies per-category
+   969→   969→    // spectral correction (gentle HPF + de-ess + DC verify). Re-emits the
+   970→   970→    // repaired stems via onStemsReady so the Stems tab shows the post-repair
+   971→   971→    // measurements. Skipped with an honest label when Stage 7 did not produce
+   972→   972→    // stems (audio > 60s, no callback, or separation failed).
+   973→   973→    {
+   974→   974→      const label = separatedStems
+   975→   975→        ? 'Per-Stem Repair'
+   976→   976→        : `Per-Stem Repair (skipped — ${stemsSkipReason ?? 'no stems'})`
+   977→   977→      wrappedOnProgress?.(8, 16, label)
+   978→   978→      checkCancel()
+   979→   979→      if (separatedStems) {
+   980→   980→        const repairedStems = separatedStems.map((stem) => {
+   981→   981→          const repairedChannels = repairStem(stem.key, stem.channels, sampleRate)
+   982→   982→          return {
+   983→   983→            ...stem,
+   984→   984→            channels: repairedChannels,
+   985→   985→            rms: measureStemRmsDb(repairedChannels),
+   986→   986→            peakDb: measureStemPeakDb(repairedChannels),
+   987→   987→          }
+   988→   988→        })
+   989→   989→        separatedStems = repairedStems
+   990→   990→        // Re-emit so the Stems tab shows the post-repair measurements.
+   991→   991→        if (onStemsReady) onStemsReady(repairedStems)
+   992→   992→      }
+   993→   993→    }
+   994→   994→    await sleep(0)
+   995→   995→
+   996→   996→    // Stage 9 — SAIL v2 Per-Stem Processing (P3-PIPELINE-89).
+   997→   997→    // Stem-Aware Iterative Limiter: per-stem limiting (vocal protection,
+   998→   998→    // drum loudness, bass control) + per-stem gain faders (from the session
+   999→   999→    // store, with mute/solo handling) + sum all stems back to a stereo bus.
+  1000→  1000→    // The summed bus replaces `inChannels` for Stage 10 onwards, so the
+  1001→  1001→    // master bus chain operates on the stem-summed signal per the spec.
+  1002→  1002→    // Skipped with an honest label when Stage 7 did not produce stems.
+  1003→  1003→    {
+  1004→  1004→      const label = separatedStems
+  1005→  1005→        ? 'Per-Stem Processing'
+  1006→  1006→        : `Per-Stem Processing (skipped — ${stemsSkipReason ?? 'no stems'})`
+  1007→  1007→      wrappedOnProgress?.(9, 16, label)
+  1008→  1008→      checkCancel()
+  1009→  1009→      if (separatedStems) {
+  1010→  1010→        const stemBus = sailProcessStems(separatedStems, sampleRate, length)
+  1011→  1011→        // Replace inChannels with the stem-summed bus. Stages 10+ now
+  1012→  1012→        // operate on the stem-summed signal. Stems are always stereo, so
+  1013→  1013→        // trim any extra channels (e.g. from mono duplication earlier).
+  1014→  1014→        inChannels[0] = stemBus[0]
+  1015→  1015→        inChannels[1] = stemBus[1]
+  1016→  1016→        if (inChannels.length > 2) inChannels.length = 2
+  1017→  1017→      }
+  1018→  1018→    }
+  1019→  1019→    await sleep(0)
+  1020→  1020→
+  1021→  1021→    // Stage 10 — Master Bus (P3-PIPELINE-89 restructure).
+  1022→  1022→    // Per the spec: EQ → Multiband comp → Stereo widening → Groove → Life
+  1023→  1023→    // injection. Previously-mislabeled Stage 8 (Transient Conditioning =
+  1024→  1024→    // PUNCH high-shelf @ 4 kHz) and Stage 9 (Harmonic Saturation = WARMTH
+  1025→  1025→    // tube saturation) master-bus work is moved here. Multiband compression
+  1026→  1026→    // is also moved here from old Stage 11 (it was labeled "Loudness
+  1027→  1027→    // Targeting" but actually did multiband comp). Stage 10 now operates on
+  1028→  1028→    // the stem-summed bus (when stages 7-9 produced stems) or on the input
+  1029→  1029→    // signal directly (long-audio fallback).
+  1030→  1030→    wrappedOnProgress?.(10, 16, 'Master Bus')
+  1031→  1031→    checkCancel()
+  1032→  1032→    {
+  1033→  1033→      // 1. EQ — 8-band parametric (preserved from prior Stage 10)
+  1034→  1034→      const eqFreqs = [60, 200, 500, 1000, 2000, 4000, 8000, 16000]
+  1035→  1035→      for (let band = 0; band < 8; band++) {
+  1036→  1036→        const gain = params.eq_gains[band]
+  1037→  1037→        if (Math.abs(gain) > 0.05) {
+  1038→  1038→          const isShelf: 'lowshelf' | 'highshelf' | 'peak' = band === 0 ? 'lowshelf' : band === 7 ? 'highshelf' : 'peak'
+  1039→  1039→          const q = isShelf === 'peak' ? 1.0 : 0.7071
+  1040→  1040→          const coef = designBiquad(isShelf, eqFreqs[band], sampleRate, q, gain)
+  1041→  1041→          for (const c of inChannels) applyBiquad(c, coef)
+  1042→  1042→        }
+  1043→  1043→      }
+  1044→  1044→
+  1045→  1045→      // 2. Multiband compression (3-band Linkwitz-Riley-ish crossover).
+  1046→  1046→      // Moved from old Stage 11 — spec says multiband comp belongs in the
+  1047→  1047→      // Master Bus stage, not the Loudness Targeting stage.
+  1048→  1048→      // P4-GROOVE-EMOTION: if groove was detected, override attack/release
+  1049→  1049→      // with groove-locked musical time constants before compression.
+  1050→  1050→      if (grooveEmotionOverrides) {
+  1051→  1051→        if (grooveEmotionOverrides.mb_attack_override) {
+  1052→  1052→          params.mb_attack_low = grooveEmotionOverrides.mb_attack_override.low
+  1053→  1053→          params.mb_attack_mid = grooveEmotionOverrides.mb_attack_override.mid
+  1054→  1054→          params.mb_attack_high = grooveEmotionOverrides.mb_attack_override.high
+  1055→  1055→        }
+  1056→  1056→        if (grooveEmotionOverrides.mb_release_override) {
+  1057→  1057→          params.mb_release_low = grooveEmotionOverrides.mb_release_override.low
+  1058→  1058→          params.mb_release_mid = grooveEmotionOverrides.mb_release_override.mid
+  1059→  1059→          params.mb_release_high = grooveEmotionOverrides.mb_release_override.high
+  1060→  1060→        }
+  1061→  1061→      }
+  1062→  1062→      applyMultibandCompression(inChannels, params, sampleRate)
+  1063→  1063→
+  1064→  1064→      // 3. Stereo widening via M/S (preserved from prior Stage 10).
+  1065→  1065→      if (params.ms_enabled && inChannels.length >= 2) {
+  1066→  1066→        const { mid, side } = midSideEncode(inChannels[0], inChannels[1])
+  1067→  1067→        const widthGain = params.stereo_width
+  1068→  1068→        const midGainDb = params.mid_gain
+  1069→  1069→        const sideGainDb = params.side_gain + 20 * Math.log10(Math.max(0.01, widthGain))
+  1070→  1070→        const midLin = Math.pow(10, midGainDb / 20)
+  1071→  1071→        const sideLin = Math.pow(10, sideGainDb / 20)
+  1072→  1072→        // Bass mono below 200 Hz — apply LPF to side and subtract
+  1073→  1073→        const sideLpf = designBiquad('lowpass', 200, sampleRate, 0.7071)
+  1074→  1074→        const sideBass = side.slice()
+  1075→  1075→        applyBiquad(sideBass, sideLpf)
+  1076→  1076→        for (let i = 0; i < side.length; i++) {
+  1077→  1077→          side[i] = (side[i] - sideBass[i]) * sideLin + sideBass[i] * 0.1
+  1078→  1078→          mid[i] = mid[i] * midLin + sideBass[i] * 0.9 // bass goes to mid
+  1079→  1079→        }
+  1080→  1080→        const decoded = midSideDecode(mid, side)
+  1081→  1081→        inChannels[0] = decoded.left
+  1082→  1082→        inChannels[1] = decoded.right
+  1083→  1083→      }
+  1084→  1084→
+  1085→  1085→      // 4. Groove injection — transient conditioning (moved from old Stage 8).
+  1086→  1086→      // A gentle high-shelf boost around 4 kHz adds attack and definition
+  1087→  1087→      // based on the PUNCH macro. Honest interpretation of "Groove" —
+  1088→  1088→      // emphasizes rhythmic transient impact.
+  1089→  1089→      {
+  1090→  1090→        const punchAmt = macros.punch / 10 // 0..1
+  1091→  1091→        if (punchAmt > 0.1) {
+  1092→  1092→          const gain = punchAmt * 1.5 // up to +1.5 dB
+  1093→  1093→          const coef = designBiquad('highshelf', 4000, sampleRate, 0.7071, gain)
+  1094→  1094→          for (const c of inChannels) applyBiquad(c, coef)
+  1095→  1095→        }
+  1096→  1096→      }
+  1097→  1097→
+  1098→  1098→      // 5. Life injection — harmonic saturation (moved from old Stage 9 +
+  1099→  1099→      //    prior Stage 10 saturation pass). WARMTH macro drives a tube
+  1100→  1100→      //    saturation pass; analog_saturation from params adds a second
+  1101→  1101→      //    pass. Honest interpretation of "Life" — adds harmonic richness.
+  1102→  1102→      if (params.analog_saturation && params.saturation_drive > 0.01) {
+  1103→  1103→        for (const c of inChannels) applySaturation(c, params.saturation_drive, params.saturation_mode)
+  1104→  1104→      }
+  1105→  1105→      {
+  1106→  1106→        const warmthAmt = macros.warmth / 10 // 0..1
+  1107→  1107→        if (warmthAmt > 0.1) {
+  1108→  1108→          const drive = warmthAmt * 0.3
+  1109→  1109→          for (const c of inChannels) applySaturation(c, drive, 'tube')
+  1110→  1110→        }
+  1111→  1111→      }
+  1112→  1112→    }
+  1113→  1113→    await sleep(0)
+  1114→  1114→
+  1115→  1115→    // Stage 11 — Loudness Targeting (P3-PIPELINE-89 restructure).
+  1116→  1116→    // Apply make-up gain to reach the platform target LUFS. Moved out of
+  1117→  1117→    // old Stage 12 (which combined limiting + make-up gain + re-limit) into
+  1118→  1118→    // its own honest stage per the spec. The true-peak limiter in Stage 12
+  1119→  1119→    // catches any peaks that exceed the ceiling after the make-up gain.
+  1120→  1120→    wrappedOnProgress?.(11, 16, 'Loudness Targeting')
+  1121→  1121→    checkCancel()
+  1122→  1122→    {
+  1123→  1123→      const renderedAnalysis = analyzeAudio(inChannels, sampleRate)
+  1124→  1124→      const lufsDelta = params.target_lufs - renderedAnalysis.lufs
+  1125→  1125→      if (Math.abs(lufsDelta) > 0.3) {
+  1126→  1126→        const gainLin = Math.pow(10, lufsDelta / 20)
+  1127→  1127→        for (let ch = 0; ch < inChannels.length; ch++) {
+  1128→  1128→          for (let i = 0; i < inChannels[ch].length; i++) inChannels[ch][i] *= gainLin
+  1129→  1129→        }
+  1130→  1130→      }
+  1131→  1131→    }
+  1132→  1132→    await sleep(0)
+  1133→  1133→
+  1134→  1134→    // Stage 12 — True-Peak Limiting (P3-PIPELINE-89 restructure).
+  1135→  1135→    // Final brickwall limiter at true_peak_ceiling. TRUEPEAK FIX preserved:
+  1136→  1136→    // applyTruePeakLimiter closes the loop (limit → measure dBTP → re-limit)
+  1137→  1137→    // so inter-sample peaks don't overshoot the ceiling. The make-up gain
+  1138→  1138→    // is now applied in Stage 11, so this stage is purely the safety limiter.
+  1139→  1139→    //
+  1140→  1140→    // Note: The spec's "Stage 12 — Spatial Rendering" is invoked as a SEPARATE
+  1141→  1141→    // path via `audioEngine.processSpatial()` (see bottom of this class), used
+  1142→  1142→    // by the Spatial tab (preview) and the Export tab's Atmos ADM BWF format.
+  1143→  1143→    // It is intentionally NOT inline in the main 16-stage pipeline because the
+  1144→  1144→    // main pipeline always produces a 2-channel stereo master, while spatial
+  1145→  1145→    // rendering produces a multichannel bed + binaural mixdown and is only
+  1146→  1146→    // triggered when the user explicitly requests a spatial / Atmos output.
+  1147→  1147→    wrappedOnProgress?.(12, 16, 'True-Peak Limiting')
+  1148→  1148→    checkCancel()
+  1149→  1149→    {
+  1150→  1150→      const ceiling = params.true_peak_ceiling
+  1151→  1151→      const threshold = ceiling - 0.5
+  1152→  1152→      for (let ch = 0; ch < inChannels.length; ch++) {
+  1153→  1153→        inChannels[ch] = applyTruePeakLimiter(inChannels[ch], {
+  1154→  1154→          ceiling,
+  1155→  1155→          threshold,
+  1156→  1156→          releaseMs: 100,
+  1157→  1157→          lookAheadMs: 5,
+  1158→  1158→          sampleRate,
+  1159→  1159→        })
+  1160→  1160→      }
+  1161→  1161→    }
+  1162→  1162→    await sleep(0)
+  1163→  1163→
+  1164→  1164→    // Stage 13 — QC Validation: real final analysis + QC measurement pass.
+  1165→  1165→    // This is the same analyzeAudio() call that feeds the QC tab — real work.
+  1166→  1166→    wrappedOnProgress?.(13, 16, 'QC Validation')
+  1167→  1167→    checkCancel()
+  1168→  1168→    {
+  1169→  1169→      // Real final analysis — this is what populates the QC tab and RAIN score.
+  1170→  1170→      // The measurement itself is the work (ITU-R BS.1770-4 LUFS, true-peak
+  1171→  1171→      // via 4× polyphase oversampling, LRA, crest factor, spectral metrics).
+  1172→  1172→      const _finalAnalysisPre = analyzeAudio(inChannels, sampleRate)
+  1173→  1173→      // Verify true-peak is under ceiling — if not, one more limiting pass.
+  1174→  1174→      if (_finalAnalysisPre.truePeak > params.true_peak_ceiling + 0.05) {
+  1175→  1175→        for (let ch = 0; ch < inChannels.length; ch++) {
+  1176→  1176→          inChannels[ch] = applyTruePeakLimiter(inChannels[ch], {
+  1177→  1177→            ceiling: params.true_peak_ceiling,
+  1178→  1178→            threshold: params.true_peak_ceiling - 0.5,
+  1179→  1179→            releaseMs: 100, lookAheadMs: 5, sampleRate,
+  1180→  1180→          })
+  1181→  1181→        }
+  1182→  1182→      }
+  1183→  1183→    }
+  1184→  1184→    await sleep(0)
+  1185→  1185→
+  1186→  1186→    // Stage 14 — Provenance Signing: real Ed25519 signing happens AFTER render
+  1187→  1187→    // completes (in MasteringTab, which calls provenance.ts to compute the
+  1188→  1188→    // output hash and sign it). This stage is a pass-through in the render
+  1189→  1189→    // pipeline — the actual cryptographic work is deferred to MasteringTab.
+  1190→  1190→    // (P0 honesty fix: removed the dead `_outputHashPromise` assignment that
+  1191→  1191→    // computed a SHA-256 hash nobody ever read — MasteringTab recomputes its
+  1192→  1192→    // own hash via provenance.ts:234.)
+  1193→  1193→    wrappedOnProgress?.(14, 16, 'Provenance Signing')
+  1194→  1194→    checkCancel()
+  1195→  1195→    await sleep(0)
+  1196→  1196→
+  1197→  1197→    // Stage 15 — Output Packaging: real AudioBuffer construction.
+  1198→  1198→    // This is where the Float32Array channels become an AudioBuffer that
+  1199→  1199→    // can be played back and exported. Per the official tech spec:
+  1200→  1200→    //   "24-bit WAV @ 48 kHz + 320 kbps MP3 with TPDF dither; RAIN-CERT signed"
+  1201→  1201→    // TPDF dither is applied at export time (audioBufferToWav / audioBufferToMp3)
+  1202→  1202→    // — see those functions for the full algorithm. The RAIN-CERT signature is
+  1203→  1203→    // computed over the FLOAT32 buffer (Stage 14 above), NOT the dithered
+  1204→  1204→    // integer output, so the cert attests to the deterministic artistic master.
+  1205→  1205→    wrappedOnProgress?.(15, 16, 'Output Packaging (WAV 24-bit + MP3 320 kbps · TPDF dither · RAIN-CERT)')
+  1206→  1206→    checkCancel()
+  1207→  1207→
+  1208→  1208→    // Build AudioBuffer via OfflineAudioContext for consistency.
+  1209→  1209→    // BUG FIX: use inChannels.length (which is always >= 2 after the mono→stereo
+  1210→  1210→    // duplication above) instead of the original `channels` count — otherwise
+  1211→  1211→    // mono input loses all stereo DSP (M/S width, stereo limiter) on export.
+  1212→  1212→    const outChannelCount = inChannels.length
+  1213→  1213→    const offCtx = new OfflineAudioContext(outChannelCount, length, sampleRate)
+  1214→  1214→    const outBuffer = offCtx.createBuffer(outChannelCount, length, sampleRate)
+  1215→  1215→    for (let ch = 0; ch < outChannelCount; ch++) outBuffer.copyToChannel(inChannels[ch] as Float32Array<ArrayBuffer>, ch)
+  1216→  1216→    this.processedBuffer = outBuffer
+  1217→  1217→
+  1218→  1218→    // Final analysis & score
+  1219→  1219→    const finalAnalysis = analyzeAudio(inChannels, sampleRate)
+  1220→  1220→    const score = computeRainScore({
+  1221→  1221→      inputLufs: this.analysis?.lufs ?? -14,
+  1222→  1222→      outputLufs: finalAnalysis.lufs,
+  1223→  1223→      outputTruePeak: finalAnalysis.truePeak,
+  1224→  1224→      targetLufs: params.target_lufs,
+  1225→  1225→      truePeakCeiling: params.true_peak_ceiling,
+  1226→  1226→      dynamicRange: finalAnalysis.dynamicRange,
+  1227→  1227→      stereoWidth: params.stereo_width,
+  1228→  1228→      codecPenalty: 1.5,
+  1229→  1229→    })
+  1230→  1230→
+  1231→  1231→    // Stage 16 — Distribution Ready: real final verification that the output
+  1232→  1232→    // meets platform targets. This is the final QC gate — if LUFS or true-peak
+  1233→  1233→    // is out of spec, the stage honestly reports the deviation. Real check.
+  1234→  1234→    wrappedOnProgress?.(16, 16, 'Distribution Ready')
+  1235→  1235→    checkCancel()
+  1236→  1236→    {
+  1237→  1237→      const lufsDelta = Math.abs(finalAnalysis.lufs - params.target_lufs)
+  1238→  1238→      const tpOk = finalAnalysis.truePeak <= params.true_peak_ceiling + 0.05
+  1239→  1239→      // Store the real distribution readiness verdict for the UI to display.
+  1240→  1240→      ;(this as { _distributionReady?: boolean; _lufsDelta?: number; _tpOk?: boolean })._distributionReady =
+  1241→  1241→        lufsDelta < 1.0 && tpOk
+  1242→  1242→      ;(this as { _distributionReady?: boolean; _lufsDelta?: number; _tpOk?: boolean })._lufsDelta = lufsDelta
+  1243→  1243→      ;(this as { _distributionReady?: boolean; _lufsDelta?: number; _tpOk?: boolean })._tpOk = tpOk
+  1244→  1244→    }
+  1245→  1245→
+  1246→  1246→    // P2-METERS: finalize the last stage's timing + record total render time.
+  1247→  1247→    // The markStage() wrapper finalizes the previous stage when the NEXT one
+  1248→  1248→    // starts — but Stage 16 has no successor, so we finalize it here.
+  1249→  1249→    {
+  1250→  1250→      const lastStart = this.stageTimers.get(16)
+  1251→  1251→      if (lastStart !== undefined) {
+  1252→  1252→        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  1253→  1253→        this.stageTimings[16] = Math.max(0, now - lastStart)
+  1254→  1254→      }
+  1255→  1255→      this.lastRenderMs = Math.max(0, Date.now() - renderStartWall)
+  1256→  1256→    }
+  1257→  1257→
+  1258→  1258→    // P2-ANALYTICS: return a snapshot of the per-stage timings so the caller
+  1259→  1259→    // (MasteringTab) can persist them via recordRenderTelemetry for the
+  1260→  1260→    // Analytics tab's "Per-Stage DSP Time" chart. Shallow copy so later
+  1261→  1261→    // renders don't mutate the returned reference.
+  1262→  1262→    return {
+  1263→  1263→      buffer: outBuffer,
+  1264→  1264→      analysis: finalAnalysis,
+  1265→  1265→      params,
+  1266→  1266→      score,
+  1267→  1267→      stageTimings: { ...this.stageTimings },
+  1268→  1268→    }
+  1269→  1269→    } finally {
+  1270→  1270→      // P2-METERS: always decrement the render queue counter — whether the
+  1271→  1271→      // render succeeded, failed, or was cancelled. This keeps the telemetry
+  1272→  1272→      // honest about in-flight work even when an error propagates.
+  1273→  1273→      this.renderQueueDepth = Math.max(0, this.renderQueueDepth - 1)
+  1274→  1274→    }
+  1275→  1275→  }
+  1276→  1276→
+  1277→  1277→  // -------------------------------------------------------------------------
+  1278→  1278→  // P2-METERS — Engine telemetry
+  1279→  1279→  // -------------------------------------------------------------------------
+  1280→  1280→
+  1281→  1281→  /**
+  1282→  1282→   * Return a real-time snapshot of engine telemetry. Every field is a REAL
+  1283→  1283→   * measurement — no static numbers, no fabrication.
+  1284→  1284→   *
+  1285→  1285→   *   - cpuLoadPct: (Σ dsp time over last 1s) / (1000 ms) × 100. Capped at
+  1286→  1286→   *     100% — higher values would indicate the tick loop is spending more
+  1287→  1287→   *     than real time in DSP work (impossible for a synchronous loop, but
+  1288→  1288→   *     possible if many renders are running concurrently).
+  1289→  1289→   *   - memoryUsedMB: performance.memory.usedJSHeapSize / 1e6 when available
+  1290→  1290→   *     (Chromium-only). Null on browsers that don't expose it — honestly
+  1291→  1291→   *     reported as N/A by the UI, never fabricated.
+  1292→  1292→   *   - sampleRate: this.context?.sampleRate ?? 0.
+  1293→  1293→   *   - audioContextState: this.context?.state ?? 'uninitialized'.
+  1294→  1294→   *   - bufferDuration: duration of the playing buffer (processedBuffer in B
+  1295→  1295→   *     mode, inputBuffer in A mode) in seconds. 0 when no buffer is loaded.
+  1296→  1296→   *   - bufferChannels: channel count of the playing buffer.
+  1297→  1297→   *   - queuedRenders: renderQueueDepth (in-flight + queued render() calls).
+  1298→  1298→   *   - lastRenderMs: wall-clock duration of the most recent completed render.
+  1299→  1299→   *   - stageTimings: shallow copy of the real per-stage wall-clock timings
+  1300→  1300→   *     captured by the wrappedOnProgress callback during the last render.
+  1301→  1301→   *
+  1302→  1302→   * Updated on every call — callers poll at ~1 Hz for the footer display.
+  1303→  1303→   */
+  1304→  1304→  getEngineTelemetry(): EngineTelemetry {
+  1305→  1305→    // Sum DSP time over the last 1 second of samples.
+  1306→  1306→    let dspSum = 0
+  1307→  1307→    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  1308→  1308→    for (const s of this.dspTimeSamples) {
+  1309→  1309→      if (s.t >= nowMs - 1000) dspSum += s.dsp
+  1310→  1310→    }
+  1311→  1311→    // CPU load = (DSP time over 1s) / (1s in ms) × 100, clamped to [0, 100].
+  1312→  1312→    const cpuLoadPct = Math.max(0, Math.min(100, (dspSum / 1000) * 100))
+  1313→  1313→
+  1314→  1314→    // Memory — Chromium-only via performance.memory. Other browsers return
+  1315→  1315→    // null and the UI honestly shows "N/A".
+  1316→  1316→    let memoryUsedMB: number | null = null
+  1317→  1317→    if (typeof performance !== 'undefined') {
+  1318→  1318→      const mem = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory
+  1319→  1319→      if (mem && typeof mem.usedJSHeapSize === 'number') {
+  1320→  1320→        memoryUsedMB = mem.usedJSHeapSize / 1e6
+  1321→  1321→      }
+  1322→  1322→    }
+  1323→  1323→
+  1324→  1324→    const playingBuffer = this._previewMode === 'B' && this.processedBuffer
+  1325→  1325→      ? this.processedBuffer
+  1326→  1326→      : this.inputBuffer
+  1327→  1327→
+  1328→  1328→    return {
+  1329→  1329→      cpuLoadPct,
+  1330→  1330→      memoryUsedMB,
+  1331→  1331→      sampleRate: this.context?.sampleRate ?? 0,
+  1332→  1332→      audioContextState: this.context?.state ?? 'uninitialized',
+  1333→  1333→      bufferDuration: playingBuffer?.duration ?? 0,
+  1334→  1334→      bufferChannels: playingBuffer?.numberOfChannels ?? 0,
+  1335→  1335→      queuedRenders: this.renderQueueDepth,
+  1336→  1336→      lastRenderMs: this.lastRenderMs,
+  1337→  1337→      stageTimings: { ...this.stageTimings },
+  1338→  1338→    }
+  1339→  1339→  }
+  1340→  1340→
+  1341→  1341→  // -------------------------------------------------------------------------
+  1342→  1342→  // Export — WAV (24-bit) / WAV (16-bit) / MP3 (320 kbps real LAME) per Stage 15 spec
+  1343→  1343→  // -------------------------------------------------------------------------
+  1344→  1344→
+  1345→  1345→  exportWav(
+  1346→  1346→    bitDepth: 16 | 24 = 24,
+  1347→  1347→    provenance?: ProvenanceCertificate | null,
+  1348→  1348→    options?: ExportOptions | null,
+  1349→  1349→  ): Blob {
+  1350→  1350→    if (!this.processedBuffer) throw new Error('No processed buffer to export')
+  1351→  1351→    return audioBufferToWav(this.processedBuffer, bitDepth, provenance ?? null, options ?? null)
+  1352→  1352→  }
+  1353→  1353→
+  1354→  1354→  exportOriginalWav(bitDepth: 16 | 24 = 24): Blob {
+  1355→  1355→    if (!this.inputBuffer) throw new Error('No input buffer')
+  1356→  1356→    return audioBufferToWav(this.inputBuffer, bitDepth, null, null)
+  1357→  1357→  }
+  1358→  1358→
+  1359→  1359→  /**
+  1360→  1360→   * P3-TPDF-MP3 — Real MP3 export via the LAME encoder (pure-JS port, ~250KB).
+  1361→  1361→   *
+  1362→  1362→   * Per the official tech spec Stage 15: "320 kbps MP3 with TPDF dither".
+  1363→  1363→   * Produces a genuine MPEG-1 Layer III audio/mpeg file with:
+  1364→  1364→   *   - CBR bitrate (default 320 kbps)
+  1365→  1365→   *   - Sample rate from the processed buffer (48 kHz)
+  1366→  1366→   *   - Stereo (or mono if source was mono)
+  1367→  1367→   *   - TPDF dither applied during Float32 → Int16 PCM conversion (LAME only
+  1368→  1368→   *     accepts 16-bit PCM input internally — so the float master is dithered
+  1369→  1369→   *     down to 16-bit using the same TPDF algorithm as 16-bit WAV export).
+  1370→  1370→   *   - Optional ID3v2.3 tag embedding the RAIN-CERT certificate JSON in a
+  1371→  1371→   *     PRIV frame (owner identifier "com.rain.cert") for downstream
+  1372→  1372→   *     verification.
+  1373→  1373→   *
+  1374→  1374→   * CRITICAL: the RAIN-CERT Ed25519 signature is computed over the FLOAT32
+  1375→  1375→   * processed buffer (see provenance.ts → hashFloat32Channels), NOT over
+  1376→  1376→   * these MP3 bytes. MP3 is a lossy delivery format; the cert attests to the
+  1377→  1377→   * artistic float master that the MP3 was encoded from.
+  1378→  1378→   */
+  1379→  1379→  exportMp3(
+  1380→  1380→    bitrate = 320,
+  1381→  1381→    provenance?: ProvenanceCertificate | null,
+  1382→  1382→    options?: ExportOptions | null,
+  1383→  1383→  ): Blob {
+  1384→  1384→    if (!this.processedBuffer) throw new Error('No processed buffer to export')
+  1385→  1385→    return audioBufferToMp3(this.processedBuffer, bitrate, provenance ?? null, options ?? null)
+  1386→  1386→  }
+  1387→  1387→
+  1388→  1388→  getParams(): ProcessingParams | null { return this.params }
+  1389→  1389→
+  1390→  1390→  // -------------------------------------------------------------------------
+  1391→  1391→  // Stem separation — BS-RoFormer 4-pass cascade per tech spec.
+  1392→  1392→  // Uses the loaded inputBuffer. See src/lib/rain/stems.ts for the engine.
+  1393→  1393→  // -------------------------------------------------------------------------
+  1394→  1394→
+  1395→  1395→  /**
+  1396→  1396→   * Run real BS-RoFormer 4-pass source separation on the loaded input audio.
+  1397→  1397→   * Returns 12 StemResults with actual stereo channels + measured RMS/peak.
+  1398→  1398→   *
+  1399→  1399→   * Pipeline per tech spec (Pasted Content_1783542076605.txt):
+  1400→  1400→   *   Pass 1: BS-RoFormer       → vocals, drums, bass, guitar, piano, other
+  1401→  1401→   *   Pass 2: MelBand RoFormer  → lead vocals, backing vocals
+  1402→  1402→   *   Pass 3: Spectral split    → kick, snare, hats, percussion
+  1403→  1403→   *   Pass 4: Dereverb          → ambience + dry other
+  1404→  1404→   *
+  1405→  1405→   * Used by the Stems tab for explicit "Run Separation" / "Re-run" clicks.
+  1406→  1406→   * The render() pipeline also runs this internally at Stage 7 (for audio
+  1407→  1407→   * <= 60s) and emits results via the onStemsReady callback — so the Stems
+  1408→  1408→   * tab is usually already populated by the time the user opens it.
+  1409→  1409→   *
+  1410→  1410→   * @param onProgress Optional (stageName, pct) callback — fires from real
+  1411→  1411→   *                   DSP stages, never from a setTimeout placeholder.
+  1412→  1412→   * @param signal     Optional AbortSignal — checked between every pass
+  1413→  1413→   *                   and every chunk within a pass.
+  1414→  1414→   */
+  1415→  1415→  async separateStems(
+  1416→  1416→    onProgress?: (stage: string, pct: number) => void,
+  1417→  1417→    signal?: AbortSignal,
+  1418→  1418→  ): Promise<import('./stems').StemResult[]> {
+  1419→  1419→    if (!this.inputBuffer) throw new Error('No input loaded — load a track first')
+  1420→  1420→    const sampleRate = this.inputBuffer.sampleRate
+  1421→  1421→    const channels: Float32Array[] = []
+  1422→  1422→    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
+  1423→  1423→      channels.push(this.inputBuffer.getChannelData(c).slice())
+  1424→  1424→    }
+  1425→  1425→    // Dynamic import keeps stems.ts (which has its own FFT/RoPE/correlation
+  1426→  1426→    // code) out of the initial bundle when the Stems tab is never opened.
+  1427→  1427→    const { runStemSeparation } = await import('./stems')
+  1428→  1428→    return runStemSeparation(channels, sampleRate, onProgress, signal)
+  1429→  1429→  }
+  1430→  1430→
+  1431→  1431→  /**
+  1432→  1432→   * Build a Web Audio AudioBuffer from raw Float32Array channels. Used by
+  1433→  1433→   * StemsTab to preview individual stems via the AudioContext and to export
+  1434→  1434→   * them as WAV via audioBufferToWav().
+  1435→  1435→   */
+  1436→  1436→  floatArraysToAudioBuffer(channels: Float32Array[], sampleRate: number): AudioBuffer {
+  1437→  1437→    if (!this.context) {
+  1438→  1438→      // Provide a fallback OfflineAudioContext for headless conversion when
+  1439→  1439→      // the live AudioContext hasn't been initialised yet.
+  1440→  1440→      const off = new OfflineAudioContext(channels.length, channels[0].length, sampleRate)
+  1441→  1441→      const buf = off.createBuffer(channels.length, channels[0].length, sampleRate)
+  1442→  1442→      for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c] as Float32Array<ArrayBuffer>, c)
+  1443→  1443→      return buf
+  1444→  1444→    }
+  1445→  1445→    const buf = this.context.createBuffer(channels.length, channels[0].length, sampleRate)
+  1446→  1446→    for (let c = 0; c < channels.length; c++) buf.copyToChannel(channels[c] as Float32Array<ArrayBuffer>, c)
+  1447→  1447→    return buf
+  1448→  1448→  }
+  1449→  1449→
+  1450→  1450→  /**
+  1451→  1451→   * Play a stem's stereo channels through the live AudioContext for preview.
+  1452→  1452→   * Stops any currently-playing source first. Returns a stop() handle.
+  1453→  1453→   *
+  1454→  1454→   * @param onEnded Optional callback fired when the stem finishes naturally
+  1455→  1455→   *                (NOT fired when stopped via the returned handle or when a
+  1456→  1456→   *                new source supersedes this one — those paths clear
+  1457→  1457→   *                `onended` first to avoid spurious state flips).
+  1458→  1458→   */
+  1459→  1459→  playStem(
+  1460→  1460→    channels: Float32Array[],
+  1461→  1461→    sampleRate: number,
+  1462→  1462→    onEnded?: () => void,
+  1463→  1463→  ): () => void {
+  1464→  1464→    if (!this.context) throw new Error('AudioContext not initialised')
+  1465→  1465→    if (this.context.state === 'suspended') {
+  1466→  1466→      void this.context.resume().catch(() => {})
+  1467→  1467→    }
+  1468→  1468→    // Stop current playback (preview path) without tearing down the graph.
+  1469→  1469→    // Clear onended FIRST so a manual stop doesn't fire the callback.
+  1470→  1470→    if (this.sourceNode) {
+  1471→  1471→      this.sourceNode.onended = null
+  1472→  1472→      try { this.sourceNode.stop() } catch { /* already stopped */ }
+  1473→  1473→      this.sourceNode.disconnect()
+  1474→  1474→      this.sourceNode = null
+  1475→  1475→    }
+  1476→  1476→    const buf = this.floatArraysToAudioBuffer(channels, sampleRate)
+  1477→  1477→    const src = this.context.createBufferSource()
+  1478→  1478→    src.buffer = buf
+  1479→  1479→    src.connect(this.gainNode!)
+  1480→  1480→    if (onEnded) {
+  1481→  1481→      // Capture generation so a stale onended (from a superseded source)
+  1482→  1482→      // doesn't fire on the new source.
+  1483→  1483→      const gen = ++this.playGeneration
+  1484→  1484→      src.onended = () => {
+  1485→  1485→        if (gen === this.playGeneration) onEnded()
+  1486→  1486→      }
+  1487→  1487→    }
+  1488→  1488→    src.start()
+  1489→  1489→    this.sourceNode = src
+  1490→  1490→    return () => {
+  1491→  1491→      // Manual stop — clear onended so the callback doesn't fire.
+  1492→  1492→      src.onended = null
+  1493→  1493→      try { src.stop() } catch { /* already stopped */ }
+  1494→  1494→      src.disconnect()
+  1495→  1495→      if (this.sourceNode === src) this.sourceNode = null
+  1496→  1496→    }
+  1497→  1497→  }
+  1498→  1498→
+  1499→  1499→  // -------------------------------------------------------------------------
+  1500→  1500→  // Spatial processing — wraps the standalone spatial engine in spatial.ts.
+  1501→  1501→  // Uses the processed (mastered) buffer if available, otherwise the input.
+  1502→  1502→  // -------------------------------------------------------------------------
+  1503→  1503→
+  1504→  1504→  /**
+  1505→  1505→   * Run the spatial pipeline (stereo enhancement → bed upmix → HRTF binaural →
+  1506→  1506→   * ADM XML) on the currently loaded audio. Returns the full SpatialResult.
+  1507→  1507→   */
+  1508→  1508→  async processSpatial(
+  1509→  1509→    config: import('./spatial').SpatialConfig,
+  1510→  1510→    onProgress?: (stage: string, pct: number) => void,
+  1511→  1511→    signal?: AbortSignal,
+  1512→  1512→    /** Max duration in seconds. Default 60 (preview). Export callers pass a
+  1513→  1513→     *  larger value (e.g. 360) so the full track is processed — and check
+  1514→  1514→     *  `result.truncated` to refuse downloading a partial file. */
+  1515→  1515→    maxDurationSec?: number,
+  1516→  1516→  ): Promise<import('./spatial').SpatialResult> {
+  1517→  1517→    // Prefer the mastered output; fall back to the raw input.
+  1518→  1518→    const buffer = this.processedBuffer ?? this.inputBuffer
+  1519→  1519→    if (!buffer) throw new Error('No audio loaded — load a track first')
+  1520→  1520→    const sampleRate = buffer.sampleRate
+  1521→  1521→    const channels: Float32Array[] = []
+  1522→  1522→    for (let c = 0; c < buffer.numberOfChannels; c++) {
+  1523→  1523→      channels.push(buffer.getChannelData(c).slice())
+  1524→  1524→    }
+  1525→  1525→    // Dynamic import to avoid pulling the (relatively heavy) spatial module
+  1526→  1526→    // into the initial bundle when the Spatial tab is never opened.
+  1527→  1527→    const { processSpatial } = await import('./spatial')
+  1528→  1528→    return processSpatial(channels, sampleRate, config, onProgress, signal, maxDurationSec)
+  1529→  1529→  }
+  1530→  1530→}
+  1531→  1531→
+  1532→  1532→function sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)) }
+  1533→  1533→
+  1534→  1534→// ---------------------------------------------------------------------------
+  1535→  1535→// Multiband compression (3-band, simplified)
+  1536→  1536→// ---------------------------------------------------------------------------
+  1537→  1537→
+  1538→  1538→function applyMultibandCompression(channels: Float32Array[], params: ProcessingParams, sampleRate: number) {
+  1539→  1539→  if (channels.length < 2) return
+  1540→  1540→  const lowXover = 200
+  1541→  1541→  const midXover = 2000
+  1542→  1542→
+  1543→  1543→  const lowLpf = designBiquad('lowpass', lowXover, sampleRate, 0.7071)
+  1544→  1544→  const highHpf = designBiquad('highpass', midXover, sampleRate, 0.7071)
+  1545→  1545→  const midBand1 = designBiquad('highpass', lowXover, sampleRate, 0.7071)
+  1546→  1546→  const midBand2 = designBiquad('lowpass', midXover, sampleRate, 0.7071)
+  1547→  1547→
+  1548→  1548→  for (let ch = 0; ch < channels.length; ch++) {
+  1549→  1549→    const orig = channels[ch].slice()
+  1550→  1550→    const low = orig.slice(); applyBiquad(low, lowLpf)
+  1551→  1551→    const high = orig.slice(); applyBiquad(high, highHpf)
+  1552→  1552→    const mid = orig.slice(); applyBiquad(mid, midBand1); applyBiquad(mid, midBand2)
+  1553→  1553→
+  1554→  1554→    // Apply compression per band
+  1555→  1555→    compressBand(low, params.mb_threshold_low, params.mb_ratio_low, params.mb_attack_low, params.mb_release_low, sampleRate)
+  1556→  1556→    compressBand(mid, params.mb_threshold_mid, params.mb_ratio_mid, params.mb_attack_mid, params.mb_release_mid, sampleRate)
+  1557→  1557→    compressBand(high, params.mb_threshold_high, params.mb_ratio_high, params.mb_attack_high, params.mb_release_high, sampleRate)
+  1558→  1558→
+  1559→  1559→    // Sum back
+  1560→  1560→    for (let i = 0; i < channels[ch].length; i++) {
+  1561→  1561→      channels[ch][i] = low[i] + mid[i] + high[i]
+  1562→  1562→    }
+  1563→  1563→  }
+  1564→  1564→}
+  1565→  1565→
+  1566→  1566→function compressBand(samples: Float32Array, thresholdDb: number, ratio: number, attackMs: number, releaseMs: number, sampleRate: number) {
+  1567→  1567→  const attackCoef = Math.exp(-1 / (attackMs * 0.001 * sampleRate))
+  1568→  1568→  const releaseCoef = Math.exp(-1 / (releaseMs * 0.001 * sampleRate))
+  1569→  1569→  const thresholdLin = Math.pow(10, thresholdDb / 20)
+  1570→  1570→  let gainReduction = 1
+  1571→  1571→  for (let i = 0; i < samples.length; i++) {
+  1572→  1572→    const x = Math.abs(samples[i])
+  1573→  1573→    let target = 1
+  1574→  1574→    if (x > thresholdLin) {
+  1575→  1575→      const overDb = 20 * Math.log10(x / thresholdLin)
+  1576→  1576→      const reducedDb = overDb * (1 - 1 / ratio)
+  1577→  1577→      target = Math.pow(10, -reducedDb / 20)
+  1578→  1578→    }
+  1579→  1579→    const coef = target < gainReduction ? attackCoef : releaseCoef
+  1580→  1580→    gainReduction = gainReduction * coef + target * (1 - coef)
+  1581→  1581→    samples[i] *= gainReduction
+  1582→  1582→  }
+  1583→  1583→}
+  1584→  1584→
+  1585→  1585→// ---------------------------------------------------------------------------
+  1586→  1586→// P3-PIPELINE-89 — Stage 8: Per-Stem Repair
+  1587→  1587→// Lightweight per-stem spectral correction. Uses the existing designBiquad /
+  1588→  1588→// applyBiquad primitives (no STFT — keeps the per-stem pass fast). For each
+  1589→  1589→// stem category, applies a minimal set of corrective filters per the task
+  1590→  1590→// spec. Deterministic — same input → same output. No Math.random, no
+  1591→  1591→// Date.now in DSP path.
+  1592→  1592→// ---------------------------------------------------------------------------
+  1593→  1593→
+  1594→  1594→/**
+  1595→  1595→ * Apply per-stem repair (Stage 8) to one separated stem.
+  1596→  1596→ *
+  1597→  1597→ * Returns a NEW Float32Array[] (does not mutate the separator's output — the
+  1598→  1598→ * Stems tab needs the original measurements to remain stable for display
+  1599→  1599→ * until the repaired results are emitted via onStemsReady).
+  1600→  1600→ *
+  1601→  1601→ * Per the P3-PIPELINE-89 task spec:
+  1602→  1602→ *   - vocals / backing_vocals : de-ess peak cut @ 7 kHz, Q=2, -2 dB + HPF @ 80 Hz
+  1603→  1603→ *   - bass                    : HPF @ 30 Hz + low-shelf trim if peak > -3 dBFS
+  1604→  1604→ *   - drums / kick / snare / hats / percussion : DC offset verify only (preserve transients)
+  1605→  1605→ *   - guitar / piano          : HPF @ 60 Hz + de-ess @ 8 kHz, Q=2, -1.5 dB
+  1606→  1606→ *   - ambience                : no repair (preserve reverb tail)
+  1607→  1607→ *   - other                   : HPF @ 40 Hz
+  1608→  1608→ */
+  1609→  1609→function repairStem(
+  1610→  1610→  key: StemKey,
+  1611→  1611→  inputChannels: Float32Array[],
+  1612→  1612→  sampleRate: number,
+  1613→  1613→): Float32Array[] {
+  1614→  1614→  // Always copy — never mutate the separator's output in place.
+  1615→  1615→  const out: Float32Array[] = inputChannels.map((c) => c.slice())
+  1616→  1616→
+  1617→  1617→  switch (key) {
+  1618→  1618→    case 'vocals':
+  1619→  1619→    case 'backing_vocals': {
+  1620→  1620→      // Gentle de-ess @ 7 kHz, Q=2, -2 dB
+  1621→  1621→      const deEss = designBiquad('peak', 7000, sampleRate, 2, -2)
+  1622→  1622→      // HPF @ 80 Hz (remove rumble below vocal fundamental)
+  1623→  1623→      const hpf = designBiquad('highpass', 80, sampleRate, 0.7071)
+  1624→  1624→      for (const c of out) {
+  1625→  1625→        applyBiquad(c, deEss)
+  1626→  1626→        applyBiquad(c, hpf)
+  1627→  1627→      }
+  1628→  1628→      break
+  1629→  1629→    }
+  1630→  1630→    case 'bass': {
+  1631→  1631→      // HPF @ 30 Hz (remove subsonic rumble below bass fundamental)
+  1632→  1632→      const hpf = designBiquad('highpass', 30, sampleRate, 0.7071)
+  1633→  1633→      for (const c of out) applyBiquad(c, hpf)
+  1634→  1634→      // Gentle low-shelf trim if peak > -3 dBFS (tames excessive sub-bass)
+  1635→  1635→      let peak = 0
+  1636→  1636→      for (const c of out) {
+  1637→  1637→        for (let i = 0; i < c.length; i++) {
+  1638→  1638→          const a = c[i] < 0 ? -c[i] : c[i]
+  1639→  1639→          if (a > peak) peak = a
+  1640→  1640→        }
+  1641→  1641→      }
+  1642→  1642→      const peakDb = 20 * Math.log10(Math.max(peak, 1e-7))
+  1643→  1643→      if (peakDb > -3) {
+  1644→  1644→        const shelf = designBiquad('lowshelf', 100, sampleRate, 0.7071, -1.0)
+  1645→  1645→        for (const c of out) applyBiquad(c, shelf)
+  1646→  1646→      }
+  1647→  1647→      break
+  1648→  1648→    }
+  1649→  1649→    case 'drums':
+  1650→  1650→    case 'kick':
+  1651→  1651→    case 'snare':
+  1652→  1652→    case 'hats':
+  1653→  1653→    case 'percussion': {
+  1654→  1654→      // Transient preservation: no repair, just verify no DC offset.
+  1655→  1655→      // Drums are transient-driven — any spectral repair would smear attacks.
+  1656→  1656→      for (const c of out) {
+  1657→  1657→        let sum = 0
+  1658→  1658→        for (let i = 0; i < c.length; i++) sum += c[i]
+  1659→  1659→        const dc = sum / c.length
+  1660→  1660→        if (Math.abs(dc) > 1e-4) {
+  1661→  1661→          for (let i = 0; i < c.length; i++) c[i] -= dc
+  1662→  1662→        }
+  1663→  1663→      }
+  1664→  1664→      break
+  1665→  1665→    }
+  1666→  1666→    case 'guitar':
+  1667→  1667→    case 'piano': {
+  1668→  1668→      // HPF @ 60 Hz + de-ess @ 8 kHz, Q=2, -1.5 dB
+  1669→  1669→      const hpf = designBiquad('highpass', 60, sampleRate, 0.7071)
+  1670→  1670→      const deEss = designBiquad('peak', 8000, sampleRate, 2, -1.5)
+  1671→  1671→      for (const c of out) {
+  1672→  1672→        applyBiquad(c, hpf)
+  1673→  1673→        applyBiquad(c, deEss)
+  1674→  1674→      }
+  1675→  1675→      break
+  1676→  1676→    }
+  1677→  1677→    case 'ambience': {
+  1678→  1678→      // No repair — preserve the reverb tail (any filtering would chop it).
+  1679→  1679→      break
+  1680→  1680→    }
+  1681→  1681→    case 'other':
+  1682→  1682→    default: {
+  1683→  1683→      // HPF @ 40 Hz (gentle rumble removal)
+  1684→  1684→      const hpf = designBiquad('highpass', 40, sampleRate, 0.7071)
+  1685→  1685→      for (const c of out) applyBiquad(c, hpf)
+  1686→  1686→      break
+  1687→  1687→    }
+  1688→  1688→  }
+  1689→  1689→
+  1690→  1690→  return out
+  1691→  1691→}
+  1692→  1692→
+  1693→  1693→// ---------------------------------------------------------------------------
+  1694→  1694→// P3-PIPELINE-89 — Stage 9: SAIL v2 Per-Stem Processing
+  1695→  1695→// Stem-Aware Iterative Limiter. For each stem: apply a stem-aware limiter
+  1696→  1696→// (per-category ceiling + release), apply per-stem gain faders from the
+  1697→  1697→// session store (with mute/solo handling), then sum all stems back to a
+  1698→  1698→// stereo bus that becomes the input to Stage 10 (Master Bus).
+  1699→  1699→// ---------------------------------------------------------------------------
+  1700→  1700→
+  1701→  1701→/**
+  1702→  1702→ * SAIL v2 limiter settings per stem category (P3-PIPELINE-89 task spec):
+  1703→  1703→ *   vocals / backing_vocals  : -3 dBFS ceiling, 50 ms release (vocal protection)
+  1704→  1704→ *   drums / kick / snare / hats / percussion : -1 dBFS, 10 ms release (drums louder)
+  1705→  1705→ *   bass                     : -2 dBFS, 30 ms release (control + transient preservation)
+  1706→  1706→ *   guitar / piano           : -3 dBFS, 40 ms release
+  1707→  1707→ *   ambience / other         : no limiting (preserve dynamic range)
+  1708→  1708→ *
+  1709→  1709→ * Returns null when no limiting should be applied.
+  1710→  1710→ */
+  1711→  1711→function getSailLimiterSettings(key: StemKey): { ceiling: number; releaseMs: number } | null {
+  1712→  1712→  switch (key) {
+  1713→  1713→    case 'vocals':
+  1714→  1714→    case 'backing_vocals':
+  1715→  1715→      return { ceiling: -3, releaseMs: 50 }
+  1716→  1716→    case 'drums':
+  1717→  1717→    case 'kick':
+  1718→  1718→    case 'snare':
+  1719→  1719→    case 'hats':
+  1720→  1720→    case 'percussion':
+  1721→  1721→      return { ceiling: -1, releaseMs: 10 }
+  1722→  1722→    case 'bass':
+  1723→  1723→      return { ceiling: -2, releaseMs: 30 }
+  1724→  1724→    case 'guitar':
+  1725→  1725→    case 'piano':
+  1726→  1726→      return { ceiling: -3, releaseMs: 40 }
+  1727→  1727→    case 'ambience':
+  1728→  1728→    case 'other':
+  1729→  1729→      return null
+  1730→  1730→    default:
+  1731→  1731→      return null
+  1732→  1732→  }
+  1733→  1733→}
+  1734→  1734→
+  1735→  1735→/**
+  1736→  1736→ * Run SAIL v2 per-stem processing (Stage 9) on the separated stems.
+  1737→  1737→ *
+  1738→  1738→ * For each stem:
+  1739→  1739→ *   1. Apply a stem-aware look-ahead limiter (per-category ceiling/release).
+  1740→  1740→ *      Uses sample-peak applyLimiter (fast) — inter-sample peaks are caught
+  1741→  1741→ *      by the master bus true-peak limiter in Stage 12.
+  1742→  1742→ *   2. Read the per-stem gain (dB) from useSessionStore.getState().stems.
+  1743→  1743→ *      Convert to linear and apply as a gain fader.
+  1744→  1744→ *   3. Honor mute (zero contribution) and solo (only soloed stem contributes).
+  1745→  1745→ *   4. Sum the limited + gained stem into the stereo output bus.
+  1746→  1746→ *
+  1747→  1747→ * Returns a stereo Float32Array[] (always 2 channels) of length `targetLength`.
+  1748→  1748→ * Deterministic — same input + same store state → same output.
+  1749→  1749→ */
+  1750→  1750→function sailProcessStems(
+  1751→  1751→  stems: import('./stems').StemResult[],
+  1752→  1752→  sampleRate: number,
+  1753→  1753→  targetLength: number,
+  1754→  1754→): Float32Array[] {
+  1755→  1755→  // Read stem gains + mute/solo state from the session store.
+  1756→  1756→  // This is the Zustand pattern for reading state outside React components.
+  1757→  1757→  const sessionStems = useSessionStore.getState().stems
+  1758→  1758→  const soloed = sessionStems.find((s) => s.solo)
+  1759→  1759→
+  1760→  1760→  const leftSum = new Float32Array(targetLength)
+  1761→  1761→  const rightSum = new Float32Array(targetLength)
+  1762→  1762→
+  1763→  1763→  for (const stem of stems) {
+  1764→  1764→    const sessionStem = sessionStems.find((s) => s.key === stem.key)
+  1765→  1765→    if (!sessionStem) continue
+  1766→  1766→
+  1767→  1767→    // Mute/solo handling: muted stems contribute nothing; if any stem is
+  1768→  1768→    // soloed, only soloed stems contribute.
+  1769→  1769→    const audible = !sessionStem.muted && (!soloed || sessionStem.solo)
+  1770→  1770→    if (!audible) continue
+  1771→  1771→
+  1772→  1772→    // Per-stem gain fader (dB → linear)
+  1773→  1773→    const gainLin = Math.pow(10, sessionStem.gain / 20)
+  1774→  1774→
+  1775→  1775→    // Apply per-stem limiter to a copy of the stem channels (do NOT mutate
+  1776→  1776→    // the separator's output — the Stems tab still holds those references).
+  1777→  1777→    const limiterSettings = getSailLimiterSettings(stem.key)
+  1778→  1778→    const processed: Float32Array[] = stem.channels.map((c) => c.slice())
+  1779→  1779→    if (limiterSettings) {
+  1780→  1780→      const { ceiling, releaseMs } = limiterSettings
+  1781→  1781→      const threshold = ceiling - 0.5
+  1782→  1782→      for (let ch = 0; ch < processed.length; ch++) {
+  1783→  1783→        processed[ch] = applyLimiter(processed[ch], {
+  1784→  1784→          ceiling,
+  1785→  1785→          threshold,
+  1786→  1786→          releaseMs,
+  1787→  1787→          lookAheadMs: 5,
+  1788→  1788→          sampleRate,
+  1789→  1789→        })
+  1790→  1790→      }
+  1791→  1791→    }
+  1792→  1792→
+  1793→  1793→    // Sum into the stereo bus with per-stem gain applied
+  1794→  1794→    const stemL = processed[0]
+  1795→  1795→    const stemR = processed[1] ?? processed[0]
+  1796→  1796→    const len = Math.min(stemL.length, targetLength)
+  1797→  1797→    for (let i = 0; i < len; i++) {
+  1798→  1798→      leftSum[i] += stemL[i] * gainLin
+  1799→  1799→      rightSum[i] += stemR[i] * gainLin
+  1800→  1800→    }
+  1801→  1801→  }
+  1802→  1802→
+  1803→  1803→  return [leftSum, rightSum]
+  1804→  1804→}
+  1805→  1805→
+  1806→  1806→// ---------------------------------------------------------------------------
+  1807→  1807→// P3-PIPELINE-89 — Stem measurement helpers
+  1808→  1808→// Re-compute RMS + peak dB on the repaired stem channels so the Stems tab
+  1809→  1809→// shows accurate post-repair measurements after Stage 8 re-emits via
+  1810→  1810→// onStemsReady. Matches the measurement logic in stems.ts.
+  1811→  1811→// ---------------------------------------------------------------------------
+  1812→  1812→
+  1813→  1813→function measureStemRmsDb(channels: Float32Array[]): number {
+  1814→  1814→  if (channels.length === 0 || channels[0].length === 0) return -120
+  1815→  1815→  let maxRms = -Infinity
+  1816→  1816→  for (const c of channels) {
+  1817→  1817→    let sum = 0
+  1818→  1818→    for (let i = 0; i < c.length; i++) sum += c[i] * c[i]
+  1819→  1819→    const rms = Math.sqrt(sum / c.length)
+  1820→  1820→    const db = 20 * Math.log10(Math.max(rms, 1e-7))
+  1821→  1821→    if (db > maxRms) maxRms = db
+  1822→  1822→  }
+  1823→  1823→  return maxRms === -Infinity ? -120 : maxRms
+  1824→  1824→}
+  1825→  1825→
+  1826→  1826→function measureStemPeakDb(channels: Float32Array[]): number {
+  1827→  1827→  if (channels.length === 0) return -120
+  1828→  1828→  let peak = 0
+  1829→  1829→  for (const c of channels) {
+  1830→  1830→    for (let i = 0; i < c.length; i++) {
+  1831→  1831→      const a = c[i] < 0 ? -c[i] : c[i]
+  1832→  1832→      if (a > peak) peak = a
+  1833→  1833→    }
+  1834→  1834→  }
+  1835→  1835→  return 20 * Math.log10(Math.max(peak, 1e-7))
+  1836→  1836→}
+  1837→  1837→
+  1838→  1838→// ---------------------------------------------------------------------------
+  1839→  1839→// Export options — every flag below produces a REAL byte-level change in the
+  1840→  1840→// exported file. There are no cosmetic toggles. See ExportTab.tsx for the UI.
+  1841→  1841→// ---------------------------------------------------------------------------
+  1842→  1842→
+  1843→  1843→/**
+  1844→  1844→ * P2-EXPORT directive: "Every toggle must modify exported assets."
+  1845→  1845→ *
+  1846→  1846→ * Each flag below is honored byte-for-byte by `audioBufferToWav` /
+  1847→  1847→ * `audioBufferToMp3` and verified after export by `verifyExportedWav` /
+  1848→  1848→ * `verifyExportedMp3`.
+  1849→  1849→ *
+  1850→  1850→ *  - `embedProvenance`  → WAV: LIST/INFO `RAIN` field with cert JSON
+  1851→  1851→ *                         MP3: ID3v2 PRIV "com.rain.cert" frame with cert JSON
+  1852→  1852→ *  - `embedSignature`   → WAV: LIST/INFO `ISIG` field with Ed25519 sig hex
+  1853→  1853→ *                         MP3: ID3v2 TXXX "RAIN_SIGNATURE" frame with sig hex
+  1854→  1854→ *  - `embedFingerprint` → WAV: LIST/INFO `IFPR` field with Chromaprint hex
+  1855→  1855→ *                         MP3: ID3v2 TXXX "RAIN_FINGERPRINT" frame with hash
+  1856→  1856→ *  - `embedMetadata`    → WAV: LIST/INFO INAM/IART/IPRD/ICRD/ISRC/ICMT fields
+  1857→  1857→ *                         MP3: ID3v2 TIT2/TPE1/TALB/TYER/TSRC/COMM frames
+  1858→  1858→ *  - `attachCertificate`→ produces a sidecar `<basename>.cert.json` alongside
+  1859→  1859→ *                         the audio (returned via buildSidecarZip as a 2-file
+  1860→  1860→ *                         ZIP when the UI wants a single download; the UI can
+  1861→  1861→ *                         also offer the two Blobs separately)
+  1862→  1862→ *
+  1863→  1863→ * `embedSignature` is independent of `embedProvenance`: when both are ON the
+  1864→  1864→ * cert JSON carries its `signature` field AND a standalone ISIG/TXXX field is
+  1865→  1865→ * also appended; when only `embedSignature` is ON the cert JSON is omitted but
+  1866→  1866→ * the standalone sig field is still written (so the toggle produces real
+  1867→  1867→ * bytes even with no cert). When `embedProvenance` is ON but `embedSignature`
+  1868→  1868→ * is OFF the signature is stripped from the embedded cert JSON (verifiers see
+  1869→  1869→ * the attestation but cannot cryptographically verify it).
+  1870→  1870→ */
+  1871→  1871→export interface ExportOptions {
+  1872→  1872→  embedProvenance: boolean
+  1873→  1873→  embedSignature: boolean
+  1874→  1874→  embedFingerprint: boolean
+  1875→  1875→  embedMetadata: boolean
+  1876→  1876→  attachCertificate: boolean
+  1877→  1877→  metadata: {
+  1878→  1878→    title: string
+  1879→  1879→    artist: string
+  1880→  1880→    album?: string
+  1881→  1881→    year?: string
+  1882→  1882→    isrc?: string
+  1883→  1883→    comment?: string
+  1884→  1884→  }
+  1885→  1885→  /** Pre-computed Chromaprint hash. If omitted, the fingerprint is sourced
+  1886→  1886→   *  from `provenance.manifest.assertions` (label 'org.rain.fingerprint'). */
+  1887→  1887→  fingerprint?: string
+  1888→  1888→}
+  1889→  1889→
+  1890→  1890→/**
+  1891→  1891→ * Result of re-parsing the exported Blob and confirming that every toggle
+  1892→  1892→ * the user enabled actually produced bytes in the file (and every disabled
+  1893→  1893→ * toggle produced none). `ok` is true iff every per-toggle check passes.
+  1894→  1894→ */
+  1895→  1895→export interface ExportVerificationResult {
+  1896→  1896→  ok: boolean
+  1897→  1897→  format: 'wav' | 'mp3'
+  1898→  1898→  sizeBytes: number
+  1899→  1899→  sha256: string
+  1900→  1900→  checks: {
+  1901→  1901→    provenance: { expected: boolean; found: boolean; ok: boolean }
+  1902→  1902→    signature: { expected: boolean; found: boolean; ok: boolean }
+  1903→  1903→    fingerprint: { expected: boolean; found: boolean; ok: boolean }
+  1904→  1904→    metadata: { expected: boolean; found: boolean; ok: boolean }
+  1905→  1905→  }
+  1906→  1906→}
+  1907→  1907→
+  1908→  1908→// ---------------------------------------------------------------------------
+  1909→  1909→// WAV encoder
+  1910→  1910→// ---------------------------------------------------------------------------
+  1911→  1911→
+  1912→  1912→export function audioBufferToWav(
+  1913→  1913→  buffer: AudioBuffer,
+  1914→  1914→  bitDepth: 16 | 24 = 24,
+  1915→  1915→  provenance: ProvenanceCertificate | null = null,
+  1916→  1916→  options: ExportOptions | null = null,
+  1917→  1917→): Blob {
+  1918→  1918→  const numChannels = buffer.numberOfChannels
+  1919→  1919→  const sampleRate = buffer.sampleRate
+  1920→  1920→  const length = buffer.length
+  1921→  1921→  const bytesPerSample = bitDepth / 8
+  1922→  1922→  const blockAlign = numChannels * bytesPerSample
+  1923→  1923→  const dataSize = length * blockAlign
+  1924→  1924→
+  1925→  1925→  // P2-EXPORT directive: every toggle below produces real bytes in the
+  1926→  1926→  // LIST/INFO chunk. We build the INFO field list dynamically from the
+  1927→  1927→  // ExportOptions — when all flags are off (or no options are passed), NO
+  1928→  1928→  // LIST chunk is appended at all and the WAV is bare. When any flag is on,
+  1929→  1929→  // a LIST/INFO chunk is appended carrying exactly the requested fields.
+  1930→  1930→  //
+  1931→  1931→  // RIFF INFO field layout used here:
+  1932→  1932→  //   chunk header: 'LIST' (4) + size (4) + 'INFO' (4)
+  1933→  1933→  //   per field:    <id 4 chars> (4) + size (4, LE) + <bytes> + optional pad
+  1934→  1934→  //   pad:          if (fieldDataSize % 2 === 1) one 0x00 byte to keep even align
+  1935→  1935→  //
+  1936→  1936→  // Custom field ids we use (4 chars each, ASCII):
+  1937→  1937→  //   RAIN — full RAIN-CERT certificate JSON (provenance toggle)
+  1938→  1938→  //   ISIG — Ed25519 signature hex string (signature toggle)
+  1939→  1939→  //   IFPR — Chromaprint fingerprint hex string (fingerprint toggle)
+  1940→  1940→  // Standard RIFF INFO field ids (metadata toggle):
+  1941→  1941→  //   INAM — Name (Title)
+  1942→  1942→  //   IART — Artist
+  1943→  1943→  //   IPRD — Product (Album)
+  1944→  1944→  //   ICRD — Creation Date (Year)
+  1945→  1945→  //   ISRC — Source ISRC code (this IS a standard RIFF INFO field id)
+  1946→  1946→  //   ICMT — Comment
+  1947→  1947→  const infoFields: { id: string; bytes: Uint8Array }[] = []
+  1948→  1948→
+  1949→  1949→  // Resolve effective options (legacy callers passing only `provenance` with no
+  1950→  1950→  // `options` get the pre-P2 behaviour: embed cert iff provenance is non-null).
+  1951→  1951→  const wantProvenance = options ? options.embedProvenance : provenance !== null
+  1952→  1952→  const wantSignature = options ? options.embedSignature : false
+  1953→  1953→  const wantFingerprint = options ? options.embedFingerprint : false
+  1954→  1954→  const wantMetadata = options ? options.embedMetadata : false
+  1955→  1955→
+  1956→  1956→  if (wantProvenance && provenance) {
+  1957→  1957→    // Embed the cert JSON. If `embedSignature` is OFF, strip the signature
+  1958→  1958→    // field from the embedded JSON so the toggle truly omits the signature
+  1959→  1959→    // bytes (verifiers can still see the attestation but cannot verify).
+  1960→  1960→    const certPayload: Record<string, unknown> = {
+  1961→  1961→      certId: provenance.certId,
+  1962→  1962→      algorithm: provenance.algorithm,
+  1963→  1963→      signedAt: provenance.signedAt,
+  1964→  1964→      inputHash: provenance.inputHash,
+  1965→  1965→      outputHash: provenance.outputHash,
+  1966→  1966→      publicKey: provenance.publicKey,
+  1967→  1967→      manifest: provenance.manifest,
+  1968→  1968→    }
+  1969→  1969→    if (wantSignature) {
+  1970→  1970→      certPayload.signature = provenance.signature
+  1971→  1971→    }
+  1972→  1972→    // Also strip the fingerprint assertion from the manifest when the
+  1973→  1973→    // fingerprint toggle is OFF — keeps the cert payload in sync with the
+  1974→  1974→    // user's toggle choices.
+  1975→  1975→    if (!wantFingerprint && certPayload.manifest && typeof certPayload.manifest === 'object') {
+  1976→  1976→      const m = certPayload.manifest as { assertions?: Array<{ label: string; data: unknown }> }
+  1977→  1977→      if (Array.isArray(m.assertions)) {
+  1978→  1978→        certPayload.manifest = {
+  1979→  1979→          ...m,
+  1980→  1980→          assertions: m.assertions.filter((a) => a.label !== 'org.rain.fingerprint'),
+  1981→  1981→        }
+  1982→  1982→      }
+  1983→  1983→    }
+  1984→  1984→    const certJson = JSON.stringify(certPayload)
+  1985→  1985→    infoFields.push({ id: 'RAIN', bytes: new TextEncoder().encode(certJson) })
+  1986→  1986→  }
+  1987→  1987→
+  1988→  1988→  if (wantSignature && provenance) {
+  1989→  1989→    // Standalone Ed25519 signature hex field — independent of cert JSON.
+  1990→  1990→    infoFields.push({ id: 'ISIG', bytes: new TextEncoder().encode(provenance.signature) })
+  1991→  1991→  }
+  1992→  1992→
+  1993→  1993→  if (wantFingerprint) {
+  1994→  1994→    // The fingerprint is either passed explicitly via options.fingerprint or
+  1995→  1995→    // sourced from the cert manifest's 'org.rain.fingerprint' assertion.
+  1996→  1996→    const fp =
+  1997→  1997→      options?.fingerprint ??
+  1998→  1998→      provenance?.manifest.assertions.find((a) => a.label === 'org.rain.fingerprint')?.data
+  1999→  1999→        ?.hash
+  2000→  2000→    if (typeof fp === 'string' && fp.length > 0) {
+
+[showing lines 1-2000 of 2002; use offset=2001 with limit to continue reading]

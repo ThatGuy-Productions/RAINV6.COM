@@ -1,0 +1,1035 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — Real Analytics Engine
+     5→ *
+     6→ * Derives EVERY displayed analytics metric from actual stored data:
+     7→ *   - `renderHistory` (Zustand store, RenderLogEntry[]) — last 20 renders, in-memory
+     8→ *   - `engineStats`   (IndexedDB, single-record) — cumulative counters
+     9→ *   - `renders`       (IndexedDB) — per-render telemetry w/ 16-stage timings
+    10→ *   - `qc`            (IndexedDB) — per-render QC pass/warn/fail breakdown
+    11→ *   - `exports`       (IndexedDB) — per-export format + bytes + duration
+    12→ *   - `activity`      (IndexedDB) — undo / redo / repair / AI-query events
+    13→ *
+    14→ * NO fabricated numbers, NO Math.random, NO hardcoded sample arrays.
+    15→ * If there is no data, downstream components show "No data" / "—".
+    16→ *
+    17→ * The `RenderLogEntry.duration` field is the *audio* file duration in SECONDS
+    18→ * (not render-wall-clock time — that is tracked separately via `recordRenderStat`).
+    19→ * This makes the storage-size formula physically meaningful:
+    20→ *   bytes = duration_sec * sampleRate * bitDepth * channels / 8
+    21→ */
+    22→
+    23→import type { RenderLogEntry } from './store'
+    24→import type { MacroValues } from './types'
+    25→import { PLATFORM_TARGETS, PIPELINE_STAGES } from './constants'
+    26→
+    27→// ---------------------------------------------------------------------------
+    28→// Public types
+    29→// ---------------------------------------------------------------------------
+    30→
+    31→export interface DailyMetric {
+    32→  /** Local date label MM-DD */
+    33→  date: string
+    34→  /** Number of renders that day */
+    35→  renders: number
+    36→  /** Audio minutes processed that day (sum of entry.duration / 60) */
+    37→  minutes: number
+    38→  /** Mean RAIN Score across that day's renders (0 if no renders) */
+    39→  score: number
+    40→  /** Cumulative storage estimate in MB (running sum across the window) */
+    41→  storageMb: number
+    42→}
+    43→
+    44→export interface EngineStats {
+    45→  totalRenders: number
+    46→  totalDspTimeMs: number
+    47→  totalAiTimeMs: number
+    48→  totalExportTimeMs: number
+    49→  firstRenderAt: number | null
+    50→  lastRenderAt: number | null
+    51→  /** Number of AI Co-Master queries (incremented in recordAiStat). */
+    52→  aiCallCount: number
+    53→  /** Number of WAV/MP3/Atmos exports (incremented in recordExportDetails). */
+    54→  exportCount: number
+    55→  /** Cumulative exported bytes (incremented in recordExportDetails). */
+    56→  totalExportBytes: number
+    57→  /** Number of repair module runs (incremented in recordActivity('repair')). */
+    58→  repairCount: number
+    59→  /** Number of macro undo invocations (incremented in recordActivity('undo')). */
+    60→  undoCount: number
+    61→  /** Number of macro redo invocations (incremented in recordActivity('redo')). */
+    62→  redoCount: number
+    63→}
+    64→
+    65→export interface PlatformBreakdownEntry {
+    66→  platform: string
+    67→  count: number
+    68→  avgScore: number
+    69→  avgLufsDelta: number
+    70→  pct: number
+    71→}
+    72→
+    73→export interface ScoreHistoryEntry {
+    74→  timestamp: number
+    75→  score: number
+    76→  platform: string
+    77→}
+    78→
+    79→// ---------------------------------------------------------------------------
+    80→// Per-event record types (persisted to IndexedDB stores)
+    81→// ---------------------------------------------------------------------------
+    82→
+    83→/** One row per render — captures everything we need for analytics + audit. */
+    84→export interface RenderTelemetryRecord {
+    85→  id: string
+    86→  timestamp: number
+    87→  renderDurationMs: number
+    88→  audioDurationSec: number
+    89→  genre: string
+    90→  platform: string
+    91→  format: string
+    92→  bitDepth: number
+    93→  sampleRate: number
+    94→  channels: number
+    95→  fileName: string
+    96→  rainScore: number
+    97→  inputLufs: number
+    98→  outputLufs: number
+    99→  outputTruePeak: number
+   100→  macroValues: MacroValues
+   101→  /** Per-stage DSP time in ms (keys: 1..16, mirroring PIPELINE_STAGES ids). */
+   102→  stageTimings: Record<number, number>
+   103→}
+   104→
+   105→export type QCStatus = 'pass' | 'warn' | 'fail'
+   106→
+   107→export interface QCRecord {
+   108→  id: string
+   109→  timestamp: number
+   110→  renderId: string | null
+   111→  platform: string
+   112→  passCount: number
+   113→  warnCount: number
+   114→  failCount: number
+   115→  categories: Record<string, { pass: number; warn: number; fail: number }>
+   116→  checks: Array<{ id: string; status: QCStatus }>
+   117→}
+   118→
+   119→export interface ExportRecord {
+   120→  id: string
+   121→  timestamp: number
+   122→  format: string
+   123→  bytes: number
+   124→  durationMs: number
+   125→  sampleRate: number
+   126→  bitDepth: number
+   127→  channels: number
+   128→  fileName: string
+   129→}
+   130→
+   131→export interface ActivityRecord {
+   132→  id: string
+   133→  timestamp: number
+   134→  type: string
+   135→  details?: Record<string, unknown>
+   136→}
+   137→
+   138→/**
+   139→ * P2-METERS — Most-used macro values across all render history.
+   140→ *
+   141→ * Each macro (brighten/glue/width/punch/warmth/space/repair) is reported as
+   142→ * its arithmetic mean across all logged renders, plus the most common
+   143→ * rounded-to-integer value (mode). Real aggregate of past render settings —
+   144→ * NOT a sample array, NOT random.
+   145→ */
+   146→export interface MacroUsageStats {
+   147→  /** Mean value across all logged renders, per macro key. */
+   148→  means: Record<string, number>
+   149→  /** Most common rounded value (mode), per macro key. */
+   150→  modes: Record<string, number>
+   151→  /** Number of renders the stats were derived from. */
+   152→  sampleCount: number
+   153→}
+   154→
+   155→/**
+   156→ * P2-METERS — Genre distribution entry.
+   157→ * Each entry is one genre slug with its render count and share of total.
+   158→ */
+   159→export interface GenreDistributionEntry {
+   160→  genre: string
+   161→  count: number
+   162→  pct: number
+   163→}
+   164→
+   165→export interface AnalyticsSummary {
+   166→  /** Last 30 days, oldest → today */
+   167→  daily: DailyMetric[]
+   168→  totalRenders: number
+   169→  avgScore: number
+   170→  totalMinutes: number
+   171→  totalStorageMb: number
+   172→  platformBreakdown: PlatformBreakdownEntry[]
+   173→  /** Chronological (oldest → newest) */
+   174→  scoreHistory: ScoreHistoryEntry[]
+   175→  /**
+   176→   * Cumulative engine counters. The pure `computeAnalytics` function returns
+   177→   * `EMPTY_ENGINE_STATS` here; the AnalyticsTab overlays the real IndexedDB
+   178→   * values via `loadEngineStats` / `loadAllAnalytics`.
+   179→   */
+   180→  engineStats: EngineStats
+   181→  memoryMb: number | null
+   182→  /** Real trend deltas: last 7d vs previous 7d (renders/score). */
+   183→  trend: {
+   184→    rendersDeltaPct: number | null
+   185→    scoreDelta: number | null
+   186→  }
+   187→  /**
+   188→   * P2-METERS: real statistics over the render history.
+   189→   *   - avgLufsLast10: arithmetic mean of `outputLufs` over the last 10
+   190→   *     renders (or all renders if fewer than 10). null when no renders.
+   191→   *   - scoreTrendDirection: 'improving' | 'declining' | 'stable' | 'insufficient'
+   192→   *     — derived from comparing the last 5 renders' scores to the previous 5.
+   193→   *   - scoreTrendDelta: signed score delta (last5 avg − prev5 avg).
+   194→   *   - macroUsage: aggregate macro-value stats (mean + mode per macro).
+   195→   *   - genreDistribution: per-genre render count + share of total.
+   196→   */
+   197→  avgLufsLast10: number | null
+   198→  scoreTrendDirection: 'improving' | 'declining' | 'stable' | 'insufficient'
+   199→  scoreTrendDelta: number | null
+   200→  macroUsage: MacroUsageStats
+   201→  genreDistribution: GenreDistributionEntry[]
+   202→}
+   203→
+   204→// ---------------------------------------------------------------------------
+   205→// Constants
+   206→// ---------------------------------------------------------------------------
+   207→
+   208→const DAY_MS = 24 * 60 * 60 * 1000
+   209→const WINDOW_DAYS = 30
+   210→
+   211→/** Store defaults — see store.ts fileSampleRate/fileBitDepth/fileChannels. */
+   212→const DEFAULT_SAMPLE_RATE = 48000
+   213→const DEFAULT_BIT_DEPTH = 24
+   214→const DEFAULT_CHANNELS = 2
+   215→
+   216→export const EMPTY_ENGINE_STATS: EngineStats = {
+   217→  totalRenders: 0,
+   218→  totalDspTimeMs: 0,
+   219→  totalAiTimeMs: 0,
+   220→  totalExportTimeMs: 0,
+   221→  firstRenderAt: null,
+   222→  lastRenderAt: null,
+   223→  aiCallCount: 0,
+   224→  exportCount: 0,
+   225→  totalExportBytes: 0,
+   226→  repairCount: 0,
+   227→  undoCount: 0,
+   228→  redoCount: 0,
+   229→}
+   230→
+   231→// ---------------------------------------------------------------------------
+   232→// Helpers
+   233→// ---------------------------------------------------------------------------
+   234→
+   235→function startOfLocalDay(d: Date): Date {
+   236→  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0)
+   237→}
+   238→
+   239→function mmdd(d: Date): string {
+   240→  const m = String(d.getMonth() + 1).padStart(2, '0')
+   241→  const day = String(d.getDate()).padStart(2, '0')
+   242→  return `${m}-${day}`
+   243→}
+   244→
+   245→function getPlatformTargetLufs(platform: string): number | null {
+   246→  const target = PLATFORM_TARGETS.find((p) => p.slug === platform)
+   247→  return target ? target.targetLufs : null
+   248→}
+   249→
+   250→/** Audio file size estimate in MB given duration in seconds. */
+   251→function audioSizeMb(durationSec: number): number {
+   252→  return (durationSec * DEFAULT_SAMPLE_RATE * DEFAULT_BIT_DEPTH * DEFAULT_CHANNELS) / 8 / 1e6
+   253→}
+   254→
+   255→function safeMemoryMb(): number | null {
+   256→  if (typeof performance === 'undefined') return null
+   257→  const mem = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory
+   258→  if (mem && typeof mem.usedJSHeapSize === 'number') {
+   259→    return mem.usedJSHeapSize / 1e6
+   260→  }
+   261→  return null
+   262→}
+   263→
+   264→// ---------------------------------------------------------------------------
+   265→// computeAnalytics — pure function, no IO
+   266→// ---------------------------------------------------------------------------
+   267→
+   268→export function computeAnalytics(renderHistory: RenderLogEntry[]): AnalyticsSummary {
+   269→  const now = new Date()
+   270→  const todayStart = startOfLocalDay(now)
+   271→
+   272→  // ---- Daily window (last 30 days, oldest → today) ----
+   273→  const daily: DailyMetric[] = []
+   274→  for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
+   275→    const dayStart = new Date(todayStart.getTime() - i * DAY_MS)
+   276→    const dayStartMs = dayStart.getTime()
+   277→    const dayEndMs = dayStartMs + DAY_MS
+   278→
+   279→    const dayRenders = renderHistory.filter(
+   280→      (r) => r.timestamp >= dayStartMs && r.timestamp < dayEndMs,
+   281→    )
+   282→    const renders = dayRenders.length
+   283→    // duration is in SECONDS (audio). Sum → seconds; /60 → minutes.
+   284→    const minutes = dayRenders.reduce((acc, r) => acc + r.duration / 60, 0)
+   285→    const score = renders > 0
+   286→      ? dayRenders.reduce((acc, r) => acc + r.rainScore, 0) / renders
+   287→      : 0
+   288→    const dayStorageMb = dayRenders.reduce((acc, r) => acc + audioSizeMb(r.duration), 0)
+   289→
+   290→    daily.push({
+   291→      date: mmdd(dayStart),
+   292→      renders,
+   293→      minutes,
+   294→      score,
+   295→      storageMb: dayStorageMb,
+   296→    })
+   297→  }
+   298→
+   299→  // Make storage cumulative across the 30-day window
+   300→  let cumulative = 0
+   301→  for (const d of daily) {
+   302→    cumulative += d.storageMb
+   303→    d.storageMb = cumulative
+   304→  }
+   305→
+   306→  // ---- Totals across ALL history (not just 30 days) ----
+   307→  const totalRenders = renderHistory.length
+   308→  const avgScore = totalRenders > 0
+   309→    ? renderHistory.reduce((a, b) => a + b.rainScore, 0) / totalRenders
+   310→    : 0
+   311→  const totalMinutes = renderHistory.reduce((a, b) => a + b.duration / 60, 0)
+   312→  const totalStorageMb = renderHistory.reduce((a, b) => a + audioSizeMb(b.duration), 0)
+   313→
+   314→  // ---- Platform breakdown ----
+   315→  const platformMap = new Map<string, RenderLogEntry[]>()
+   316→  for (const r of renderHistory) {
+   317→    const arr = platformMap.get(r.platform) ?? []
+   318→    arr.push(r)
+   319→    platformMap.set(r.platform, arr)
+   320→  }
+   321→  const platformBreakdown: PlatformBreakdownEntry[] = Array.from(platformMap.entries())
+   322→    .map(([platform, entries]) => {
+   323→      const count = entries.length
+   324→      const entriesAvgScore = entries.reduce((a, b) => a + b.rainScore, 0) / count
+   325→      const targetLufs = getPlatformTargetLufs(platform)
+   326→      const avgLufsDelta = targetLufs !== null
+   327→        ? entries.reduce((a, b) => a + (b.outputLufs - targetLufs), 0) / count
+   328→        : 0
+   329→      const pct = totalRenders > 0 ? (count / totalRenders) * 100 : 0
+   330→      return { platform, count, avgScore: entriesAvgScore, avgLufsDelta, pct }
+   331→    })
+   332→    .sort((a, b) => b.count - a.count)
+   333→
+   334→  // ---- Score history (chronological) ----
+   335→  const scoreHistory: ScoreHistoryEntry[] = renderHistory
+   336→    .slice()
+   337→    .sort((a, b) => a.timestamp - b.timestamp)
+   338→    .map((r) => ({ timestamp: r.timestamp, score: r.rainScore, platform: r.platform }))
+   339→
+   340→  // ---- Trend: last 7 days vs previous 7 days ----
+   341→  const last7Start = todayStart.getTime() - 7 * DAY_MS
+   342→  const prev7Start = todayStart.getTime() - 14 * DAY_MS
+   343→  const last7 = renderHistory.filter((r) => r.timestamp >= last7Start)
+   344→  const prev7 = renderHistory.filter(
+   345→    (r) => r.timestamp >= prev7Start && r.timestamp < last7Start,
+   346→  )
+   347→  const rendersDeltaPct = prev7.length > 0
+   348→    ? ((last7.length - prev7.length) / prev7.length) * 100
+   349→    : last7.length > 0 ? null : null // null = no baseline
+   350→  const last7Avg = last7.length > 0 ? last7.reduce((a, b) => a + b.rainScore, 0) / last7.length : null
+   351→  const prev7Avg = prev7.length > 0 ? prev7.reduce((a, b) => a + b.rainScore, 0) / prev7.length : null
+   352→  const scoreDelta = last7Avg !== null && prev7Avg !== null ? last7Avg - prev7Avg : null
+   353→
+   354→  // ---- P2-METERS: avg LUFS over last 10 renders (real, not sample data) ----
+   355→  const sortedByTime = renderHistory.slice().sort((a, b) => a.timestamp - b.timestamp)
+   356→  const last10 = sortedByTime.slice(-10)
+   357→  const avgLufsLast10 = last10.length > 0
+   358→    ? last10.reduce((a, b) => a + b.outputLufs, 0) / last10.length
+   359→    : null
+   360→
+   361→  // ---- P2-METERS: score trend direction (last 5 vs previous 5) ----
+   362→  // Compares the mean RAIN score of the most recent 5 renders against the
+   363→  // 5 renders before that. Direction is 'improving' if delta > +0.5,
+   364→  // 'declining' if delta < -0.5, 'stable' if |delta| <= 0.5, and
+   365→  // 'insufficient' if we don't have at least 5 renders in each window.
+   366→  const last5 = sortedByTime.slice(-5)
+   367→  const prev5 = sortedByTime.slice(-10, -5)
+   368→  let scoreTrendDirection: 'improving' | 'declining' | 'stable' | 'insufficient' = 'insufficient'
+   369→  let scoreTrendDelta: number | null = null
+   370→  if (last5.length === 5 && prev5.length === 5) {
+   371→    const last5Avg = last5.reduce((a, b) => a + b.rainScore, 0) / 5
+   372→    const prev5Avg = prev5.reduce((a, b) => a + b.rainScore, 0) / 5
+   373→    scoreTrendDelta = last5Avg - prev5Avg
+   374→    if (scoreTrendDelta > 0.5) scoreTrendDirection = 'improving'
+   375→    else if (scoreTrendDelta < -0.5) scoreTrendDirection = 'declining'
+   376→    else scoreTrendDirection = 'stable'
+   377→  }
+   378→
+   379→  // ---- P2-METERS: most-used macro values (mean + mode per macro key) ----
+   380→  // Real aggregate over renderHistory. For each of the 7 macros, compute the
+   381→  // arithmetic mean and the mode (most common rounded-to-integer value).
+   382→  // Returns zero-filled stats when renderHistory is empty.
+   383→  const MACRO_KEYS: Array<keyof MacroValues> = [
+   384→    'brighten', 'glue', 'width', 'punch', 'warmth', 'space', 'repair',
+   385→  ]
+   386→  const macroUsage: MacroUsageStats = {
+   387→    means: {},
+   388→    modes: {},
+   389→    sampleCount: renderHistory.length,
+   390→  }
+   391→  for (const key of MACRO_KEYS) {
+   392→    if (renderHistory.length === 0) {
+   393→      macroUsage.means[key] = 0
+   394→      macroUsage.modes[key] = 0
+   395→      continue
+   396→    }
+   397→    let sum = 0
+   398→    const roundedCounts = new Map<number, number>()
+   399→    for (const r of renderHistory) {
+   400→      const v = r.macroValues[key]
+   401→      sum += v
+   402→      const rounded = Math.round(v)
+   403→      roundedCounts.set(rounded, (roundedCounts.get(rounded) ?? 0) + 1)
+   404→    }
+   405→    macroUsage.means[key] = sum / renderHistory.length
+   406→    // Mode = rounded value with the highest count. Ties broken by lower value.
+   407→    let modeVal = 0
+   408→    let modeCount = -1
+   409→    for (const [val, cnt] of Array.from(roundedCounts.entries()).sort((a, b) => a[0] - b[0])) {
+   410→      if (cnt > modeCount) {
+   411→        modeCount = cnt
+   412→        modeVal = val
+   413→      }
+   414→    }
+   415→    macroUsage.modes[key] = modeVal
+   416→  }
+   417→
+   418→  // ---- P2-METERS: genre distribution (real per-genre render counts) ----
+   419→  const genreMap = new Map<string, number>()
+   420→  for (const r of renderHistory) {
+   421→    genreMap.set(r.genre, (genreMap.get(r.genre) ?? 0) + 1)
+   422→  }
+   423→  const genreDistribution: GenreDistributionEntry[] = Array.from(genreMap.entries())
+   424→    .map(([genre, count]) => ({
+   425→      genre,
+   426→      count,
+   427→      pct: totalRenders > 0 ? (count / totalRenders) * 100 : 0,
+   428→    }))
+   429→    .sort((a, b) => b.count - a.count)
+   430→
+   431→  return {
+   432→    daily,
+   433→    totalRenders,
+   434→    avgScore,
+   435→    totalMinutes,
+   436→    totalStorageMb,
+   437→    platformBreakdown,
+   438→    scoreHistory,
+   439→    engineStats: { ...EMPTY_ENGINE_STATS },
+   440→    memoryMb: safeMemoryMb(),
+   441→    trend: { rendersDeltaPct, scoreDelta },
+   442→    avgLufsLast10,
+   443→    scoreTrendDirection,
+   444→    scoreTrendDelta,
+   445→    macroUsage,
+   446→    genreDistribution,
+   447→  }
+   448→}
+   449→
+   450→// ---------------------------------------------------------------------------
+   451→// IndexedDB persistence for EngineStats + per-event records
+   452→// Pattern mirrors provenance.ts `withDb` — connection is closed in finally.
+   453→//
+   454→// Schema v2 (this audit) adds 4 new object stores alongside the existing
+   455→// `engineStats` single-record store:
+   456→//   - `renders`   — one row per render (telemetry + 16-stage timings)
+   457→//   - `qc`        — one row per render QC snapshot
+   458→//   - `exports`   — one row per WAV/MP3/Atmos export
+   459→//   - `activity`  — one row per user action (undo / redo / repair / ai-query)
+   460→// All stores are append-only with autoincrement numeric keys; queries use
+   461→// openCursor + collect. We don't bother with indexes — every analytics
+   462→// query walks the full list once on AnalyticsTab mount, which is cheap for
+   463→// the expected scale (hundreds of rows, not millions).
+   464→// ---------------------------------------------------------------------------
+   465→
+   466→const ANALYTICS_DB = 'rain-analytics'
+   467→const STATS_STORE = 'engineStats'
+   468→const STATS_KEY = 'current'
+   469→const RENDER_STORE = 'renders'
+   470→const QC_STORE = 'qc'
+   471→const EXPORT_STORE = 'exports'
+   472→const ACTIVITY_STORE = 'activity'
+   473→
+   474→function openDb(): Promise<IDBDatabase> {
+   475→  return new Promise((resolve, reject) => {
+   476→    const req = indexedDB.open(ANALYTICS_DB, 2)
+   477→    req.onupgradeneeded = () => {
+   478→      const db = req.result
+   479→      // v1 store — cumulative counters (single record, keyed 'current').
+   480→      if (!db.objectStoreNames.contains(STATS_STORE)) {
+   481→        db.createObjectStore(STATS_STORE)
+   482→      }
+   483→      // v2 stores — per-event append-only logs.
+   484→      if (!db.objectStoreNames.contains(RENDER_STORE)) {
+   485→        db.createObjectStore(RENDER_STORE, { keyPath: 'id' })
+   486→      }
+   487→      if (!db.objectStoreNames.contains(QC_STORE)) {
+   488→        db.createObjectStore(QC_STORE, { keyPath: 'id' })
+   489→      }
+   490→      if (!db.objectStoreNames.contains(EXPORT_STORE)) {
+   491→        db.createObjectStore(EXPORT_STORE, { keyPath: 'id' })
+   492→      }
+   493→      if (!db.objectStoreNames.contains(ACTIVITY_STORE)) {
+   494→        db.createObjectStore(ACTIVITY_STORE, { keyPath: 'id' })
+   495→      }
+   496→    }
+   497→    req.onsuccess = () => resolve(req.result)
+   498→    req.onerror = () => reject(req.error)
+   499→  })
+   500→}
+   501→
+   502→async function withDb<T>(fn: (db: IDBDatabase) => Promise<T> | T): Promise<T> {
+   503→  const db = await openDb()
+   504→  try {
+   505→    return await fn(db)
+   506→  } finally {
+   507→    db.close()
+   508→  }
+   509→}
+   510→
+   511→// Generic read-all helper for any of the v2 append-only stores. The generic
+   512→// is constrained to records with a numeric `timestamp` so the sort below
+   513→// type-checks — every record type we persist (renders / qc / exports /
+   514→// activity) has a top-level `timestamp: number` field.
+   515→function readAll<T extends { timestamp: number }>(storeName: string): Promise<T[]> {
+   516→  return withDb((db) => new Promise<T[]>((resolve, reject) => {
+   517→    if (!db.objectStoreNames.contains(storeName)) {
+   518→      resolve([])
+   519→      return
+   520→    }
+   521→    const tx = db.transaction(storeName, 'readonly')
+   522→    const req = tx.objectStore(storeName).getAll()
+   523→    req.onsuccess = () => {
+   524→      const arr = (req.result ?? []) as T[]
+   525→      // Sort oldest → newest by timestamp for predictable aggregation.
+   526→      arr.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+   527→      resolve(arr)
+   528→    }
+   529→    req.onerror = () => reject(req.error)
+   530→  }))
+   531→}
+   532→
+   533→function putRecord<T extends { id: string }>(storeName: string, record: T): Promise<void> {
+   534→  return withDb((db) => new Promise<void>((resolve, reject) => {
+   535→    if (!db.objectStoreNames.contains(storeName)) {
+   536→      // DB still on v1 schema (upgrade hasn't fired for this connection).
+   537→      // Silently drop — analytics must never break the render flow.
+   538→      resolve()
+   539→      return
+   540→    }
+   541→    const tx = db.transaction(storeName, 'readwrite')
+   542→    tx.objectStore(storeName).put(record)
+   543→    tx.oncomplete = () => resolve()
+   544→    tx.onerror = () => reject(tx.error)
+   545→  }))
+   546→}
+   547→
+   548→function clearStore(storeName: string): Promise<void> {
+   549→  return withDb((db) => new Promise<void>((resolve, reject) => {
+   550→    if (!db.objectStoreNames.contains(storeName)) {
+   551→      resolve()
+   552→      return
+   553→    }
+   554→    const tx = db.transaction(storeName, 'readwrite')
+   555→    tx.objectStore(storeName).clear()
+   556→    tx.oncomplete = () => resolve()
+   557→    tx.onerror = () => reject(tx.error)
+   558→  }))
+   559→}
+   560→
+   561→function newId(prefix: string): string {
+   562→  // crypto.randomUUID when available; deterministic fallback otherwise.
+   563→  // No Math.random — keeps the "no random data" guarantee (this is identity,
+   564→  // not analytics data, but the linter grep would flag Math.random anywhere).
+   565→  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+   566→    return crypto.randomUUID()
+   567→  }
+   568→  return `${prefix}-${Date.now()}-${(typeof performance !== 'undefined' && performance.now
+   569→    ? Math.floor(performance.now() * 1000)
+   570→    : 0)}`
+   571→}
+   572→
+   573→export async function loadEngineStats(): Promise<EngineStats> {
+   574→  if (typeof indexedDB === 'undefined') return { ...EMPTY_ENGINE_STATS }
+   575→  try {
+   576→    return await withDb((db) => new Promise<EngineStats>((resolve, reject) => {
+   577→      const tx = db.transaction(STATS_STORE, 'readonly')
+   578→      const store = tx.objectStore(STATS_STORE)
+   579→      const req = store.get(STATS_KEY)
+   580→      req.onsuccess = () => {
+   581→        const stored = req.result as EngineStats | undefined
+   582→        // Merge with EMPTY_ENGINE_STATS so newly-added counters default to 0
+   583→        // when reading a v1-shaped record from an older session.
+   584→        resolve({
+   585→          ...EMPTY_ENGINE_STATS,
+   586→          ...(stored ?? {}),
+   587→        })
+   588→      }
+   589→      req.onerror = () => reject(req.error)
+   590→    }))
+   591→  } catch {
+   592→    return { ...EMPTY_ENGINE_STATS }
+   593→  }
+   594→}
+   595→
+   596→async function saveEngineStats(stats: EngineStats): Promise<void> {
+   597→  if (typeof indexedDB === 'undefined') return
+   598→  try {
+   599→    await withDb((db) => new Promise<void>((resolve, reject) => {
+   600→      const tx = db.transaction(STATS_STORE, 'readwrite')
+   601→      tx.objectStore(STATS_STORE).put(stats, STATS_KEY)
+   602→      tx.oncomplete = () => resolve()
+   603→      tx.onerror = () => reject(tx.error)
+   604→    }))
+   605→  } catch (e) {
+   606→    console.warn('[analytics] saveEngineStats failed:', e)
+   607→  }
+   608→}
+   609→
+   610→/**
+   611→ * Record timing for a single render pass.
+   612→ * `dspTimeMs` = wall-clock time of the 16-stage render (Date.now diff).
+   613→ * `aiTimeMs` = optional — pass 0 here; AI-suggest timings are recorded
+   614→ *              separately via `recordAiStat` since they happen outside the
+   615→ *              render flow.
+   616→ */
+   617→export async function recordRenderStat(dspTimeMs: number, aiTimeMs = 0): Promise<EngineStats> {
+   618→  const current = await loadEngineStats()
+   619→  const now = Date.now()
+   620→  const next: EngineStats = {
+   621→    ...current,
+   622→    totalRenders: current.totalRenders + 1,
+   623→    totalDspTimeMs: current.totalDspTimeMs + Math.max(0, dspTimeMs),
+   624→    totalAiTimeMs: current.totalAiTimeMs + Math.max(0, aiTimeMs),
+   625→    firstRenderAt: current.firstRenderAt ?? now,
+   626→    lastRenderAt: now,
+   627→  }
+   628→  await saveEngineStats(next)
+   629→  return next
+   630→}
+   631→
+   632→/** Record AI Co-Master suggestion latency (separate from render flow). */
+   633→export async function recordAiStat(aiTimeMs: number): Promise<EngineStats> {
+   634→  const current = await loadEngineStats()
+   635→  const next: EngineStats = {
+   636→    ...current,
+   637→    totalAiTimeMs: current.totalAiTimeMs + Math.max(0, aiTimeMs),
+   638→    aiCallCount: current.aiCallCount + 1,
+   639→  }
+   640→  await saveEngineStats(next)
+   641→  // Also append an activity record so the activity log + charts see it.
+   642→  await recordActivity('ai-query', { latencyMs: Math.max(0, aiTimeMs) }).catch(() => {
+   643→    /* swallow — analytics failure must not break AI flow */
+   644→  })
+   645→  return next
+   646→}
+   647→
+   648→/** Record WAV export latency (cumulative counter only — prefer recordExportDetails). */
+   649→export async function recordExportStat(exportTimeMs: number): Promise<EngineStats> {
+   650→  const current = await loadEngineStats()
+   651→  const next: EngineStats = {
+   652→    ...current,
+   653→    totalExportTimeMs: current.totalExportTimeMs + Math.max(0, exportTimeMs),
+   654→  }
+   655→  await saveEngineStats(next)
+   656→  return next
+   657→}
+   658→
+   659→// ---------------------------------------------------------------------------
+   660→// Per-event recorders — write one row to the matching IndexedDB store.
+   661→// Every recorder swallows errors so analytics can never break the user flow.
+   662→// ---------------------------------------------------------------------------
+   663→
+   664→/**
+   665→ * Persist a full per-render telemetry record. Also bumps the cumulative
+   666→ * EngineStats counters (totalRenders, totalDspTimeMs) so callers don't need
+   667→ * to call recordRenderStat separately.
+   668→ */
+   669→export async function recordRenderTelemetry(
+   670→  record: Omit<RenderTelemetryRecord, 'id'>,
+   671→): Promise<RenderTelemetryRecord> {
+   672→  const full: RenderTelemetryRecord = { ...record, id: newId('render') }
+   673→  await putRecord(RENDER_STORE, full).catch((e) => {
+   674→    console.warn('[analytics] recordRenderTelemetry failed:', e)
+   675→  })
+   676→  // Bump cumulative counters atomically.
+   677→  await recordRenderStat(record.renderDurationMs, 0).catch(() => {
+   678→    /* swallow */
+   679→  })
+   680→  return full
+   681→}
+   682→
+   683→/** Persist a per-render QC snapshot. */
+   684→export async function recordQCResult(
+   685→  record: Omit<QCRecord, 'id'>,
+   686→): Promise<QCRecord> {
+   687→  const full: QCRecord = { ...record, id: newId('qc') }
+   688→  await putRecord(QC_STORE, full).catch((e) => {
+   689→    console.warn('[analytics] recordQCResult failed:', e)
+   690→  })
+   691→  return full
+   692→}
+   693→
+   694→/**
+   695→ * Persist a per-export record (format, bytes, latency). Also bumps the
+   696→ * cumulative EngineStats counters (exportCount, totalExportBytes,
+   697→ * totalExportTimeMs) so callers don't need to call recordExportStat separately.
+   698→ */
+   699→export async function recordExportDetails(
+   700→  record: Omit<ExportRecord, 'id'>,
+   701→): Promise<ExportRecord> {
+   702→  const full: ExportRecord = { ...record, id: newId('export') }
+   703→  await putRecord(EXPORT_STORE, full).catch((e) => {
+   704→    console.warn('[analytics] recordExportDetails failed:', e)
+   705→  })
+   706→  // Bump cumulative counters atomically.
+   707→  const current = await loadEngineStats()
+   708→  const next: EngineStats = {
+   709→    ...current,
+   710→    exportCount: current.exportCount + 1,
+   711→    totalExportBytes: current.totalExportBytes + Math.max(0, record.bytes),
+   712→    totalExportTimeMs: current.totalExportTimeMs + Math.max(0, record.durationMs),
+   713→  }
+   714→  await saveEngineStats(next).catch(() => {
+   715→    /* swallow */
+   716→  })
+   717→  return full
+   718→}
+   719→
+   720→/**
+   721→ * Persist a user-activity event. Bumps the matching cumulative counter
+   722→ * (undoCount / redoCount / repairCount) when `type` is one of the recognised
+   723→ * keys; arbitrary `type` strings (e.g. 'preset-apply', 'render-start') are
+   724→ * still logged without bumping any counter.
+   725→ */
+   726→export async function recordActivity(
+   727→  type: string,
+   728→  details?: Record<string, unknown>,
+   729→): Promise<ActivityRecord> {
+   730→  const full: ActivityRecord = {
+   731→    id: newId('activity'),
+   732→    timestamp: Date.now(),
+   733→    type,
+   734→    ...(details !== undefined ? { details } : {}),
+   735→  }
+   736→  await putRecord(ACTIVITY_STORE, full).catch((e) => {
+   737→    console.warn('[analytics] recordActivity failed:', e)
+   738→  })
+   739→  // Bump matching cumulative counter so the KPI cards can show real counts
+   740→  // without re-reading the full activity log.
+   741→  if (type === 'undo' || type === 'redo' || type === 'repair') {
+   742→    const current = await loadEngineStats()
+   743→    const next: EngineStats = { ...current }
+   744→    if (type === 'undo') next.undoCount = current.undoCount + 1
+   745→    else if (type === 'redo') next.redoCount = current.redoCount + 1
+   746→    else if (type === 'repair') next.repairCount = current.repairCount + 1
+   747→    await saveEngineStats(next).catch(() => {
+   748→      /* swallow */
+   749→    })
+   750→  }
+   751→  return full
+   752→}
+   753→
+   754→// ---------------------------------------------------------------------------
+   755→// Loaders — read all rows from each store (oldest → newest).
+   756→// ---------------------------------------------------------------------------
+   757→
+   758→export function loadRenderTelemetry(): Promise<RenderTelemetryRecord[]> {
+   759→  if (typeof indexedDB === 'undefined') return Promise.resolve([])
+   760→  return readAll<RenderTelemetryRecord>(RENDER_STORE).catch(() => [])
+   761→}
+   762→
+   763→export function loadQCHistory(): Promise<QCRecord[]> {
+   764→  if (typeof indexedDB === 'undefined') return Promise.resolve([])
+   765→  return readAll<QCRecord>(QC_STORE).catch(() => [])
+   766→}
+   767→
+   768→export function loadExportHistory(): Promise<ExportRecord[]> {
+   769→  if (typeof indexedDB === 'undefined') return Promise.resolve([])
+   770→  return readAll<ExportRecord>(EXPORT_STORE).catch(() => [])
+   771→}
+   772→
+   773→export function loadActivityLog(): Promise<ActivityRecord[]> {
+   774→  if (typeof indexedDB === 'undefined') return Promise.resolve([])
+   775→  return readAll<ActivityRecord>(ACTIVITY_STORE).catch(() => [])
+   776→}
+   777→
+   778→/** Aggregated payload — what AnalyticsTab actually renders. */
+   779→export interface AllAnalytics {
+   780→  engineStats: EngineStats
+   781→  renders: RenderTelemetryRecord[]
+   782→  qc: QCRecord[]
+   783→  exports: ExportRecord[]
+   784→  activity: ActivityRecord[]
+   785→}
+   786→
+   787→/** One-shot load of every persisted analytics stream (for AnalyticsTab mount). */
+   788→export async function loadAllAnalytics(): Promise<AllAnalytics> {
+   789→  const [engineStats, renders, qc, exports, activity] = await Promise.all([
+   790→    loadEngineStats(),
+   791→    loadRenderTelemetry(),
+   792→    loadQCHistory(),
+   793→    loadExportHistory(),
+   794→    loadActivityLog(),
+   795→  ])
+   796→  return { engineStats, renders, qc, exports, activity }
+   797→}
+   798→
+   799→/** Wipe persisted engine stats back to empty (Clear Analytics button). */
+   800→export async function clearEngineStats(): Promise<void> {
+   801→  if (typeof indexedDB === 'undefined') return
+   802→  try {
+   803→    await withDb((db) => new Promise<void>((resolve, reject) => {
+   804→      const tx = db.transaction(STATS_STORE, 'readwrite')
+   805→      tx.objectStore(STATS_STORE).put({ ...EMPTY_ENGINE_STATS }, STATS_KEY)
+   806→      tx.oncomplete = () => resolve()
+   807→      tx.onerror = () => reject(tx.error)
+   808→    }))
+   809→  } catch (e) {
+   810→    console.warn('[analytics] clearEngineStats failed:', e)
+   811→  }
+   812→}
+   813→
+   814→/** Wipe ALL analytics data (cumulative stats + every per-event store). */
+   815→export async function clearAllAnalytics(): Promise<void> {
+   816→  await clearEngineStats()
+   817→  await Promise.all([
+   818→    clearStore(RENDER_STORE),
+   819→    clearStore(QC_STORE),
+   820→    clearStore(EXPORT_STORE),
+   821→    clearStore(ACTIVITY_STORE),
+   822→  ]).catch((e) => console.warn('[analytics] clearAllAnalytics partial fail:', e))
+   823→}
+   824→
+   825→// ---------------------------------------------------------------------------
+   826→// Aggregations — pure functions over the loaded record arrays.
+   827→// Every output is derived from real records; empty inputs yield zeros.
+   828→// ---------------------------------------------------------------------------
+   829→
+   830→export interface QCAggregates {
+   831→  total: number
+   832→  passRate: number  // 0..1 across all checks of all renders
+   833→  warnRate: number
+   834→  failRate: number
+   835→  /** Most-failed check IDs, sorted desc by fail count. */
+   836→  topFailures: Array<{ id: string; fails: number; occurrences: number }>
+   837→  /** Per-category pass/warn/fail tallies. */
+   838→  categories: Record<string, { pass: number; warn: number; fail: number }>
+   839→}
+   840→
+   841→export function computeQCAggregates(qc: QCRecord[]): QCAggregates {
+   842→  if (qc.length === 0) {
+   843→    return {
+   844→      total: 0,
+   845→      passRate: 0,
+   846→      warnRate: 0,
+   847→      failRate: 0,
+   848→      topFailures: [],
+   849→      categories: {},
+   850→    }
+   851→  }
+   852→  const totals = { pass: 0, warn: 0, fail: 0 }
+   853→  const categories: Record<string, { pass: number; warn: number; fail: number }> = {}
+   854→  const failCounts = new Map<string, { fails: number; occurrences: number }>()
+   855→
+   856→  // QCRecord.categories is the per-category tally for a single render;
+   857→  // QCRecord.checks is the per-check list. We use `checks` for the per-id
+   858→  // failure ranking (more granular) and `categories` for the rollup.
+   859→  for (const r of qc) {
+   860→    for (const cat of Object.keys(r.categories)) {
+   861→      const c = r.categories[cat]
+   862→      const acc = categories[cat] ?? { pass: 0, warn: 0, fail: 0 }
+   863→      acc.pass += c.pass
+   864→      acc.warn += c.warn
+   865→      acc.fail += c.fail
+   866→      categories[cat] = acc
+   867→      totals.pass += c.pass
+   868→      totals.warn += c.warn
+   869→      totals.fail += c.fail
+   870→    }
+   871→    for (const chk of r.checks) {
+   872→      const acc = failCounts.get(chk.id) ?? { fails: 0, occurrences: 0 }
+   873→      acc.occurrences += 1
+   874→      if (chk.status === 'fail') acc.fails += 1
+   875→      failCounts.set(chk.id, acc)
+   876→    }
+   877→  }
+   878→  const total = totals.pass + totals.warn + totals.fail
+   879→  const topFailures = Array.from(failCounts.entries())
+   880→    .map(([id, v]) => ({ id, fails: v.fails, occurrences: v.occurrences }))
+   881→    .sort((a, b) => b.fails - a.fails)
+   882→    .slice(0, 6)
+   883→  return {
+   884→    total,
+   885→    passRate: total > 0 ? totals.pass / total : 0,
+   886→    warnRate: total > 0 ? totals.warn / total : 0,
+   887→    failRate: total > 0 ? totals.fail / total : 0,
+   888→    topFailures,
+   889→    categories,
+   890→  }
+   891→}
+   892→
+   893→export interface ExportAggregates {
+   894→  total: number
+   895→  totalBytes: number
+   896→  avgMs: number  // average export wall-clock
+   897→  /** Per-format count + byte total. */
+   898→  byFormat: Array<{ format: string; count: number; bytes: number; pct: number }>
+   899→}
+   900→
+   901→export function computeExportAggregates(exports: ExportRecord[]): ExportAggregates {
+   902→  if (exports.length === 0) {
+   903→    return { total: 0, totalBytes: 0, avgMs: 0, byFormat: [] }
+   904→  }
+   905→  const total = exports.length
+   906→  const totalBytes = exports.reduce((a, b) => a + Math.max(0, b.bytes), 0)
+   907→  const totalMs = exports.reduce((a, b) => a + Math.max(0, b.durationMs), 0)
+   908→  const byFormatMap = new Map<string, { count: number; bytes: number }>()
+   909→  for (const e of exports) {
+   910→    const acc = byFormatMap.get(e.format) ?? { count: 0, bytes: 0 }
+   911→    acc.count += 1
+   912→    acc.bytes += Math.max(0, e.bytes)
+   913→    byFormatMap.set(e.format, acc)
+   914→  }
+   915→  const byFormat = Array.from(byFormatMap.entries())
+   916→    .map(([format, v]) => ({
+   917→      format,
+   918→      count: v.count,
+   919→      bytes: v.bytes,
+   920→      pct: total > 0 ? (v.count / total) * 100 : 0,
+   921→    }))
+   922→    .sort((a, b) => b.count - a.count)
+   923→  return { total, totalBytes, avgMs: total > 0 ? totalMs / total : 0, byFormat }
+   924→}
+   925→
+   926→export interface ActivityAggregates {
+   927→  total: number
+   928→  /** Per-type count, sorted desc. */
+   929→  byType: Array<{ type: string; count: number; lastAt: number | null }>
+   930→  /** Last N activity records for the log panel (newest first). */
+   931→  recent: ActivityRecord[]
+   932→}
+   933→
+   934→export function computeActivityAggregates(
+   935→  activity: ActivityRecord[],
+   936→  recentLimit = 20,
+   937→): ActivityAggregates {
+   938→  if (activity.length === 0) {
+   939→    return { total: 0, byType: [], recent: [] }
+   940→  }
+   941→  const byTypeMap = new Map<string, { count: number; lastAt: number | null }>()
+   942→  for (const a of activity) {
+   943→    const acc = byTypeMap.get(a.type) ?? { count: 0, lastAt: null }
+   944→    acc.count += 1
+   945→    if (a.timestamp > (acc.lastAt ?? 0)) acc.lastAt = a.timestamp
+   946→    byTypeMap.set(a.type, acc)
+   947→  }
+   948→  const byType = Array.from(byTypeMap.entries())
+   949→    .map(([type, v]) => ({ type, count: v.count, lastAt: v.lastAt }))
+   950→    .sort((a, b) => b.count - a.count)
+   951→  // Recent: newest first (input is oldest → newest).
+   952→  const recent = activity.slice(-recentLimit).reverse()
+   953→  return { total: activity.length, byType, recent }
+   954→}
+   955→
+   956→export interface StageTimingAverages {
+   957→  /** Per-stage average ms across all renders. */
+   958→  averages: Array<{ id: number; name: string; avgMs: number; samples: number }>
+   959→  /** Total render count used to compute the averages. */
+   960→  sampleCount: number
+   961→}
+   962→
+   963→export function computeStageTimingAverages(
+   964→  renders: RenderTelemetryRecord[],
+   965→): StageTimingAverages {
+   966→  const sampleCount = renders.length
+   967→  const sums = new Map<number, number>()
+   968→  const counts = new Map<number, number>()
+   969→  for (const r of renders) {
+   970→    for (const [k, v] of Object.entries(r.stageTimings)) {
+   971→      const id = Number(k)
+   972→      if (!Number.isFinite(id)) continue
+   973→      sums.set(id, (sums.get(id) ?? 0) + Math.max(0, v))
+   974→      counts.set(id, (counts.get(id) ?? 0) + 1)
+   975→    }
+   976→  }
+   977→  const averages = PIPELINE_STAGES.map((stage) => {
+   978→    const samples = counts.get(stage.id) ?? 0
+   979→    const sum = sums.get(stage.id) ?? 0
+   980→    return {
+   981→      id: stage.id,
+   982→      name: stage.name,
+   983→      avgMs: samples > 0 ? sum / samples : 0,
+   984→      samples,
+   985→    }
+   986→  })
+   987→  return { averages, sampleCount }
+   988→}
+   989→
+   990→export interface MacroEvolutionPoint {
+   991→  /** Index in the macroHistory array (0-based). */
+   992→  index: number
+   993→  /** Macro values at this point. */
+   994→  macros: MacroValues
+   995→}
+   996→
+   997→/**
+   998→ * Project the in-memory `macroHistory` array (Zustand, session-only) into a
+   999→ * chart-friendly series. We don't persist macroHistory to IndexedDB — it's a
+  1000→ * linear undo/redo stack that resets every session, so cross-session macro
+  1001→ * evolution isn't meaningful. The Analytics tab shows the current session's
+  1002→ * macro trajectory, honestly labelled as such.
+  1003→ */
+  1004→export function computeMacroEvolution(
+  1005→  macroHistory: MacroValues[],
+  1006→): MacroEvolutionPoint[] {
+  1007→  return macroHistory.map((macros, index) => ({ index, macros }))
+  1008→}
+  1009→
+  1010→// ---------------------------------------------------------------------------
+  1011→// Formatting helpers (used by AnalyticsTab + engine metrics)
+  1012→// ---------------------------------------------------------------------------
+  1013→
+  1014→export function formatMs(ms: number): string {
+  1015→  if (!Number.isFinite(ms) || ms <= 0) return '—'
+  1016→  if (ms < 1000) return `${Math.round(ms)} ms`
+  1017→  return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`
+  1018→}
+  1019→
+  1020→export function formatMb(mb: number): string {
+  1021→  if (!Number.isFinite(mb) || mb <= 0) return '0 MB'
+  1022→  if (mb < 1) return `${(mb * 1024).toFixed(1)} KB`
+  1023→  if (mb < 1024) return `${mb.toFixed(1)} MB`
+  1024→  return `${(mb / 1024).toFixed(2)} GB`
+  1025→}
+  1026→
+  1027→/** Format a byte count as B / KB / MB / GB. */
+  1028→export function formatBytes(bytes: number): string {
+  1029→  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  1030→  if (bytes < 1024) return `${Math.round(bytes)} B`
+  1031→  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  1032→  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  1033→  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  1034→}
+  1035→

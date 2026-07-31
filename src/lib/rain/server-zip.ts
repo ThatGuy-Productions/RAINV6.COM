@@ -48,7 +48,6 @@ const enc = new TextEncoder()
 
 /** Build a ZIP archive (STORE method) from a list of files. Returns raw bytes. */
 export function buildServerZip(files: ZipFile[]): Uint8Array {
-  const table = crcTable()
 
   // Encode all names up front; detect UTF-8 flag.
   const meta = files.map((f) => {

@@ -1,0 +1,1615 @@
+     1→/**
+     2→ * RAIN V6 — Groove + Emotional Intelligence Engine
+     3→ *
+     4→ * This module brings "feel" to the mastering pipeline — the missing piece
+     5→ * between technical correctness and musical excellence.
+     6→ *
+     7→ * ## Groove Intelligence (rhythmic feel)
+     8→ *   1. Tempo Detection — BPM from onset analysis (spectral flux + autocorrelation)
+     9→ *   2. Groove Quantization — straight/swing/shuffle/half-time/double-time via IOI analysis
+    10→ *   3. Groove-Preserving Multiband Compression — attack/release locked to musical values
+    11→ *   4. Transient Enhancement — genre-aware beat emphasis (kick on 1&3, snare on 2&4 etc.)
+    12→ *   5. Dynamics Map — per-bar energy contour, section boundary detection
+    13→ *
+    14→ * ## Emotional Intelligence
+    15→ *   6. Valence/Arousal Estimation — simplified MERT-style from spectral features
+    16→ *   7. Emotion-Preserving Settings — genre settings tempered by detected emotion
+    17→ *   8. Tension Arc Detection — build-ups, drops, releases from dynamics map
+    18→ *   9. Section-Aware Processing — different processing per section type
+    19→ *
+    20→ * 100% TypeScript, browser-compatible, no external dependencies beyond the
+    21→ * Web Audio API. Uses Float32Array operations throughout. All spectral
+    22→ * analysis via real FFT (imported from dsp.ts).
+    23→ */
+    24→
+    25→import { fftInPlace } from './dsp'
+    26→import type { ProcessingParams, SpectralFeatures } from './types'
+    27→
+    28→// ---------------------------------------------------------------------------
+    29→// Public types
+    30→// ---------------------------------------------------------------------------
+    31→
+    32→/** Beat position markers for transient enhancement. */
+    33→export type BeatPosition = 'downbeat' | 'backbeat' | 'offbeat' | 'sixteenth' | 'none'
+    34→
+    35→/** Groove pattern classification. */
+    36→export type GrooveType =
+    37→  | 'straight'
+    38→  | 'swing'
+    39→  | 'shuffle'
+    40→  | 'half-time'
+    41→  | 'double-time'
+    42→  | 'triplet'
+    43→  | 'unknown'
+    44→
+    45→/** Detected section type within a track. */
+    46→export type SectionType = 'intro' | 'verse' | 'pre-chorus' | 'chorus' | 'bridge' | 'drop' | 'outro' | 'unknown'
+    47→
+    48→/** A single section boundary with metadata. */
+    49→export interface Section {
+    50→  /** Section type label. */
+    51→  type: SectionType
+    52→  /** Start time in seconds. */
+    53→  startS: number
+    54→  /** End time in seconds. */
+    55→  endS: number
+    56→  /** Mean RMS energy in dB for this section. */
+    57→  meanEnergyDb: number
+    58→  /** Transient density in onsets/sec for this section. */
+    59→  transientDensity: number
+    60→  /** Whether this section is building energy (1 = rising, 0 = flat, -1 = falling). */
+    61→  energyTrend: number
+    62→}
+    63→
+    64→/** Complete groove analysis result. */
+    65→export interface GrooveProfile {
+    66→  /** Detected BPM, or null if unreliable. */
+    67→  bpm: number | null
+    68→  /** Confidence of BPM detection [0, 1]. */
+    69→  bpmConfidence: number
+    70→  /** Classified groove pattern. */
+    71→  grooveType: GrooveType
+    72→  /** Confidence of groove classification [0, 1]. */
+    73→  grooveConfidence: number
+    74→  /** Swing ratio: ratio of 1st-to-2nd eighth note duration (1.0 = straight, 1.5+ = swing). */
+    75→  swingRatio: number
+    76→  /** Time signature numerator (4 = 4/4, 3 = 3/4, etc.). */
+    77→  timeSignature: number
+    78→  /** Per-bar energy contour — start time + mean RMS per bar. */
+    79→  barEnergies: Array<{ startS: number; energyDb: number; transientCount: number }>
+    80→  /** Detected musical sections. */
+    81→  sections: Section[]
+    82→  /** Beat grid: onset times in seconds for each detected beat. */
+    83→  beatGrid: number[]
+    84→  /** Musical subdivision durations in seconds (1/64, 1/32, 1/16, 1/8, 1/4 note). */
+    85→  subdivisions: {
+    86→    sixtyFourth: number
+    87→    thirtySecond: number
+    88→    sixteenth: number
+    89→    eighth: number
+    90→    quarter: number
+    91→  }
+    92→  /** Groove-aware attack time (ms) per band — derived from BPM + groove type. */
+    93→  grooveAttackMs: { low: number; mid: number; high: number }
+    94→  /** Groove-aware release time (ms) per band — locked to subdivision. */
+    95→  grooveReleaseMs: { low: number; mid: number; high: number }
+    96→}
+    97→
+    98→/** Complete emotional analysis result. */
+    99→export interface EmotionProfile {
+   100→  /** Valence: -1 (sad/dark) to +1 (happy/bright). */
+   101→  valence: number
+   102→  /** Arousal: -1 (calm/subdued) to +1 (energetic/intense). */
+   103→  arousal: number
+   104→  /** Dominant emotion quadrant label. */
+   105→  quadrant: 'calm-happy' | 'energetic-happy' | 'calm-sad' | 'energetic-sad'
+   106→  /** Tension level: 0 (relaxed) to 1 (extreme tension/build-up). */
+   107→  tension: number
+   108→  /** Tension arc: array of tension values over time, one per section. */
+   109→  tensionArc: Array<{ timeS: number; tension: number; label: string }>
+   110→  /** Whether the track has a clear drop/release detected. */
+   111→  hasDrop: boolean
+   112→  /** Drop position in seconds, or null. */
+   113→  dropPositionS: number | null
+   114→  /** Harmonic-to-noise ratio estimate [0, 1]. */
+   115→  harmonicity: number
+   116→  /** Spectral centroid dominance (how much energy is in the central region). */
+   117→  spectralCentroidRatio: number
+   118→}
+   119→
+   120→/**
+   121→ * Unified groove + emotion profile that feeds into ProcessingParams overrides.
+   122→ * This is the primary output type consumed by the pipeline.
+   123→ */
+   124→export interface GrooveEmotionProfile {
+   125→  groove: GrooveProfile
+   126→  emotion: EmotionProfile
+   127→}
+   128→
+   129→/**
+   130→ * Processing parameter overrides derived from groove + emotion analysis.
+   131→ * These are merged into the base ProcessingParams to add feel-aware settings.
+   132→ */
+   133→export interface GrooveEmotionOverrides {
+   134→  /** Override multiband attack times (ms) with groove-locked values. */
+   135→  mb_attack_override?: { low: number; mid: number; high: number }
+   136→  /** Override multiband release times (ms) with groove-locked values. */
+   137→  mb_release_override?: { low: number; mid: number; high: number }
+   138→  /** Emotion-tempered EQ gain adjustments (added to base eq_gains). */
+   139→  eq_emotion_temper: number[]
+   140→  /** Emotion-tempered stereo width multiplier. */
+   141→  stereo_width_multiplier: number
+   142→  /** Emotion-tempered saturation drive multiplier. */
+   143→  saturation_drive_multiplier: number
+   144→  /** Compression ratio adjustment from emotion. */
+   145→  compression_ratio_adjust: number
+   146→  /** Section-aware processing hints. */
+   147→  section_hints: Map<SectionType, { eq_brighten: number; width: number; compression: number }>
+   148→  /** Detected groove type for UI display. */
+   149→  groove_type: GrooveType
+   150→  /** Detected BPM for UI display. */
+   151→  bpm: number | null
+   152→  /** Emotion quadrant for UI display. */
+   153→  emotion_quadrant: string
+   154→  /** Valence value for UI display. */
+   155→  valence: number
+   156→  /** Arousal value for UI display. */
+   157→  arousal: number
+   158→}
+   159→
+   160→// ---------------------------------------------------------------------------
+   161→// Constants
+   162→// ---------------------------------------------------------------------------
+   163→
+   164→const FFT_SIZE = 1024
+   165→const HOP_SIZE = 256 // 75% overlap
+   166→
+   167→/** Range of valid BPM values to search. */
+   168→const BPM_MIN = 50
+   169→const BPM_MAX = 220
+   170→
+   171→/** Inter-onset interval (IOI) thresholds for groove classification. */
+   172→const SWING_THRESHOLD = 1.35 // ratio > 1.35 = swing feel
+   173→const SHUFFLE_THRESHOLD = 1.65 // ratio > 1.65 = shuffle/triplet feel
+   174→
+   175→/** Section detection thresholds. */
+   176→const SECTION_MIN_BARS = 4 // minimum bars per section
+   177→const ENERGY_DROP_THRESHOLD = 8 // dB drop = section boundary candidate
+   178→const TRANSIENT_CHANGE_THRESHOLD = 0.5 // factor change in transient density
+   179→
+   180→// ---------------------------------------------------------------------------
+   181→// 1. TEMPO DETECTION — onset analysis via spectral flux + autocorrelation
+   182→// ---------------------------------------------------------------------------
+   183→
+   184→/**
+   185→ * Compute the spectral flux onset detection function over a mono channel.
+   186→ * Returns an onset strength envelope at the STFT hop rate.
+   187→ */
+   188→function computeOnsetEnvelope(samples: Float32Array, _sampleRate: number): Float32Array {
+   189→  const len = samples.length
+   190→  const numFrames = Math.max(1, Math.floor((len - FFT_SIZE) / HOP_SIZE) + 1)
+   191→  const onsetEnv = new Float32Array(numFrames)
+   192→
+   193→  const real = new Float32Array(FFT_SIZE)
+   194→  const imag = new Float32Array(FFT_SIZE)
+   195→  const prevMag = new Float32Array(FFT_SIZE / 2 + 1)
+   196→
+   197→  for (let f = 0; f < numFrames; f++) {
+   198→    const start = f * HOP_SIZE
+   199→    // Window into real[], zero imag[]
+   200→    for (let i = 0; i < FFT_SIZE; i++) {
+   201→      const idx = start + i
+   202→      real[i] = (idx < len ? samples[idx] : 0) * (0.5 * (1 - Math.cos((2 * Math.PI * i) / FFT_SIZE)))
+   203→      imag[i] = 0
+   204→    }
+   205→    fftInPlace(real, imag)
+   206→
+   207→    // Spectral flux: sum of positive differences in magnitude
+   208→    let flux = 0
+   209→    for (let b = 0; b < FFT_SIZE / 2 + 1; b++) {
+   210→      const mag = Math.sqrt(real[b] * real[b] + imag[b] * imag[b])
+   211→      const diff = mag - prevMag[b]
+   212→      if (diff > 0) flux += diff
+   213→      prevMag[b] = mag
+   214→    }
+   215→    onsetEnv[f] = flux
+   216→  }
+   217→
+   218→  return onsetEnv
+   219→}
+   220→
+   221→/**
+   222→ * Detect BPM from onset envelope via autocorrelation.
+   223→ * Returns { bpm, confidence }.
+   224→ */
+   225→export function detectBpm(
+   226→  onsetEnv: Float32Array,
+   227→  hopRate: number,
+   228→): { bpm: number | null; confidence: number } {
+   229→  const n = onsetEnv.length
+   230→  if (n < 4) return { bpm: null, confidence: 0 }
+   231→
+   232→  // Normalize onset envelope (subtract mean for better autocorrelation)
+   233→  let mean = 0
+   234→  for (let i = 0; i < n; i++) mean += onsetEnv[i]
+   235→  mean /= n
+   236→  const norm = new Float32Array(n)
+   237→  for (let i = 0; i < n; i++) norm[i] = onsetEnv[i] - mean
+   238→
+   239→  // Autocorrelation over lag range corresponding to BPM range
+   240→  // hopRate = sampleRate / HOP_SIZE = hops per second
+   241→  const minLag = Math.floor(hopRate * 60 / BPM_MAX) // 220 BPM = smallest lag
+   242→  const maxLag = Math.floor(hopRate * 60 / BPM_MIN) // 50 BPM = largest lag
+   243→  const maxSearchLag = Math.min(maxLag, Math.floor(n * 0.75))
+   244→
+   245→  let bestLag = 0
+   246→  let bestCorr = -Infinity
+   247→  const corrValues: number[] = []
+   248→
+   249→  for (let lag = minLag; lag <= maxSearchLag; lag++) {
+   250→    let c = 0
+   251→    for (let i = 0; i + lag < n; i++) {
+   252→      c += norm[i] * norm[i + lag]
+   253→    }
+   254→    c /= (n - lag) // normalize by overlap length
+   255→    corrValues.push(c)
+   256→    if (c > bestCorr) {
+   257→      bestCorr = c
+   258→      bestLag = lag
+   259→    }
+   260→  }
+   261→
+   262→  if (bestLag === 0) return { bpm: null, confidence: 0 }
+   263→
+   264→  const bpm = (hopRate * 60) / bestLag
+   265→
+   266→  // Confidence: ratio of best correlation to median correlation
+   267→  // Also check if the half-tempo or double-tempo correlation is strong
+   268→  const sortedCorr = [...corrValues].sort((a, b) => b - a)
+   269→  const medianCorr = sortedCorr[Math.floor(sortedCorr.length / 2)]
+   270→  const topCorr = sortedCorr[0] || 0
+   271→  const secondCorr = sortedCorr[1] || 0
+   272→
+   273→  // Confidence = how much does the best lag stand out
+   274→  let confidence = 0
+   275→  if (medianCorr > 0) {
+   276→    confidence = Math.max(0, Math.min(1, (topCorr - medianCorr) / (topCorr + 1e-10)))
+   277→  }
+   278→
+   279→  // Penalize if there's a strong competing tempo at half or double
+   280→  const halfLag = Math.round(bestLag * 2)
+   281→  const doubleLag = Math.round(bestLag / 2)
+   282→  let halfCorr = 0
+   283→  let doubleCorr = 0
+   284→  for (let i = 0; i + halfLag < n; i++) halfCorr += norm[i] * norm[i + halfLag]
+   285→  halfCorr /= (n - halfLag)
+   286→  for (let i = 0; i + doubleLag < n; i++) doubleCorr += norm[i] * norm[i + doubleLag]
+   287→  doubleCorr /= (n - doubleLag)
+   288→
+   289→  const ambiguity = Math.max(
+   290→    halfCorr / (topCorr + 1e-10),
+   291→    doubleCorr / (topCorr + 1e-10),
+   292→  )
+   293→  confidence *= Math.max(0, 1 - (ambiguity - 0.4) * 2)
+   294→
+   295→  // Boost confidence if second-best correlation is close to best
+   296→  // (strong harmonic structure = reliable tempo)
+   297→  if (secondCorr > 0 && topCorr > 0) {
+   298→    const secondRatio = secondCorr / topCorr
+   299→    if (secondRatio < 0.5) confidence = Math.min(1, confidence * 1.2)
+   300→  }
+   301→
+   302→  return {
+   303→    bpm: Math.round(bpm * 10) / 10,
+   304→    confidence: Math.max(0, Math.min(1, confidence)),
+   305→  }
+   306→}
+   307→
+   308→// ---------------------------------------------------------------------------
+   309→// 2. GROOVE QUANTIZATION — IOI analysis for groove classification
+   310→// ---------------------------------------------------------------------------
+   311→
+   312→/**
+   313→ * Extract inter-onset intervals (IOIs) from the onset envelope.
+   314→ * Returns array of IOIs in seconds.
+   315→ */
+   316→function extractIOIs(onsetEnv: Float32Array, hopRate: number): number[] {
+   317→  // Threshold-based onset detection
+   318→  const threshold = computeAdaptiveThreshold(onsetEnv)
+   319→
+   320→  const onsets: number[] = []
+   321→  for (let i = 1; i < onsetEnv.length - 1; i++) {
+   322→    // Peak picking: local maximum above threshold
+   323→    if (
+   324→      onsetEnv[i] > threshold &&
+   325→      onsetEnv[i] > onsetEnv[i - 1] &&
+   326→      onsetEnv[i] >= onsetEnv[i + 1]
+   327→    ) {
+   328→      onsets.push(i / hopRate) // convert frame index to seconds
+   329→    }
+   330→  }
+   331→
+   332→  // Compute IOIs
+   333→  const iois: number[] = []
+   334→  for (let i = 1; i < onsets.length; i++) {
+   335→    const ioi = onsets[i] - onsets[i - 1]
+   336→    // Filter unreasonable IOIs (shorter than 50 ms = noise, longer than 2 sec = gaps)
+   337→    if (ioi >= 0.05 && ioi <= 2.0) {
+   338→      iois.push(ioi)
+   339→    }
+   340→  }
+   341→
+   342→  return iois
+   343→}
+   344→
+   345→function computeAdaptiveThreshold(env: Float32Array): number {
+   346→  // Median + 1.5 × MAD (median absolute deviation)
+   347→  const sorted = new Float32Array(env).sort()
+   348→  const median = sorted[Math.floor(sorted.length / 2)]
+   349→
+   350→  const absDev: number[] = []
+   351→  for (let i = 0; i < env.length; i++) absDev.push(Math.abs(env[i] - median))
+   352→  absDev.sort((a, b) => a - b)
+   353→  const mad = absDev[Math.floor(absDev.length / 2)]
+   354→
+   355→  return median + mad * 1.5
+   356→}
+   357→
+   358→/**
+   359→ * Classify the groove pattern from IOI distribution.
+   360→ */
+   361→export function classifyGroove(
+   362→  iois: number[],
+   363→  bpm: number | null,
+   364→): { grooveType: GrooveType; confidence: number; swingRatio: number } {
+   365→  if (iois.length < 8) {
+   366→    return { grooveType: 'unknown', confidence: 0, swingRatio: 1.0 }
+   367→  }
+   368→
+   369→  // Expected quarter note duration from BPM
+   370→  const quarterNote = bpm ? 60 / bpm : 0.5
+   371→  const eighthNote = quarterNote / 2
+   372→  const sixteenthNote = quarterNote / 4
+   373→  const tripletEighth = quarterNote / 3
+   374→
+   375→  // Build IOI histogram clusters
+   376→  // Cluster IOIs near expected note durations
+   377→  const clusters: { center: number; count: number }[] = [
+   378→    { center: sixteenthNote, count: 0 },
+   379→    { center: eighthNote, count: 0 },
+   380→    { center: quarterNote, count: 0 },
+   381→    { center: tripletEighth, count: 0 },
+   382→  ]
+   383→
+   384→  const tolerance = 0.15 // 15% tolerance around expected value
+   385→
+   386→  for (const ioi of iois) {
+   387→    for (const cluster of clusters) {
+   388→      if (Math.abs(ioi - cluster.center) / cluster.center < tolerance) {
+   389→        cluster.count++
+   390→        break
+   391→      }
+   392→    }
+   393→  }
+   394→
+   395→  const totalClustered = clusters.reduce((s, c) => s + c.count, 0)
+   396→  if (totalClustered === 0) {
+   397→    return { grooveType: 'unknown', confidence: 0, swingRatio: 1.0 }
+   398→  }
+   399→
+   400→  const sixteenthCount = clusters[0].count
+   401→  const eighthCount = clusters[1].count
+   402→  const quarterCount = clusters[2].count
+   403→  const tripletCount = clusters[3].count
+   404→
+   405→  // Compute swing ratio from adjacent eighth-note IOIs
+   406→  let swingRatio = 1.0
+   407→  let swingPairCount = 0
+   408→  for (let i = 0; i < iois.length - 1; i++) {
+   409→    const pair = iois[i] + iois[i + 1]
+   410→    // Check if this pair sums to approximately a quarter note
+   411→    if (Math.abs(pair - quarterNote) / quarterNote < 0.2) {
+   412→      // The ratio of first to second IOI in the pair
+   413→      if (iois[i + 1] > 0) {
+   414→        swingRatio += iois[i] / iois[i + 1]
+   415→        swingPairCount++
+   416→      }
+   417→    }
+   418→  }
+   419→  if (swingPairCount > 0) {
+   420→    swingRatio /= swingPairCount + 1
+   421→  }
+   422→
+   423→  // Classify
+   424→  let grooveType: GrooveType = 'straight'
+   425→  let confidence = 0.5
+   426→
+   427→  if (tripletCount > totalClustered * 0.3) {
+   428→    grooveType = 'triplet'
+   429→    confidence = tripletCount / totalClustered
+   430→  } else if (swingRatio > SHUFFLE_THRESHOLD) {
+   431→    grooveType = 'shuffle'
+   432→    confidence = Math.min(1, (swingRatio - 1) / 0.8)
+   433→  } else if (swingRatio > SWING_THRESHOLD) {
+   434→    grooveType = 'swing'
+   435→    confidence = Math.min(1, (swingRatio - 1) / 0.5)
+   436→  } else if (sixteenthCount > totalClustered * 0.4) {
+   437→    grooveType = 'double-time'
+   438→    confidence = sixteenthCount / totalClustered
+   439→  } else if (eighthCount > totalClustered * 0.5 && quarterCount < totalClustered * 0.1) {
+   440→    grooveType = 'half-time'
+   441→    confidence = eighthCount / totalClustered
+   442→  } else {
+   443→    grooveType = 'straight'
+   444→    confidence = Math.max(0.3, (eighthCount + quarterCount) / totalClustered)
+   445→  }
+   446→
+   447→  return {
+   448→    grooveType,
+   449→    confidence: Math.max(0, Math.min(1, confidence)),
+   450→    swingRatio: Math.max(0.5, Math.min(3.0, swingRatio)),
+   451→  }
+   452→}
+   453→
+   454→// ---------------------------------------------------------------------------
+   455→// 3. GROOVE-PRESERVING MULTIBAND COMPRESSION — musical time constants
+   456→// ---------------------------------------------------------------------------
+   457→
+   458→/**
+   459→ * Compute musical subdivision durations from BPM.
+   460→ */
+   461→export function computeSubdivisions(bpm: number): {
+   462→  sixtyFourth: number
+   463→  thirtySecond: number
+   464→  sixteenth: number
+   465→  eighth: number
+   466→  quarter: number
+   467→} {
+   468→  const quarter = 60 / bpm
+   469→  return {
+   470→    sixtyFourth: quarter / 16,
+   471→    thirtySecond: quarter / 8,
+   472→    sixteenth: quarter / 4,
+   473→    eighth: quarter / 2,
+   474→    quarter,
+   475→  }
+   476→}
+   477→
+   478→/**
+   479→ * Derive groove-locked attack and release times from BPM and groove type.
+   480→ *
+   481→ * Attack times are locked to musical subdivisions:
+   482→ *  - Low band (kick/bass): attack = 1/64 note (fast, tight sub control)
+   483→ *  - Mid band (instruments/vocals): attack = 1/32 or 1/16 note (groove-preserving)
+   484→ *  - High band (hats/cymbals): attack = 1/32 or 1/64 note (transient clarity)
+   485→ *
+   486→ * Release times are locked to the groove subdivision:
+   487→ *  - Low band: release = 1/8 note (breathe with the kick)
+   488→ *  - Mid band: release = 1/4 note (musical pump)
+   489→ *  - High band: release = 1/8 note (clean decay)
+   490→ *
+   491→ * All values converted to milliseconds.
+   492→ */
+   493→export function computeGrooveTimeConstants(
+   494→  bpm: number,
+   495→  grooveType: GrooveType,
+   496→): { attackMs: { low: number; mid: number; high: number }; releaseMs: { low: number; mid: number; high: number } } {
+   497→  const sub = computeSubdivisions(bpm)
+   498→
+   499→  // Base attack: low = 1/64, mid = 1/32, high = 1/64
+   500→  let attackLow = sub.sixtyFourth * 1000
+   501→  let attackMid = sub.thirtySecond * 1000
+   502→  let attackHigh = sub.sixtyFourth * 1000
+   503→
+   504→  // Base release: low = 1/8, mid = 1/4, high = 1/8
+   505→  let releaseLow = sub.eighth * 1000
+   506→  let releaseMid = sub.quarter * 1000
+   507→  let releaseHigh = sub.eighth * 1000
+   508→
+   509→  // Adjust for groove type
+   510→  switch (grooveType) {
+   511→    case 'swing':
+   512→      // Swing: slightly longer attack on mid to preserve swung feel
+   513→      attackMid = sub.sixteenth * 1000
+   514→      releaseLow = sub.eighth * 1000 * 1.2 // breathe a bit longer
+   515→      releaseMid = sub.quarter * 1000 * 1.1
+   516→      break
+   517→    case 'shuffle':
+   518→      // Shuffle: triplet-based — lock to triplet eighth
+   519→      attackMid = (sub.quarter / 3) * 1000 // triplet eighth
+   520→      releaseLow = (sub.quarter / 3 * 2) * 1000 // two triplet eighths
+   521→      releaseMid = sub.quarter * 1000 * 1.2
+   522→      break
+   523→    case 'half-time':
+   524→      // Half-time: double the release times for spacious feel
+   525→      releaseLow = sub.quarter * 1000
+   526→      releaseMid = sub.quarter * 1000 * 2
+   527→      releaseHigh = sub.quarter * 1000
+   528→      attackMid = sub.eighth * 1000
+   529→      break
+   530→    case 'double-time':
+   531→      // Double-time: halve release times for tight feel
+   532→      releaseLow = sub.sixteenth * 1000
+   533→      releaseHigh = sub.sixteenth * 1000
+   534→      attackLow = sub.sixtyFourth * 1000 * 0.5
+   535→      attackHigh = sub.sixtyFourth * 1000 * 0.5
+   536→      break
+   537→    case 'triplet':
+   538→      // Triplet feel: lock to triplet subdivisions
+   539→      attackMid = (sub.quarter / 3) * 1000
+   540→      releaseLow = (sub.quarter / 3 * 2) * 1000
+   541→      releaseMid = sub.quarter * 1000 * 1.1
+   542→      break
+   543→    case 'straight':
+   544→    default:
+   545→      // Straight: balanced time constants
+   546→      break
+   547→  }
+   548→
+   549→  // Clamp to reasonable ranges
+   550→  const clampMs = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
+   551→
+   552→  return {
+   553→    attackMs: {
+   554→      low: clampMs(attackLow, 0.1, 50),
+   555→      mid: clampMs(attackMid, 0.5, 80),
+   556→      high: clampMs(attackHigh, 0.1, 30),
+   557→    },
+   558→    releaseMs: {
+   559→      low: clampMs(releaseLow, 10, 500),
+   560→      mid: clampMs(releaseMid, 20, 800),
+   561→      high: clampMs(releaseHigh, 10, 300),
+   562→    },
+   563→  }
+   564→}
+   565→
+   566→// ---------------------------------------------------------------------------
+   567→// 4. TRANSIENT ENHANCEMENT — genre-aware beat emphasis
+   568→// ---------------------------------------------------------------------------
+   569→
+   570→/**
+   571→ * Genre-specific beat emphasis rules.
+   572→ * For 4/4 genres: kick on 1&3, snare on 2&4
+   573→ * For shuffle: enhance the swung off-beat
+   574→ * For half-time: kick on 1, snare on 3
+   575→ */
+   576→const GENRE_BEAT_RULES: Record<string, {
+   577→  kickBeats: number[]    // which beats in a 4-beat bar get kick emphasis
+   578→  snareBeats: number[]   // which beats get snare emphasis
+   579→  offbeatBoost: number   // extra dB for offbeat transients
+   580→  hihatPattern: 'eighth' | 'sixteenth' | 'offbeat'
+   581→}> = {
+   582→  house:       { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'offbeat' },
+   583→  techno:      { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.5, hihatPattern: 'sixteenth' },
+   584→  electronic:  { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'offbeat' },
+   585→  edm:         { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'offbeat' },
+   586→  hiphop:      { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.5, hihatPattern: 'sixteenth' },
+   587→  trap:        { kickBeats: [0], snareBeats: [1.5], offbeatBoost: 1.0, hihatPattern: 'sixteenth' },
+   588→  rnb:         { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.3, hihatPattern: 'sixteenth' },
+   589→  afrobeats:   { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.7, hihatPattern: 'sixteenth' },
+   590→  amapiano:    { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.4, hihatPattern: 'sixteenth' },
+   591→  afro_house:  { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'offbeat' },
+   592→  gqom:        { kickBeats: [0, 1.5, 2], snareBeats: [1, 3], offbeatBoost: 0.8, hihatPattern: 'offbeat' },
+   593→  rock:        { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'eighth' },
+   594→  pop:         { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'eighth' },
+   595→  metal:       { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'eighth' },
+   596→  reggae:      { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0.3, hihatPattern: 'offbeat' },
+   597→  jazz:        { kickBeats: [0, 2], snareBeats: [1, 3], offbeatBoost: 0, hihatPattern: 'eighth' },
+   598→}
+   599→
+   600→/**
+   601→ * Classify beat position for a given onset time within a bar.
+   602→ * Bar is divided into 16th-note slots (0–15).
+   603→ */
+   604→export function classifyBeatPosition(
+   605→  onsetTimeS: number,
+   606→  barStartS: number,
+   607→  barDurationS: number,
+   608→  _bpm: number,
+   609→  grooveType: GrooveType,
+   610→): BeatPosition {
+   611→  const relativeS = onsetTimeS - barStartS
+   612→  const sixthNote = barDurationS / 16
+   613→
+   614→  // Quantize to nearest 16th note
+   615→  const slot = Math.round(relativeS / sixthNote) % 16
+   616→  if (slot < 0 || slot >= 16) return 'none'
+   617→
+   618→  // Determine beat position based on groove type
+   619→  switch (grooveType) {
+   620→    case 'shuffle':
+   621→    case 'triplet': {
+   622→      // In shuffle/triplet, the "swung" 16th notes are at slots 0, 3, 6, 9, 12
+   623→      const tripletSlot = slot % 3
+   624→      if (tripletSlot === 0) {
+   625→        return slot % 6 === 0 ? 'downbeat' : 'backbeat'
+   626→      }
+   627→      return 'offbeat'
+   628→    }
+   629→    case 'swing': {
+   630→      // In swing, the 2nd eighth note of each pair is delayed
+   631→      const eighthSlot = Math.floor(slot / 2)
+   632→      if (slot % 2 === 0) {
+   633→        return eighthSlot % 2 === 0 ? 'downbeat' : 'backbeat'
+   634→      }
+   635→      return 'offbeat'
+   636→    }
+   637→    case 'half-time': {
+   638→      // Half-time: only beats 0 and 2 (of 4) are strong
+   639→      if (slot === 0 || slot === 8) return 'downbeat'
+   640→      if (slot === 4 || slot === 12) return 'backbeat'
+   641→      return 'offbeat'
+   642→    }
+   643→    case 'double-time': {
+   644→      // Double-time: every 8th note feels like a beat
+   645→      if (slot % 2 === 0) {
+   646→        return (slot % 4 === 0) ? 'downbeat' : 'backbeat'
+   647→      }
+   648→      return 'sixteenth'
+   649→    }
+   650→    case 'straight':
+   651→    default: {
+   652→      // Straight 4/4: slots 0,4,8,12 are beats
+   653→      if (slot === 0 || slot === 8) return 'downbeat'
+   654→      if (slot === 4 || slot === 12) return 'backbeat'
+   655→      if (slot % 2 === 0) return 'offbeat'
+   656→      return 'sixteenth'
+   657→    }
+   658→  }
+   659→}
+   660→
+   661→/**
+   662→ * Compute transient enhancement gain for a given onset based on genre rules.
+   663→ * Returns a gain multiplier (1.0 = no change, >1.0 = enhance).
+   664→ */
+   665→export function computeTransientEnhancement(
+   666→  beatPosition: BeatPosition,
+   667→  genre: string,
+   668→  onsetEnergy: number,
+   669→  meanEnergy: number,
+   670→): number {
+   671→  const rules = GENRE_BEAT_RULES[genre] ?? GENRE_BEAT_RULES.pop! // fallback to pop
+   672→
+   673→  const relativeEnergy = meanEnergy > 1e-10 ? onsetEnergy / meanEnergy : 1.0
+   674→
+   675→  switch (beatPosition) {
+   676→    case 'downbeat':
+   677→      // Kick emphasis — enhance if it's already prominent
+   678→      if (relativeEnergy > 1.2) return 1.0 + 0.15 * Math.min(1, relativeEnergy - 1)
+   679→      return 1.05 // gentle boost if kick is weak
+   680→    case 'backbeat':
+   681→      // Snare emphasis — enhance the backbeat
+   682→      if (relativeEnergy > 1.0) return 1.0 + 0.12 * Math.min(1, relativeEnergy - 1)
+   683→      return 1.03
+   684→    case 'offbeat':
+   685→      // Offbeat emphasis for shuffle/house
+   686→      return 1.0 + rules.offbeatBoost * 0.05 * Math.min(1, relativeEnergy)
+   687→    case 'sixteenth':
+   688→      // Subtle enhancement for hi-hats
+   689→      if (rules.hihatPattern === 'sixteenth') {
+   690→        return 1.0 + 0.03 * Math.min(1, relativeEnergy)
+   691→      }
+   692→      return 1.0
+   693→    case 'none':
+   694→      return 1.0
+   695→  }
+   696→}
+   697→
+   698→// ---------------------------------------------------------------------------
+   699→// 5. DYNAMICS MAP — per-bar energy contour + section detection
+   700→// ---------------------------------------------------------------------------
+   701→
+   702→/**
+   703→ * Build a per-bar energy contour from the audio channel.
+   704→ * Returns array of { startS, energyDb, transientCount } for each bar.
+   705→ */
+   706→export function buildBarEnergyMap(
+   707→  samples: Float32Array,
+   708→  sampleRate: number,
+   709→  bpm: number,
+   710→  onsetEnv: Float32Array,
+   711→  hopRate: number,
+   712→): Array<{ startS: number; energyDb: number; transientCount: number }> {
+   713→  const barDurationS = (60 / bpm) * 4 // assume 4/4
+   714→  const numBars = Math.floor(samples.length / sampleRate / barDurationS)
+   715→  if (numBars < 1) return []
+   716→
+   717→  const bars: Array<{ startS: number; energyDb: number; transientCount: number }> = []
+   718→
+   719→  // Detect onsets from onset envelope
+   720→  const threshold = computeAdaptiveThreshold(onsetEnv)
+   721→  const onsetTimes: number[] = []
+   722→  for (let i = 1; i < onsetEnv.length - 1; i++) {
+   723→    if (
+   724→      onsetEnv[i] > threshold &&
+   725→      onsetEnv[i] > onsetEnv[i - 1] &&
+   726→      onsetEnv[i] >= onsetEnv[i + 1]
+   727→    ) {
+   728→      onsetTimes.push(i / hopRate)
+   729→    }
+   730→  }
+   731→
+   732→  for (let bar = 0; bar < numBars; bar++) {
+   733→    const startS = bar * barDurationS
+   734→    const endS = startS + barDurationS
+   735→    const startSample = Math.floor(startS * sampleRate)
+   736→    const endSample = Math.min(samples.length, Math.floor(endS * sampleRate))
+   737→
+   738→    // Compute RMS energy for this bar
+   739→    let sumSq = 0
+   740→    let count = 0
+   741→    for (let i = startSample; i < endSample; i++) {
+   742→      sumSq += samples[i] * samples[i]
+   743→      count++
+   744→    }
+   745→    const rms = count > 0 ? Math.sqrt(sumSq / count) : 0
+   746→    const energyDb = 20 * Math.log10(Math.max(rms, 1e-10))
+   747→
+   748→    // Count onsets in this bar
+   749→    let transientCount = 0
+   750→    for (const t of onsetTimes) {
+   751→      if (t >= startS && t < endS) transientCount++
+   752→    }
+   753→
+   754→    bars.push({ startS, energyDb, transientCount })
+   755→  }
+   756→
+   757→  return bars
+   758→}
+   759→
+   760→/**
+   761→ * Detect musical sections from the bar energy contour.
+   762→ * Uses energy changes + transient density changes to find boundaries.
+   763→ */
+   764→export function detectSections(
+   765→  barEnergies: Array<{ startS: number; energyDb: number; transientCount: number }>,
+   766→  bpm: number,
+   767→): Section[] {
+   768→  if (barEnergies.length < 8) return []
+   769→
+   770→  const barDurationS = (60 / bpm) * 4
+   771→  const sections: Section[] = []
+   772→
+   773→  // Compute smoothed energy contour (3-bar moving average)
+   774→  const smoothed = new Float32Array(barEnergies.length)
+   775→  for (let i = 0; i < barEnergies.length; i++) {
+   776→    let sum = 0
+   777→    let count = 0
+   778→    for (let j = Math.max(0, i - 1); j <= Math.min(barEnergies.length - 1, i + 1); j++) {
+   779→      sum += barEnergies[j].energyDb
+   780→      count++
+   781→    }
+   782→    smoothed[i] = count > 0 ? sum / count : barEnergies[i].energyDb
+   783→  }
+   784→
+   785→  // Find energy peaks and valleys as section boundaries
+   786→  const boundaries: number[] = [0] // always start at bar 0
+   787→
+   788→  // Compute overall energy range
+   789→  const allEnergies = barEnergies.map(b => b.energyDb)
+   790→  const maxEnergy = Math.max(...allEnergies)
+   791→  const minEnergy = Math.min(...allEnergies)
+   792→  const energyRange = maxEnergy - minEnergy
+   793→
+   794→  // Find significant energy changes
+   795→  for (let i = 2; i < smoothed.length - 2; i++) {
+   796→    const prevEnergy = (smoothed[i - 2] + smoothed[i - 1]) / 2
+   797→    const nextEnergy = (smoothed[i + 1] + smoothed[i + 2]) / 2
+   798→    const energyChange = nextEnergy - prevEnergy
+   799→
+   800→    // Significant rise or drop
+   801→    if (Math.abs(energyChange) > ENERGY_DROP_THRESHOLD * 0.5) {
+   802→      // Check for transient density change too
+   803→      const prevTransient = (barEnergies[i - 2].transientCount + barEnergies[i - 1].transientCount) / 2
+   804→      const nextTransient = (barEnergies[i + 1].transientCount + barEnergies[i + 2].transientCount) / 2
+   805→      const transientRatio = Math.max(prevTransient, nextTransient) / (Math.min(prevTransient, nextTransient) + 1)
+   806→
+   807→      if (transientRatio > TRANSIENT_CHANGE_THRESHOLD) {
+   808→        // Confirmed boundary
+   809→        if (boundaries[boundaries.length - 1] < i - SECTION_MIN_BARS) {
+   810→          boundaries.push(i)
+   811→        }
+   812→      }
+   813→    }
+   814→  }
+   815→
+   816→  // Add final boundary
+   817→  if (boundaries[boundaries.length - 1] < barEnergies.length - SECTION_MIN_BARS) {
+   818→    boundaries.push(barEnergies.length)
+   819→  }
+   820→
+   821→  // Classify each section
+   822→  for (let s = 0; s < boundaries.length - 1; s++) {
+   823→    const startBar = boundaries[s]
+   824→    const endBar = boundaries[s + 1]
+   825→    const sectionBars = barEnergies.slice(startBar, endBar)
+   826→
+   827→    const meanEnergy = sectionBars.reduce((sum, b) => sum + b.energyDb, 0) / sectionBars.length
+   828→    const meanTransient = sectionBars.reduce((sum, b) => sum + b.transientCount, 0) / sectionBars.length
+   829→
+   830→    // Energy trend: compare first half to second half
+   831→    const half = Math.floor(sectionBars.length / 2)
+   832→    const firstHalf = sectionBars.slice(0, half).reduce((sum, b) => sum + b.energyDb, 0) / half
+   833→    const secondHalf = sectionBars.slice(half).reduce((sum, b) => sum + b.energyDb, 0) / (sectionBars.length - half)
+   834→    const energyTrend = secondHalf - firstHalf > 2 ? 1 : secondHalf - firstHalf < -2 ? -1 : 0
+   835→
+   836→    // Classify section type
+   837→    const type = classifySection(
+   838→      s,
+   839→      boundaries.length - 1,
+   840→      meanEnergy,
+   841→      meanTransient,
+   842→      energyTrend,
+   843→      energyRange,
+   844→      maxEnergy,
+   845→    )
+   846→
+   847→    sections.push({
+   848→      type,
+   849→      startS: startBar * barDurationS,
+   850→      endS: endBar * barDurationS,
+   851→      meanEnergyDb: meanEnergy,
+   852→      transientDensity: meanTransient,
+   853→      energyTrend,
+   854→    })
+   855→  }
+   856→
+   857→  return sections
+   858→}
+   859→
+   860→function classifySection(
+   861→  index: number,
+   862→  totalSections: number,
+   863→  meanEnergy: number,
+   864→  meanTransient: number,
+   865→  energyTrend: number,
+   866→  _energyRange: number,
+   867→  maxEnergy: number,
+   868→): SectionType {
+   869→  const isFirst = index === 0
+   870→  const isLast = index === totalSections - 1
+   871→  const energyRatio = (meanEnergy + 60) / (maxEnergy + 60) // normalize to ~0-1
+   872→
+   873→  // Intro: first section, low energy, rising
+   874→  if (isFirst && energyRatio < 0.5 && energyTrend > 0) return 'intro'
+   875→
+   876→  // Outro: last section, energy falling, lower than peak
+   877→  if (isLast && energyRatio < 0.7 && energyTrend < 0) return 'outro'
+   878→
+   879→  // Chorus: high energy, high transient density
+   880→  if (energyRatio > 0.75 && meanTransient > 2) return 'chorus'
+   881→
+   882→  // Drop: very high energy with density spike
+   883→  if (energyRatio > 0.85 && meanTransient > 3) return 'drop'
+   884→
+   885→  // Bridge: moderate energy with low transient density (spacious)
+   886→  if (energyRatio > 0.4 && energyRatio < 0.7 && meanTransient < 2 && energyTrend < 0) return 'bridge'
+   887→
+   888→  // Pre-chorus: building energy
+   889→  if (energyTrend > 0 && energyRatio > 0.5 && energyRatio < 0.8) return 'pre-chorus'
+   890→
+   891→  // Verse: moderate energy
+   892→  if (energyRatio < 0.75) return 'verse'
+   893→
+   894→  return 'unknown'
+   895→}
+   896→
+   897→// ---------------------------------------------------------------------------
+   898→// 6. VALENCE / AROUSAL ESTIMATION — simplified MERT-style
+   899→// ---------------------------------------------------------------------------
+   900→
+   901→/**
+   902→ * Estimate valence (happy/sad) and arousal (energy/calm) from spectral features
+   903→ * and audio channel data.
+   904→ *
+   905→ * Valence correlates with:
+   906→ *  - Higher spectral centroid → brighter → happier
+   907→ *  - Higher harmonic-to-noise ratio → more tonal → happier
+   908→ *  - Major/minor key energy ratio → major thirds → happier
+   909→ *
+   910→ * Arousal correlates with:
+   911→ *  - Higher RMS energy → more intense
+   912→ *  - Higher transient density → more energetic
+   913→ *  - Higher spectral flux → more dynamic → more energetic
+   914→ */
+   915→export function estimateValenceArousal(
+   916→  channels: Float32Array[],
+   917→  sampleRate: number,
+   918→  spectralFeatures: SpectralFeatures,
+   919→  transientDensity: number,
+   920→  rmsDb: number,
+   921→): { valence: number; arousal: number; harmonicity: number; spectralCentroidRatio: number } {
+   922→  const left = channels[0]
+   923→
+   924→  // --- Harmonic-to-noise ratio (HNR) estimate ---
+   925→  // Simplified: ratio of autocorrelation peak to total energy
+   926→  const hnr = estimateHNR(left, sampleRate)
+   927→
+   928→  // --- Spectral centroid ratio ---
+   929→  // How much energy is in the central region (500-4000 Hz) vs total
+   930→  // Higher centroid ratio = brighter, more present
+   931→  const centroidRatio = spectralFeatures.centroid > 0
+   932→    ? Math.tanh(spectralFeatures.centroid / 4000)
+   933→    : 0.5
+   934→
+   935→  // --- Major/minor key energy ratio ---
+   936→  // Simplified: check energy in major 3rd (4 semitones) vs minor 3rd (3 semitones)
+   937→  // We use the spectral flatness as a proxy — more tonal = less flat
+   938→  const tonality = spectralFeatures.flatness < 0.3 ? 1 - spectralFeatures.flatness * 3 : 0
+   939→
+   940→  // --- VALENCE computation ---
+   941→  // High centroid (bright) → happier
+   942→  // High HNR (tonal) → happier
+   943→  // High tonality → happier
+   944→  // Low flatness → more musical → happier
+   945→  let valence = (
+   946→    centroidRatio * 0.4 +
+   947→    hnr * 0.35 +
+   948→    tonality * 0.25
+   949→  )
+   950→  valence = Math.max(-1, Math.min(1, valence * 2 - 0.5))
+   951→
+   952→  // --- AROUSAL computation ---
+   953→  // Normalize RMS to a 0-1 scale (typical RMS range: -40 to 0 dBFS)
+   954→  const rmsNorm = Math.max(0, Math.min(1, (rmsDb + 40) / 40))
+   955→  // Normalize transient density (typical: 0-8 onsets/sec)
+   956→  const transientNorm = Math.max(0, Math.min(1, transientDensity / 8))
+   957→  // Normalize spectral flux (typical: 0-0.5)
+   958→  const fluxNorm = Math.max(0, Math.min(1, spectralFeatures.flux / 0.5))
+   959→
+   960→  let arousal = (
+   961→    rmsNorm * 0.5 +
+   962→    transientNorm * 0.3 +
+   963→    fluxNorm * 0.2
+   964→  )
+   965→  arousal = Math.max(-1, Math.min(1, arousal * 2 - 0.5))
+   966→
+   967→  return {
+   968→    valence,
+   969→    arousal,
+   970→    harmonicity: hnr,
+   971→    spectralCentroidRatio: centroidRatio,
+   972→  }
+   973→}
+   974→
+   975→/**
+   976→ * Simplified harmonic-to-noise ratio estimation via autocorrelation.
+   977→ * Returns value in [0, 1] where 1 = perfectly harmonic.
+   978→ */
+   979→function estimateHNR(samples: Float32Array, sampleRate: number): number {
+   980→  const n = Math.min(samples.length, sampleRate * 2) // 2 seconds max
+   981→  const maxLag = Math.floor(sampleRate / 50) // 50 Hz = lowest pitch
+   982→  if (n < maxLag * 2) return 0.5
+   983→
+   984→  // Compute autocorrelation
+   985→  let bestCorr = 0
+   986→  let totalEnergy = 0
+   987→  for (let i = 0; i < n; i++) totalEnergy += samples[i] * samples[i]
+   988→
+   989→  if (totalEnergy < 1e-10) return 0
+   990→
+   991→  for (let lag = maxLag; lag < maxLag * 2; lag++) {
+   992→    let c = 0
+   993→    for (let i = 0; i + lag < n; i++) {
+   994→      c += samples[i] * samples[i + lag]
+   995→    }
+   996→    c /= totalEnergy
+   997→    if (c > bestCorr) bestCorr = c
+   998→  }
+   999→
+  1000→  return Math.max(0, Math.min(1, bestCorr))
+  1001→}
+  1002→
+  1003→/**
+  1004→ * Determine the emotion quadrant from valence and arousal.
+  1005→ */
+  1006→export function emotionQuadrant(valence: number, arousal: number): EmotionProfile['quadrant'] {
+  1007→  if (valence >= 0 && arousal >= 0) return 'energetic-happy'
+  1008→  if (valence >= 0 && arousal < 0) return 'calm-happy'
+  1009→  if (valence < 0 && arousal >= 0) return 'energetic-sad'
+  1010→  return 'calm-sad'
+  1011→}
+  1012→
+  1013→// ---------------------------------------------------------------------------
+  1014→// 7. EMOTION-PRESERVING SETTINGS
+  1015→// ---------------------------------------------------------------------------
+  1016→
+  1017→/**
+  1018→ * Compute emotion-tempered settings overrides.
+  1019→ *
+  1020→ * Principles:
+  1021→ *  - High arousal → slightly more compression (energy needs control)
+  1022→ *  - Low valence → slightly less high-shelf EQ (darkness is intentional)
+  1023→ *  - Mid-high arousal + high valence → maximum stereo width (joy + energy = wide)
+  1024→ *  - Low arousal + low valence → narrower, more intimate (sad + calm = close)
+  1025→ *  - High tension → more compression, narrower width (build-up intensity)
+  1026→ */
+  1027→export function computeEmotionTemper(
+  1028→  valence: number,
+  1029→  arousal: number,
+  1030→  tension: number,
+  1031→): {
+  1032→  eqTemper: number[]              // 8 EQ band adjustments
+  1033→  stereoWidthMultiplier: number
+  1034→  saturationDriveMultiplier: number
+  1035→  compressionRatioAdjust: number
+  1036→} {
+  1037→  // EQ band tempering (8 bands: 60, 200, 500, 1k, 2k, 4k, 8k, 16k)
+  1038→  const eqTemper = new Array(8).fill(0)
+  1039→
+  1040→  // Valence → high-shelf adjustment
+  1041→  // High valence = brighter = slightly boost highs
+  1042→  // Low valence = darker = slightly cut highs
+  1043→  const highShelfAdjust = valence * 1.5 // ±1.5 dB max
+  1044→  eqTemper[6] = highShelfAdjust * 0.7 // 8 kHz
+  1045→  eqTemper[7] = highShelfAdjust // 16 kHz
+  1046→
+  1047→  // Arousal → mid emphasis
+  1048→  // High arousal = more presence
+  1049→  eqTemper[3] = arousal * 0.8  // 1 kHz
+  1050→  eqTemper[4] = arousal * 1.0  // 2 kHz
+  1051→
+  1052→  // Low arousal + low valence → warmth boost
+  1053→  if (arousal < 0 && valence < 0) {
+  1054→    eqTemper[0] = -valence * 1.0  // 60 Hz — add warmth for sad/calm
+  1055→    eqTemper[1] = -valence * 0.8  // 200 Hz
+  1056→  }
+  1057→
+  1058→  // High valence + high arousal → sparkle
+  1059→  if (valence > 0.3 && arousal > 0.3) {
+  1060→    eqTemper[5] = valence * 1.0  // 4 kHz
+  1061→  }
+  1062→
+  1063→  // --- Stereo width ---
+  1064→  // Joy + energy = wide; sad + calm = narrow
+  1065→  let stereoWidthMultiplier = 1.0
+  1066→  if (valence > 0.3 && arousal > 0.3) {
+  1067→    stereoWidthMultiplier = 1.0 + (valence + arousal) * 0.15 // up to +30% width
+  1068→  } else if (valence < -0.3 && arousal < -0.3) {
+  1069→    stereoWidthMultiplier = 0.85 // -15% for intimate sadness
+  1070→  } else if (arousal > 0.5) {
+  1071→    stereoWidthMultiplier = 1.0 + arousal * 0.1 // energetic = wider
+  1072→  }
+  1073→
+  1074→  // High tension → slightly narrower to focus energy
+  1075→  if (tension > 0.6) {
+  1076→    stereoWidthMultiplier *= 0.95
+  1077→  }
+  1078→
+  1079→  // --- Saturation drive ---
+  1080→  // High arousal = more saturation (energy/warmth)
+  1081→  // Low arousal = cleaner
+  1082→  let saturationDriveMultiplier = 1.0 + (arousal * 0.4)
+  1083→  // Low valence = slightly more saturation (darkness/warmth)
+  1084→  if (valence < 0) saturationDriveMultiplier += Math.abs(valence) * 0.2
+  1085→  saturationDriveMultiplier = Math.max(0.5, Math.min(1.8, saturationDriveMultiplier))
+  1086→
+  1087→  // --- Compression ratio ---
+  1088→  // High arousal = more compression (control energy)
+  1089→  let compressionRatioAdjust = arousal * 0.5
+  1090→  // High tension = more compression
+  1091→  compressionRatioAdjust += tension * 0.3
+  1092→  compressionRatioAdjust = Math.max(-0.5, Math.min(1.0, compressionRatioAdjust))
+  1093→
+  1094→  return {
+  1095→    eqTemper,
+  1096→    stereoWidthMultiplier,
+  1097→    saturationDriveMultiplier,
+  1098→    compressionRatioAdjust,
+  1099→  }
+  1100→}
+  1101→
+  1102→// ---------------------------------------------------------------------------
+  1103→// 8. TENSION ARC DETECTION
+  1104→// ---------------------------------------------------------------------------
+  1105→
+  1106→/**
+  1107→ * Build a tension arc from the bar energy contour.
+  1108→ * Tension = f(energy_change, energy_level, transient_density)
+  1109→ *
+  1110→ * Rising energy + increasing transient density = building tension
+  1111→ * Sudden drop = release
+  1112→ * Sustained high energy = plateau (drop section)
+  1113→ */
+  1114→export function buildTensionArc(
+  1115→  barEnergies: Array<{ startS: number; energyDb: number; transientCount: number }>,
+  1116→  _bpm: number,
+  1117→): { tensionArc: Array<{ timeS: number; tension: number; label: string }>; hasDrop: boolean; dropPositionS: number | null } {
+  1118→  if (barEnergies.length < 4) {
+  1119→    return { tensionArc: [], hasDrop: false, dropPositionS: null }
+  1120→  }
+  1121→
+  1122→  const energyValues = barEnergies.map(b => b.energyDb)
+  1123→  const transientValues = barEnergies.map(b => b.transientCount)
+  1124→
+  1125→  const maxEnergy = Math.max(...energyValues)
+  1126→  const minEnergy = Math.min(...energyValues)
+  1127→  const energyRange = maxEnergy - minEnergy
+  1128→
+  1129→  const maxTransient = Math.max(...transientValues)
+  1130→  const minTransient = Math.min(...transientValues)
+  1131→
+  1132→  // Compute energy derivative (2-bar window)
+  1133→  const energyDerivative: number[] = []
+  1134→  for (let i = 0; i < barEnergies.length; i++) {
+  1135→    if (i < 2) {
+  1136→      energyDerivative.push(0)
+  1137→    } else {
+  1138→      energyDerivative.push(energyValues[i] - energyValues[i - 2])
+  1139→    }
+  1140→  }
+  1141→
+  1142→  // Compute tension per bar
+  1143→  const tensionArc: Array<{ timeS: number; tension: number; label: string }> = []
+  1144→  let hasDrop = false
+  1145→  let dropPositionS: number | null = null
+  1146→  let maxTension = 0
+  1147→  let maxTensionBar = 0
+  1148→
+  1149→  for (let i = 0; i < barEnergies.length; i++) {
+  1150→    // Energy level contribution (0-1)
+  1151→    const energyLevel = energyRange > 0
+  1152→      ? (energyValues[i] - minEnergy) / energyRange
+  1153→      : 0.5
+  1154→
+  1155→    // Energy derivative contribution (rising = more tension)
+  1156→    const energyDeriv = energyDerivative[i]
+  1157→    const derivContribution = Math.tanh(energyDeriv / 3) * 0.3
+  1158→
+  1159→    // Transient density contribution
+  1160→    const transientLevel = (maxTransient - minTransient) > 0
+  1161→      ? (transientValues[i] - minTransient) / (maxTransient - minTransient)
+  1162→      : 0.5
+  1163→
+  1164→    // Tension = base energy + rising energy + transient density
+  1165→    let tension = energyLevel * 0.5 + derivContribution + transientLevel * 0.2
+  1166→    tension = Math.max(0, Math.min(1, tension))
+  1167→
+  1168→    if (tension > maxTension) {
+  1169→      maxTension = tension
+  1170→      maxTensionBar = i
+  1171→    }
+  1172→
+  1173→    // Label the tension phase
+  1174→    let label = 'stable'
+  1175→    if (energyDeriv > 1.5) label = 'building'
+  1176→    else if (energyDeriv < -1.5 && tension > 0.3) label = 'release'
+  1177→    else if (tension > 0.7) label = 'peak'
+  1178→    else if (tension < 0.3) label = 'valley'
+  1179→
+  1180→    tensionArc.push({
+  1181→      timeS: barEnergies[i].startS,
+  1182→      tension,
+  1183→      label,
+  1184→    })
+  1185→  }
+  1186→
+  1187→  // Detect drop: sudden tension release after peak
+  1188→  for (let i = maxTensionBar + 1; i < tensionArc.length - 1; i++) {
+  1189→    if (
+  1190→      tensionArc[i].tension < maxTension * 0.5 &&
+  1191→      tensionArc[i].label === 'release' &&
+  1192→      maxTension > 0.5
+  1193→    ) {
+  1194→      hasDrop = true
+  1195→      dropPositionS = tensionArc[i].timeS
+  1196→      break
+  1197→    }
+  1198→  }
+  1199→
+  1200→  // If no classic drop, check for energy build-and-release
+  1201→  if (!hasDrop) {
+  1202→    for (let i = 2; i < tensionArc.length - 2; i++) {
+  1203→      const prev = tensionArc[i - 2].tension
+  1204→      const curr = tensionArc[i].tension
+  1205→      const next = tensionArc[i + 2].tension
+  1206→      if (prev > 0.5 && curr < prev * 0.6 && next < curr) {
+  1207→        hasDrop = true
+  1208→        dropPositionS = tensionArc[i].timeS
+  1209→        break
+  1210→      }
+  1211→    }
+  1212→  }
+  1213→
+  1214→  return { tensionArc, hasDrop, dropPositionS }
+  1215→}
+  1216→
+  1217→// ---------------------------------------------------------------------------
+  1218→// 9. SECTION-AWARE PROCESSING
+  1219→// ---------------------------------------------------------------------------
+  1220→
+  1221→/**
+  1222→ * Generate section-specific processing hints.
+  1223→ *
+  1224→ * Verses: clarity/detail — slightly brighter, moderate width, light compression
+  1225→ * Choruses: power/density — wider, more compression, saturation
+  1226→ * Bridges: space/atmosphere — extra width, less compression, more reverb-feel
+  1227→ * Drops: maximum impact — extra compression, width, sub emphasis
+  1228→ */
+  1229→export function buildSectionHints(
+  1230→  sections: Section[],
+  1231→  valence: number,
+  1232→  arousal: number,
+  1233→): Map<SectionType, { eq_brighten: number; width: number; compression: number }> {
+  1234→  const hints = new Map<SectionType, { eq_brighten: number; width: number; compression: number }>()
+  1235→
+  1236→  // Base hints per section type, adjusted by emotion
+  1237→  const sectionDefaults: Record<SectionType, { eq_brighten: number; width: number; compression: number }> = {
+  1238→    intro:  { eq_brighten: -0.5, width: 0.9,  compression: -0.3 },
+  1239→    verse:  { eq_brighten: 0.0,  width: 1.0,  compression: 0.0 },
+  1240→    'pre-chorus': { eq_brighten: 0.3, width: 1.05, compression: 0.2 },
+  1241→    chorus: { eq_brighten: 0.5,  width: 1.15, compression: 0.4 },
+  1242→    bridge: { eq_brighten: -0.3, width: 1.1,  compression: -0.2 },
+  1243→    drop:   { eq_brighten: 0.3,  width: 1.2,  compression: 0.6 },
+  1244→    outro:  { eq_brighten: -0.5, width: 0.85, compression: -0.3 },
+  1245→    unknown:{ eq_brighten: 0.0,  width: 1.0,  compression: 0.0 },
+  1246→  }
+  1247→
+  1248→  for (const section of sections) {
+  1249→    const base = sectionDefaults[section.type]
+  1250→    // Emotion tempering
+  1251→    const eqAdjust = base.eq_brighten + arousal * 0.2
+  1252→    const widthAdjust = base.width * (1 + valence * 0.1)
+  1253→    const compAdjust = base.compression + arousal * 0.3
+  1254→
+  1255→    hints.set(section.type, {
+  1256→      eq_brighten: Math.max(-2, Math.min(2, eqAdjust)),
+  1257→      width: Math.max(0.7, Math.min(1.5, widthAdjust)),
+  1258→      compression: Math.max(-0.6, Math.min(1.0, compAdjust)),
+  1259→    })
+  1260→  }
+  1261→
+  1262→  return hints
+  1263→}
+  1264→
+  1265→// ---------------------------------------------------------------------------
+  1266→// Beat grid construction
+  1267→// ---------------------------------------------------------------------------
+  1268→
+  1269→/**
+  1270→ * Build a beat grid from detected onsets and BPM.
+  1271→ * Returns array of beat times in seconds.
+  1272→ */
+  1273→function buildBeatGrid(
+  1274→  onsetTimes: number[],
+  1275→  bpm: number,
+  1276→  totalDurationS: number,
+  1277→): number[] {
+  1278→  const quarterNote = 60 / bpm
+  1279→  const beatGrid: number[] = []
+  1280→
+  1281→  // Phase-align: find the closest onset to the expected beat grid
+  1282→  // and use that as the reference
+  1283→  let bestPhase = 0
+  1284→  let bestScore = 0
+  1285→
+  1286→  for (let phase = 0; phase < quarterNote; phase += quarterNote / 16) {
+  1287→    let score = 0
+  1288→    for (let beat = 0; beat * quarterNote + phase < totalDurationS; beat++) {
+  1289→      const expectedTime = beat * quarterNote + phase
+  1290→      // Check if any onset is close to this expected beat time
+  1291→      for (const onset of onsetTimes) {
+  1292→        const dist = Math.abs(onset - expectedTime)
+  1293→        if (dist < quarterNote * 0.15) {
+  1294→          score += 1 - dist / quarterNote
+  1295→          break
+  1296→        }
+  1297→      }
+  1298→    }
+  1299→    if (score > bestScore) {
+  1300→      bestScore = score
+  1301→      bestPhase = phase
+  1302→    }
+  1303→  }
+  1304→
+  1305→  // Generate grid
+  1306→  for (let beat = 0; beat * quarterNote + bestPhase < totalDurationS; beat++) {
+  1307→    beatGrid.push(beat * quarterNote + bestPhase)
+  1308→  }
+  1309→
+  1310→  return beatGrid
+  1311→}
+  1312→
+  1313→// ---------------------------------------------------------------------------
+  1314→// MAIN ENTRY POINTS
+  1315→// ---------------------------------------------------------------------------
+  1316→
+  1317→/**
+  1318→ * Detect groove profile from audio channels.
+  1319→ * This is the primary groove analysis function.
+  1320→ *
+  1321→ * @param channels - Array of Float32Array audio channels
+  1322→ * @param sampleRate - Sample rate in Hz
+  1323→ * @returns GrooveProfile with BPM, groove type, time constants, etc.
+  1324→ */
+  1325→export function detectGroove(
+  1326→  channels: Float32Array[],
+  1327→  sampleRate: number,
+  1328→): GrooveProfile {
+  1329→  const left = channels[0]
+  1330→  const totalDurationS = left.length / sampleRate
+  1331→  const hopRate = sampleRate / HOP_SIZE
+  1332→
+  1333→  // 1. Compute onset envelope
+  1334→  const onsetEnv = computeOnsetEnvelope(left, sampleRate)
+  1335→
+  1336→  // 2. Detect BPM
+  1337→  const { bpm, confidence: bpmConfidence } = detectBpm(onsetEnv, hopRate)
+  1338→  const effectiveBpm = bpm ?? 120
+  1339→
+  1340→  // 3. Extract IOIs and classify groove
+  1341→  const iois = extractIOIs(onsetEnv, hopRate)
+  1342→  const { grooveType, confidence: grooveConfidence, swingRatio } = classifyGroove(iois, bpm)
+  1343→
+  1344→  // 4. Compute time constants
+  1345→  const { attackMs, releaseMs } = computeGrooveTimeConstants(effectiveBpm, grooveType)
+  1346→
+  1347→  // 5. Build bar energy map
+  1348→  const barEnergies = buildBarEnergyMap(left, sampleRate, effectiveBpm, onsetEnv, hopRate)
+  1349→
+  1350→  // 6. Detect sections
+  1351→  const sections = detectSections(barEnergies, effectiveBpm)
+  1352→
+  1353→  // 7. Build beat grid
+  1354→  const threshold = computeAdaptiveThreshold(onsetEnv)
+  1355→  const onsetTimes: number[] = []
+  1356→  for (let i = 1; i < onsetEnv.length - 1; i++) {
+  1357→    if (
+  1358→      onsetEnv[i] > threshold &&
+  1359→      onsetEnv[i] > onsetEnv[i - 1] &&
+  1360→      onsetEnv[i] >= onsetEnv[i + 1]
+  1361→    ) {
+  1362→      onsetTimes.push(i / hopRate)
+  1363→    }
+  1364→  }
+  1365→  const beatGrid = buildBeatGrid(onsetTimes, effectiveBpm, totalDurationS)
+  1366→
+  1367→  // 8. Detect time signature (simplified: check for 3/4 or 4/4)
+  1368→  // 3/4 has strong beat every 3 beats, 4/4 every 4
+  1369→  let timeSignature = 4
+  1370→  if (iois.length > 16) {
+  1371→    // Check if IOIs cluster in groups of 3 or 4
+  1372→    const quarterNote = 60 / effectiveBpm
+  1373→    let threeGroup = 0
+  1374→    let fourGroup = 0
+  1375→    for (let i = 0; i < onsetTimes.length - 1; i++) {
+  1376→      const ioi = onsetTimes[i + 1] - onsetTimes[i]
+  1377→      if (Math.abs(ioi - quarterNote * 3) < quarterNote * 0.2) threeGroup++
+  1378→      if (Math.abs(ioi - quarterNote * 4) < quarterNote * 0.2) fourGroup++
+  1379→    }
+  1380→    if (threeGroup > fourGroup * 1.5) timeSignature = 3
+  1381→  }
+  1382→
+  1383→  return {
+  1384→    bpm,
+  1385→    bpmConfidence,
+  1386→    grooveType,
+  1387→    grooveConfidence,
+  1388→    swingRatio,
+  1389→    timeSignature,
+  1390→    barEnergies,
+  1391→    sections,
+  1392→    beatGrid,
+  1393→    subdivisions: computeSubdivisions(effectiveBpm),
+  1394→    grooveAttackMs: attackMs,
+  1395→    grooveReleaseMs: releaseMs,
+  1396→  }
+  1397→}
+  1398→
+  1399→/**
+  1400→ * Estimate emotional profile from audio channels and spectral features.
+  1401→ * This is the primary emotion analysis function.
+  1402→ *
+  1403→ * @param channels - Array of Float32Array audio channels
+  1404→ * @param sampleRate - Sample rate in Hz
+  1405→ * @param spectralFeatures - Pre-computed spectral features (from dsp.ts)
+  1406→ * @param barEnergies - Optional pre-computed bar energy map (from detectGroove)
+  1407→ * @param bpm - Optional BPM (from detectGroove)
+  1408→ * @returns EmotionProfile
+  1409→ */
+  1410→export function estimateEmotion(
+  1411→  channels: Float32Array[],
+  1412→  sampleRate: number,
+  1413→  spectralFeatures: SpectralFeatures,
+  1414→  barEnergies?: Array<{ startS: number; energyDb: number; transientCount: number }>,
+  1415→  bpm?: number | null,
+  1416→): EmotionProfile {
+  1417→  const left = channels[0]
+  1418→  const right = channels[1] ?? channels[0]
+  1419→
+  1420→  // Compute RMS (averaged across channels)
+  1421→  let sumSq = 0
+  1422→  const n = left.length
+  1423→  for (let i = 0; i < n; i++) {
+  1424→    const m = (left[i] + right[i]) * 0.5
+  1425→    sumSq += m * m
+  1426→  }
+  1427→  const rmsLin = n > 0 ? Math.sqrt(sumSq / n) : 0
+  1428→  const rmsDb = 20 * Math.log10(Math.max(rmsLin, 1e-7))
+  1429→
+  1430→  // Estimate transient density from onset envelope
+  1431→  const onsetEnv = computeOnsetEnvelope(left, sampleRate)
+  1432→  const threshold = computeAdaptiveThreshold(onsetEnv)
+  1433→  let transientCount = 0
+  1434→  const refractoryFrames = Math.max(1, Math.floor(sampleRate * 0.01 / HOP_SIZE))
+  1435→  let lastOnsetFrame = -refractoryFrames
+  1436→  for (let i = 2; i < onsetEnv.length - 1; i++) {
+  1437→    if (
+  1438→      onsetEnv[i] > threshold &&
+  1439→      onsetEnv[i] > onsetEnv[i - 1] &&
+  1440→      onsetEnv[i] >= onsetEnv[i + 1] &&
+  1441→      i - lastOnsetFrame >= refractoryFrames
+  1442→    ) {
+  1443→      transientCount++
+  1444→      lastOnsetFrame = i
+  1445→    }
+  1446→  }
+  1447→  const durationS = left.length / sampleRate
+  1448→  const transientDensity = durationS > 0 ? transientCount / durationS : 0
+  1449→
+  1450→  // Estimate valence/arousal
+  1451→  const { valence, arousal, harmonicity, spectralCentroidRatio } = estimateValenceArousal(
+  1452→    channels, sampleRate, spectralFeatures, transientDensity, rmsDb,
+  1453→  )
+  1454→
+  1455→  const quadrant = emotionQuadrant(valence, arousal)
+  1456→
+  1457→  // Build tension arc
+  1458→  let tension = 0.5
+  1459→  let hasDrop = false
+  1460→  let dropPositionS: number | null = null
+  1461→  const tensionArc: Array<{ timeS: number; tension: number; label: string }> = []
+  1462→
+  1463→  if (barEnergies && barEnergies.length >= 4) {
+  1464→    const effectiveBpm = bpm ?? 120
+  1465→    const arcResult = buildTensionArc(barEnergies, effectiveBpm)
+  1466→    tension = arcResult.tensionArc.length > 0
+  1467→      ? arcResult.tensionArc.reduce((s, a) => s + a.tension, 0) / arcResult.tensionArc.length
+  1468→      : 0.5
+  1469→    hasDrop = arcResult.hasDrop
+  1470→    dropPositionS = arcResult.dropPositionS
+  1471→    // Downsample tension arc to reduce data size (one point per ~4 bars)
+  1472→    for (let i = 0; i < arcResult.tensionArc.length; i += 4) {
+  1473→      tensionArc.push(arcResult.tensionArc[i])
+  1474→    }
+  1475→  }
+  1476→
+  1477→  return {
+  1478→    valence,
+  1479→    arousal,
+  1480→    quadrant,
+  1481→    tension,
+  1482→    tensionArc,
+  1483→    hasDrop,
+  1484→    dropPositionS,
+  1485→    harmonicity,
+  1486→    spectralCentroidRatio,
+  1487→  }
+  1488→}
+  1489→
+  1490→/**
+  1491→ * Build GrooveEmotionOverrides from groove and emotion profiles.
+  1492→ * This is the integration point — produces ProcessingParams overrides
+  1493→ * that can be merged into the base processing pipeline.
+  1494→ *
+  1495→ * @param genre - Genre slug (e.g., 'pop', 'rock', 'amapiano')
+  1496→ * @param platform - Platform slug (e.g., 'spotify')
+  1497→ * @param groove - Groove analysis result from detectGroove()
+  1498→ * @param emotion - Emotion analysis result from estimateEmotion()
+  1499→ * @returns GrooveEmotionOverrides for merging into ProcessingParams
+  1500→ */
+  1501→export function buildGrooveEmotionParams(
+  1502→  _genre: string,
+  1503→  _platform: string,
+  1504→  groove: GrooveProfile,
+  1505→  emotion: EmotionProfile,
+  1506→): GrooveEmotionOverrides {
+  1507→  // 1. Groove-locked time constants
+  1508→  const mb_attack_override = {
+  1509→    low: groove.grooveAttackMs.low,
+  1510→    mid: groove.grooveAttackMs.mid,
+  1511→    high: groove.grooveAttackMs.high,
+  1512→  }
+  1513→  const mb_release_override = {
+  1514→    low: groove.grooveReleaseMs.low,
+  1515→    mid: groove.grooveReleaseMs.mid,
+  1516→    high: groove.grooveReleaseMs.high,
+  1517→  }
+  1518→
+  1519→  // 2. Emotion-tempered settings
+  1520→  const { eqTemper, stereoWidthMultiplier, saturationDriveMultiplier, compressionRatioAdjust } =
+  1521→    computeEmotionTemper(emotion.valence, emotion.arousal, emotion.tension)
+  1522→
+  1523→  // 3. Section-aware processing hints
+  1524→  const section_hints = buildSectionHints(
+  1525→    groove.sections,
+  1526→    emotion.valence,
+  1527→    emotion.arousal,
+  1528→  )
+  1529→
+  1530→  return {
+  1531→    mb_attack_override,
+  1532→    mb_release_override,
+  1533→    eq_emotion_temper: eqTemper,
+  1534→    stereo_width_multiplier: stereoWidthMultiplier,
+  1535→    saturation_drive_multiplier: saturationDriveMultiplier,
+  1536→    compression_ratio_adjust: compressionRatioAdjust,
+  1537→    section_hints,
+  1538→    groove_type: groove.grooveType,
+  1539→    bpm: groove.bpm,
+  1540→    emotion_quadrant: emotion.quadrant,
+  1541→    valence: emotion.valence,
+  1542→    arousal: emotion.arousal,
+  1543→  }
+  1544→}
+  1545→
+  1546→/**
+  1547→ * Convenience: run the full groove + emotion pipeline on audio channels.
+  1548→ * Returns a complete GrooveEmotionProfile with all analysis results and
+  1549→ * processing overrides ready to merge into the pipeline.
+  1550→ */
+  1551→export function analyzeGrooveEmotion(
+  1552→  channels: Float32Array[],
+  1553→  sampleRate: number,
+  1554→  spectralFeatures: SpectralFeatures,
+  1555→  genre: string,
+  1556→  platform: string,
+  1557→): { profile: GrooveEmotionProfile; overrides: GrooveEmotionOverrides } {
+  1558→  const groove = detectGroove(channels, sampleRate)
+  1559→  const emotion = estimateEmotion(
+  1560→    channels,
+  1561→    sampleRate,
+  1562→    spectralFeatures,
+  1563→    groove.barEnergies,
+  1564→    groove.bpm,
+  1565→  )
+  1566→  const profile: GrooveEmotionProfile = { groove, emotion }
+  1567→  const overrides = buildGrooveEmotionParams(genre, platform, groove, emotion)
+  1568→  return { profile, overrides }
+  1569→}
+  1570→
+  1571→/**
+  1572→ * Merge GrooveEmotionOverrides into ProcessingParams.
+  1573→ * Applies groove-locked time constants, emotion-tempered EQ, and
+  1574→ * emotional adjustments to stereo width, saturation, and compression.
+  1575→ */
+  1576→export function applyGrooveEmotionOverrides(
+  1577→  params: ProcessingParams,
+  1578→  overrides: GrooveEmotionOverrides,
+  1579→): ProcessingParams {
+  1580→  const out = { ...params, eq_gains: [...params.eq_gains] }
+  1581→
+  1582→  // Apply groove-locked attack times
+  1583→  if (overrides.mb_attack_override) {
+  1584→    out.mb_attack_low = overrides.mb_attack_override.low
+  1585→    out.mb_attack_mid = overrides.mb_attack_override.mid
+  1586→    out.mb_attack_high = overrides.mb_attack_override.high
+  1587→  }
+  1588→
+  1589→  // Apply groove-locked release times
+  1590→  if (overrides.mb_release_override) {
+  1591→    out.mb_release_low = overrides.mb_release_override.low
+  1592→    out.mb_release_mid = overrides.mb_release_override.mid
+  1593→    out.mb_release_high = overrides.mb_release_override.high
+  1594→  }
+  1595→
+  1596→  // Apply emotion-tempered EQ
+  1597→  for (let i = 0; i < Math.min(8, overrides.eq_emotion_temper.length); i++) {
+  1598→    out.eq_gains[i] = (out.eq_gains[i] ?? 0) + overrides.eq_emotion_temper[i]
+  1599→  }
+  1600→
+  1601→  // Apply emotion-tempered stereo width
+  1602→  out.stereo_width *= overrides.stereo_width_multiplier
+  1603→  out.stereo_width = Math.max(0.5, Math.min(2.0, out.stereo_width))
+  1604→
+  1605→  // Apply emotion-tempered saturation
+  1606→  out.saturation_drive *= overrides.saturation_drive_multiplier
+  1607→  out.saturation_drive = Math.max(0, Math.min(1.0, out.saturation_drive))
+  1608→
+  1609→  // Apply emotion-tempered compression ratios
+  1610→  out.mb_ratio_low = Math.max(1.0, out.mb_ratio_low + overrides.compression_ratio_adjust * 0.5)
+  1611→  out.mb_ratio_mid = Math.max(1.0, out.mb_ratio_mid + overrides.compression_ratio_adjust * 0.5)
+  1612→  out.mb_ratio_high = Math.max(1.0, out.mb_ratio_high + overrides.compression_ratio_adjust * 0.4)
+  1613→
+  1614→  return out
+  1615→}

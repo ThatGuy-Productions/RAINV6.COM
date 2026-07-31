@@ -25,7 +25,7 @@
  */
 
 import type { ProcessingParams } from './types'
-import { PLATFORM_TARGETS } from './constants'
+import { PLATFORM_TARGETS as _PLATFORM_TARGETS } from './constants'
 import type { InferenceSession, Tensor } from 'onnxruntime-web'
 
 // ---------------------------------------------------------------------------
@@ -40,7 +40,6 @@ const MEL_BANDS = 128       // matches model input
 const MEL_FRAMES = 128      // fixed frame count for model input
 const MEL_FMIN = 20          // Hz
 const MEL_FMAX = 20000       // Hz
-const MEL_DURATION = (MEL_HOP * MEL_FRAMES) / MEL_SR  // ~1.36s
 
 /**
  * Compute Hamming window of length N.
@@ -185,8 +184,8 @@ function fftRadix2(real: Float32Array, imag: Float32Array): void {
   let j = 0
   for (let i = 0; i < N; i++) {
     if (i > j) {
-      [real[i], real[j]] = [real[j], real[i]]
-      [imag[i], imag[j]] = [imag[j], imag[i]]
+      const tmpR = real[i]; real[i] = real[j]; real[j] = tmpR
+      const tmpI = imag[i]; imag[i] = imag[j]; imag[j] = tmpI
     }
     let m = N >> 1
     while (m >= 1 && j >= m) {
@@ -322,7 +321,7 @@ async function getOrCreateSession(): Promise<InferenceSession> {
     const backends = ['webgpu', 'wasm'] as const
     for (const backend of backends) {
       try {
-        await ort.env.webgpu?.init?.()
+        await (ort.env.webgpu as unknown as { init?: () => Promise<void> })?.init?.()
         _ortBackend = backend
         break
       } catch {
@@ -435,7 +434,7 @@ function decodeParams(raw: Float32Array): Partial<ProcessingParams> {
   // --- Analog saturation (3 params) ---
   const analog_saturation = sigmoid(p[22]) > 0.5
   const saturation_drive = sigmoid(p[23])
-  const saturation_mode = SATURATION_MODES[argmax3(p, 24)]
+  const saturation_mode = SATURATION_MODES[argmax3(p, 24)] as 'tape' | 'tube' | 'transformer'
 
   // --- Mid/Side processing (4 params) ---
   const ms_enabled = sigmoid(p[27]) > 0.5

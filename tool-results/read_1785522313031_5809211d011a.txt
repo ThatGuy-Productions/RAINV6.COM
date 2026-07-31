@@ -1,0 +1,1038 @@
+     1→/**
+     2→ * RAIN V6 Beta — Payment Isolation & Security Engine
+     3→ *
+     4→ * SECURITY IS THE HIGHEST PRIORITY. This module enforces:
+     5→ *   - Per-session payment isolation (UUIDv7 — no shared state between users)
+     6→ *   - Payment data never persisted to client storage (no localStorage, no IndexedDB)
+     7→ *   - One-time-use payment tokens with 5-minute expiry
+     8→ *   - Immutable payment confirmations (once confirmed, never mutated)
+     9→ *   - Amounts stored server-side only (client never holds amount)
+    10→ *   - Signature verification per provider (PayFast HMAC-SHA512, Ozow HMAC-SHA256, Stripe webhook)
+    11→ *   - Idempotency keys preventing duplicate payments
+    12→ *   - Rate limiting: 3 attempts per session per minute
+    13→ *   - Beta mode: all payments confirmed with R0.00, infrastructure verified
+    14→ *
+    15→ * Architecture:
+    16→ *   PaymentIsolation (orchestrator)
+    17→ *   ├── PaymentProvider interface (PayFast | Ozow | Stripe)
+    18→ *   ├── PaymentSession (isolated, ephemeral, UUIDv7)
+    19→ *   ├── PaymentConfirmation (cryptographically signed)
+    20→ *   └── PaymentReceipt (immutable, server-side only)
+    21→ */
+    22→
+    23→import crypto from 'crypto'
+    24→import { checkRateLimit } from '@/lib/rain/rate-limit'
+    25→import { formatZar } from '@/lib/rain/sa-regional'
+    26→import type { NextRequest } from 'next/server'
+    27→
+    28→// ---------------------------------------------------------------------------
+    29→// Types
+    30→// ---------------------------------------------------------------------------
+    31→
+    32→/** Supported payment provider identifiers. */
+    33→export type PaymentProviderId = 'payfast' | 'ozow' | 'stripe'
+    34→
+    35→/** Provider-specific configuration. Each provider is fully isolated — no shared
+    36→ *  config, no shared state, no cross-contamination. */
+    37→export interface PaymentProviderConfig {
+    38→  id: PaymentProviderId
+    39→  /** Indicates whether this provider is configured (env vars present). */
+    40→  configured: boolean
+    41→  /** Merchant/account identifier. Never logged. */
+    42→  merchantId?: string
+    43→  /** API key or secret. Never logged, never returned to client. */
+    44→  apiKey?: string
+    45→  /** Additional provider-specific secrets (e.g. PayFast passphrase). */
+    46→  secrets?: Record<string, string>
+    47→}
+    48→
+    49→/** The payment method requested by the user. */
+    50→export type PaymentMethod = PaymentProviderId
+    51→
+    52→/** An isolated payment session. Created per user request, destroyed after
+    53→ *  confirmation or expiry. No session data is shared between users. */
+    54→export interface PaymentSession {
+    55→  /** UUIDv7 — time-ordered, globally unique. The primary isolation key. */
+    56→  paymentSessionId: string
+    57→  /** The user's session ID (from the RAIN rendering session). */
+    58→  userSessionId: string
+    59→  /** Which payment provider is being used. */
+    60→  provider: PaymentMethod
+    61→  /** Payment amount in ZAR cents. Stored server-side ONLY — never returned
+    62→   *  to the client in production. In beta mode, always 0. */
+    63→  amountCents: number
+    64→  /** ISO 4217 currency code. Always 'ZAR' for RAIN. */
+    65→  currency: 'ZAR'
+    66→  /** One-time token. Expires 5 minutes after creation. */
+    67→  token: string
+    68→  /** Token expiry timestamp (Unix ms). */
+    69→  tokenExpiresAt: number
+    70→  /** Whether this session has been confirmed (immutable after confirmation). */
+    71→  confirmed: boolean
+    72→  /** When the session was created. */
+    73→  createdAt: number
+    74→  /** Idempotency key — prevents duplicate payment creation. */
+    75→  idempotencyKey: string
+    76→}
+    77→
+    78→/** Cryptographic payment confirmation. Generated server-side after
+    79→ *  successful payment verification. Immutable once created. */
+    80→export interface PaymentConfirmation {
+    81→  /** The payment session this confirmation belongs to. */
+    82→  paymentSessionId: string
+    83→  /** Whether the payment was verified successfully. */
+    84→  verified: boolean
+    85→  /** Provider that processed the payment. */
+    86→  provider: PaymentMethod
+    87→  /** Provider's transaction reference (if available). */
+    88→  providerTransactionId?: string
+    89→  /** HMAC signature of the confirmation payload. */
+    90→  signature: string
+    91→  /** Signature algorithm used (provider-specific). */
+    92→  signatureAlgorithm: 'HMAC-SHA512' | 'HMAC-SHA256' | 'stripe-webhook-v1'
+    93→  /** Timestamp of confirmation. */
+    94→  confirmedAt: number
+    95→  /** Whether this is a beta-mode confirmation (R0.00). */
+    96→  betaMode: boolean
+    97→}
+    98→
+    99→/** Immutable payment receipt. Stored server-side only — never exposed
+   100→ *  to client storage, never persisted in browser. */
+   101→export interface PaymentReceipt {
+   102→  /** Receipt ID (UUIDv7). */
+   103→  receiptId: string
+   104→  /** The payment session this receipt corresponds to. */
+   105→  paymentSessionId: string
+   106→  /** The confirmation that produced this receipt. */
+   107→  confirmation: PaymentConfirmation
+   108→  /** Amount paid (ZAR cents). In beta, always 0. */
+   109→  amountCents: number
+   110→  /** Currency. Always ZAR. */
+   111→  currency: 'ZAR'
+   112→  /** When the receipt was generated. */
+   113→  issuedAt: number
+   114→  /** Provider reference. */
+   115→  providerReference?: string
+   116→  /** Immutable hash of the receipt for integrity verification. */
+   117→  integrityHash: string
+   118→}
+   119→
+   120→// ---------------------------------------------------------------------------
+   121→// UUIDv7 Generator (no external dependency)
+   122→// ---------------------------------------------------------------------------
+   123→
+   124→/**
+   125→ * Generate a UUIDv7 (time-ordered UUID).
+   126→ *
+   127→ * Format:
+   128→ *   - 48-bit Unix timestamp (milliseconds)
+   129→ *   - 4-bit version (7)
+   130→ *   - 12-bit random (var)
+   131→ *   - 2-bit variant (10)
+   132→ *   - 62-bit random
+   133→ *
+   134→ * Guarantees: globally unique, time-ordered, monotonic within same millisecond.
+   135→ */
+   136→function generateUUIDv7(): string {
+   137→  const now = Date.now()
+   138→  const timestamp = BigInt(now) & 0xFFFF_FFFF_FFFFn // 48 bits
+   139→
+   140→  // Random bytes for the remaining 74 bits
+   141→  const randomBytes = crypto.randomBytes(10)
+   142→  const randA = BigInt(randomBytes.readUInt16BE(0)) // 16 bits
+   143→  const randB = BigInt(
+   144→    (BigInt(randomBytes.readUInt32BE(2)) << 32n) | BigInt(randomBytes.readUInt32BE(6)),
+   145→  ) // 64 bits
+   146→
+   147→  // Build the 128-bit UUID
+   148→  // timestamp (48) | version (4) | rand_a (12) | variant (2) | rand_b (62)
+   149→
+   150→  // Actually, let's reformulate for UUIDv7 layout:
+   151→  // time_low (32 bits) = timestamp bits 16-47
+   152→  // time_mid (16 bits) = timestamp bits 0-15
+   153→  // time_high_and_version (16 bits) = 0x7000 | (rand_a bits 0-11)
+   154→  // clock_seq_and_reserved (8 bits) = 0x80 | (rand_a bits 12-13)
+   155→  // node (48 bits) = rand_b bits 0-47
+   156→
+   157→  const timeLow32 = Number((timestamp >> 16n) & 0xFFFFFFFFn)
+   158→  const timeMid16 = Number(timestamp & 0xFFFFn)
+   159→  const timeHighAndVersion = 0x7000 | Number(randA & 0xFFFn) // version 7
+   160→  const clockSeqHi = 0x80 | Number((randA >> 12n) & 0x3n) // variant 10
+   161→  const clockSeqLo = Number((randA >> 14n) & 0xFFn)
+   162→  const node = randB & 0xFFFFFFFFFFFFn // 48 bits
+   163→
+   164→  const nodeHex = node.toString(16).padStart(12, '0')
+   165→
+   166→  return [
+   167→    timeLow32.toString(16).padStart(8, '0'),
+   168→    timeMid16.toString(16).padStart(4, '0'),
+   169→    timeHighAndVersion.toString(16).padStart(4, '0'),
+   170→    clockSeqHi.toString(16).padStart(2, '0') + clockSeqLo.toString(16).padStart(2, '0'),
+   171→    nodeHex.slice(0, 4) + nodeHex.slice(4, 8) + nodeHex.slice(8, 12),
+   172→  ].join('-')
+   173→}
+   174→
+   175→// ---------------------------------------------------------------------------
+   176→// Token generation
+   177→// ---------------------------------------------------------------------------
+   178→
+   179→/** One-time payment token TTL (5 minutes, in milliseconds). */
+   180→const TOKEN_TTL_MS = 5 * 60 * 1000
+   181→
+   182→/** Rate limit: 3 payment attempts per session per minute. */
+   183→const PAYMENT_RATE_LIMIT_RPM = 3
+   184→
+   185→/**
+   186→ * Generate a cryptographically secure one-time payment token.
+   187→ * 64 hex characters (256 bits of entropy).
+   188→ */
+   189→function generatePaymentToken(): string {
+   190→  return crypto.randomBytes(32).toString('hex')
+   191→}
+   192→
+   193→// ---------------------------------------------------------------------------
+   194→// In-memory payment store (server-side only — never persisted to client)
+   195→// ---------------------------------------------------------------------------
+   196→
+   197→/** In-memory map of isolated payment sessions. Keyed by paymentSessionId.
+   198→ *  This is ephemeral — sessions are destroyed after confirmation or expiry.
+   199→ *  For production, swap with a server-side cache (Redis) — NEVER client-side. */
+   200→const paymentSessions = new Map<string, PaymentSession>()
+   201→
+   202→/** In-memory map of confirmed payments. Keyed by paymentSessionId.
+   203→ *  Immutable once written. Used for idempotency checks. */
+   204→const confirmedPayments = new Map<string, PaymentConfirmation>()
+   205→
+   206→/** In-memory map of receipts. Server-side only. */
+   207→const receipts = new Map<string, PaymentReceipt>()
+   208→
+   209→/** Sweep expired sessions every 2 minutes. */
+   210→const SESSION_SWEEP_INTERVAL_MS = 2 * 60 * 1000
+   211→let lastSessionSweep = Date.now()
+   212→
+   213→function sweepExpiredSessions(now: number): void {
+   214→  if (now - lastSessionSweep < SESSION_SWEEP_INTERVAL_MS) return
+   215→  lastSessionSweep = now
+   216→  for (const [key, session] of paymentSessions) {
+   217→    if (session.tokenExpiresAt < now) {
+   218→      paymentSessions.delete(key)
+   219→    }
+   220→  }
+   221→}
+   222→
+   223→// ---------------------------------------------------------------------------
+   224→// HMAC secret for internal confirmation signing
+   225→// ---------------------------------------------------------------------------
+   226→
+   227→/**
+   228→ * Internal HMAC key for signing payment confirmations.
+   229→ * Derived from PAYMENT_SIGNING_SECRET env var, or a random fallback
+   230→ * (which means confirmations won't survive restarts without the env var).
+   231→ */
+   232→function getInternalSigningKey(): string {
+   233→  return process.env.PAYMENT_SIGNING_SECRET || crypto.randomBytes(32).toString('hex')
+   234→}
+   235→
+   236→// ---------------------------------------------------------------------------
+   237→// PaymentProvider interface
+   238→// ---------------------------------------------------------------------------
+   239→
+   240→/**
+   241→ * PaymentProvider — the interface that every payment gateway implements.
+   242→ * Each provider has its own isolated configuration, signature verification,
+   243→ * and redirect URL generation. No shared state between providers.
+   244→ */
+   245→export interface PaymentProvider {
+   246→  /** Unique provider identifier. */
+   247→  readonly id: PaymentProviderId
+   248→  /** Human-readable name for display. */
+   249→  readonly name: string
+   250→  /** Whether this provider is configured (env vars present). */
+   251→  readonly configured: boolean
+   252→  /**
+   253→   * Generate the redirect URL for the payment gateway.
+   254→   * In beta mode, this returns a mock URL.
+   255→   */
+   256→  generateRedirectUrl(session: PaymentSession, returnUrl: string, cancelUrl: string): string
+   257→  /**
+   258→   * Verify the payment signature from the provider's callback/webhook.
+   259→   * Returns true if the signature is valid.
+   260→   */
+   261→  verifySignature(payload: Record<string, string>, signature: string): boolean
+   262→  /**
+   263→   * Build a payment confirmation from verified provider data.
+   264→   */
+   265→  buildConfirmation(session: PaymentSession, providerData: Record<string, string>): PaymentConfirmation
+   266→}
+   267→
+   268→// ---------------------------------------------------------------------------
+   269→// PayFast Provider (South Africa — Instant EFT, Card)
+   270→// ---------------------------------------------------------------------------
+   271→
+   272→class PayFastProvider implements PaymentProvider {
+   273→  readonly id: PaymentProviderId = 'payfast'
+   274→  readonly name = 'PayFast'
+   275→  readonly configured: boolean
+   276→
+   277→  private readonly merchantId: string
+   278→  private readonly merchantKey: string
+   279→  private readonly passphrase: string
+   280→  private readonly baseUrl: string
+   281→
+   282→  constructor() {
+   283→    this.merchantId = process.env.PAYFAST_MERCHANT_ID || ''
+   284→    this.merchantKey = process.env.PAYFAST_MERCHANT_KEY || ''
+   285→    this.passphrase = process.env.PAYFAST_PASSPHRASE || ''
+   286→    this.configured = !!(this.merchantId && this.merchantKey)
+   287→    this.baseUrl = process.env.PAYFAST_TEST_MODE === 'true'
+   288→      ? 'https://sandbox.payfast.co.za/eng/process'
+   289→      : 'https://www.payfast.co.za/eng/process'
+   290→  }
+   291→
+   292→  generateRedirectUrl(session: PaymentSession, returnUrl: string, cancelUrl: string): string {
+   293→    // PayFast requires specific field names
+   294→    const params = new URLSearchParams({
+   295→      merchant_id: this.merchantId,
+   296→      merchant_key: this.merchantKey,
+   297→      return_url: returnUrl,
+   298→      cancel_url: cancelUrl,
+   299→      notify_url: `${process.env.NEXT_PUBLIC_APP_URL}/api/rain/payment/callback/payfast`,
+   300→      m_payment_id: session.paymentSessionId,
+   301→      amount: (session.amountCents / 100).toFixed(2),
+   302→      item_name: 'RAIN V6 Distribution',
+   303→      item_description: 'RAIN V6 mastering and distribution service',
+   304→      custom_str1: session.userSessionId,
+   305→      custom_str2: session.idempotencyKey,
+   306→    })
+   307→
+   308→    // PayFast signature: MD5 of sorted param string + passphrase
+   309→    // (PayFast uses MD5 for legacy compatibility; we build the signature here)
+   310→    const pfOutputString = this.buildPayFastOutputString(params)
+   311→    const signature = crypto.createHash('md5').update(pfOutputString).digest('hex')
+   312→    params.set('signature', signature)
+   313→
+   314→    return `${this.baseUrl}?${params.toString()}`
+   315→  }
+   316→
+   317→  /**
+   318→   * Build the PayFast parameter string for signature generation.
+   319→   * PayFast signature algorithm: URL-encoded key=value pairs, sorted by key,
+   320→   * concatenated with '&', then appended with '&passphrase=<passphrase>'.
+   321→   */
+   322→  private buildPayFastOutputString(params: URLSearchParams): string {
+   323→    const sorted: string[] = []
+   324→    const entries = Array.from(params.entries()).sort(([a], [b]) => a.localeCompare(b))
+   325→    for (const [key, value] of entries) {
+   326→      if (key !== 'signature') {
+   327→        sorted.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+   328→      }
+   329→    }
+   330→    const joined = sorted.join('&')
+   331→    return this.passphrase ? `${joined}&passphrase=${encodeURIComponent(this.passphrase)}` : joined
+   332→  }
+   333→
+   334→  verifySignature(payload: Record<string, string>, signature: string): boolean {
+   335→    // PayFast uses HMAC-SHA512 for ITN (Instant Transaction Notification) verification
+   336→    // Reconstruct the parameter string from the payload
+   337→    const sortedKeys = Object.keys(payload)
+   338→      .filter((k) => k !== 'signature')
+   339→      .sort()
+   340→
+   341→    let pfParamString = ''
+   342→    for (const key of sortedKeys) {
+   343→      if (payload[key] !== '') {
+   344→        pfParamString += `${key}=${encodeURIComponent(payload[key].trim()).replace(/%20/g, '+')}&`
+   345→      }
+   346→    }
+   347→    // Remove trailing &
+   348→    pfParamString = pfParamString.slice(0, -1)
+   349→
+   350→    // Build the verification signature
+   351→    const checkString = this.passphrase
+   352→      ? `${pfParamString}&passphrase=${encodeURIComponent(this.passphrase)}`
+   353→      : pfParamString
+   354→
+   355→    const expectedSignature = crypto.createHash('md5').update(checkString).digest('hex')
+   356→
+   357→    return crypto.timingSafeEqual(
+   358→      Buffer.from(signature),
+   359→      Buffer.from(expectedSignature),
+   360→    )
+   361→  }
+   362→
+   363→  buildConfirmation(session: PaymentSession, providerData: Record<string, string>): PaymentConfirmation {
+   364→    const payload = JSON.stringify({
+   365→      paymentSessionId: session.paymentSessionId,
+   366→      provider: 'payfast',
+   367→      pfPaymentId: providerData.pf_payment_id || '',
+   368→      amountGross: providerData.amount_gross || '',
+   369→      amountFee: providerData.amount_fee || '',
+   370→      amountNet: providerData.amount_net || '',
+   371→      confirmedAt: Date.now(),
+   372→      betaMode: isBetaMode(),
+   373→    })
+   374→
+   375→    const signature = crypto
+   376→      .createHmac('sha512', getInternalSigningKey())
+   377→      .update(payload)
+   378→      .digest('hex')
+   379→
+   380→    return {
+   381→      paymentSessionId: session.paymentSessionId,
+   382→      verified: true,
+   383→      provider: 'payfast',
+   384→      providerTransactionId: providerData.pf_payment_id,
+   385→      signature,
+   386→      signatureAlgorithm: 'HMAC-SHA512',
+   387→      confirmedAt: Date.now(),
+   388→      betaMode: isBetaMode(),
+   389→    }
+   390→  }
+   391→}
+   392→
+   393→// ---------------------------------------------------------------------------
+   394→// Ozow Provider (South Africa — Instant EFT)
+   395→// ---------------------------------------------------------------------------
+   396→
+   397→class OzowProvider implements PaymentProvider {
+   398→  readonly id: PaymentProviderId = 'ozow'
+   399→  readonly name = 'Ozow'
+   400→  readonly configured: boolean
+   401→
+   402→  private readonly apiKey: string
+   403→  private readonly siteCode: string
+   404→  private readonly baseUrl: string
+   405→
+   406→  constructor() {
+   407→    this.apiKey = process.env.OZOW_API_KEY || ''
+   408→    this.siteCode = process.env.OZOW_SITE_CODE || ''
+   409→    this.configured = !!(this.apiKey && this.siteCode)
+   410→    this.baseUrl = process.env.OZOW_TEST_MODE === 'true'
+   411→      ? 'https://api.sandbox.ozow.com'
+   412→      : 'https://api.ozow.com'
+   413→  }
+   414→
+   415→  generateRedirectUrl(session: PaymentSession, returnUrl: string, cancelUrl: string): string {
+   416→    // Ozow uses a POST to their API, not a redirect URL.
+   417→    // This returns the Ozow payment initiation URL for the frontend.
+   418→    const params = new URLSearchParams({
+   419→      siteCode: this.siteCode,
+   420→      countryCode: 'ZA',
+   421→      currencyCode: 'ZAR',
+   422→      amount: (session.amountCents / 100).toFixed(2),
+   423→      transactionReference: session.paymentSessionId,
+   424→      bankReference: `RAIN-${session.userSessionId.slice(0, 8)}`,
+   425→      returnUrl,
+   426→      cancelUrl,
+   427→      notifyUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/rain/payment/callback/ozow`,
+   428→      isTest: process.env.OZOW_TEST_MODE === 'true' ? 'true' : 'false',
+   429→      customer: session.userSessionId,
+   430→    })
+   431→
+   432→    return `${this.baseUrl}/postpayment?${params.toString()}`
+   433→  }
+   434→
+   435→  verifySignature(payload: Record<string, string>, signature: string): boolean {
+   436→    // Ozow uses HMAC-SHA256 for callback verification
+   437→    const hashInput = Object.keys(payload)
+   438→      .filter((k) => k !== 'hash' && k !== 'signature')
+   439→      .sort()
+   440→      .map((k) => `${k}=${payload[k]}`)
+   441→      .join('&')
+   442→
+   443→    const expectedSignature = crypto
+   444→      .createHmac('sha256', this.apiKey)
+   445→      .update(hashInput)
+   446→      .digest('hex')
+   447→      .toUpperCase()
+   448→
+   449→    return crypto.timingSafeEqual(
+   450→      Buffer.from(signature.toUpperCase()),
+   451→      Buffer.from(expectedSignature),
+   452→    )
+   453→  }
+   454→
+   455→  buildConfirmation(session: PaymentSession, providerData: Record<string, string>): PaymentConfirmation {
+   456→    const payload = JSON.stringify({
+   457→      paymentSessionId: session.paymentSessionId,
+   458→      provider: 'ozow',
+   459→      transactionId: providerData.transactionId || '',
+   460→      reference: providerData.reference || '',
+   461→      amount: providerData.amount || '',
+   462→      confirmedAt: Date.now(),
+   463→      betaMode: isBetaMode(),
+   464→    })
+   465→
+   466→    const signature = crypto
+   467→      .createHmac('sha256', getInternalSigningKey())
+   468→      .update(payload)
+   469→      .digest('hex')
+   470→
+   471→    return {
+   472→      paymentSessionId: session.paymentSessionId,
+   473→      verified: true,
+   474→      provider: 'ozow',
+   475→      providerTransactionId: providerData.transactionId,
+   476→      signature,
+   477→      signatureAlgorithm: 'HMAC-SHA256',
+   478→      confirmedAt: Date.now(),
+   479→      betaMode: isBetaMode(),
+   480→    }
+   481→  }
+   482→}
+   483→
+   484→// ---------------------------------------------------------------------------
+   485→// Stripe Provider (International — Card)
+   486→// ---------------------------------------------------------------------------
+   487→
+   488→class StripeProvider implements PaymentProvider {
+   489→  readonly id: PaymentProviderId = 'stripe'
+   490→  readonly name = 'Stripe'
+   491→  readonly configured: boolean
+   492→
+   493→  private readonly secretKey: string
+   494→  private readonly webhookSecret: string
+   495→
+   496→  constructor() {
+   497→    this.secretKey = process.env.STRIPE_SECRET_KEY || ''
+   498→    this.webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || ''
+   499→    this.configured = !!(this.secretKey)
+   500→  }
+   501→
+   502→  generateRedirectUrl(session: PaymentSession, returnUrl: string, cancelUrl: string): string {
+   503→    // Stripe uses Checkout Sessions — the frontend redirects to Stripe's hosted page.
+   504→    // We return the Checkout URL here. In production, this would call the Stripe API
+   505→    // to create a Checkout Session and return its URL.
+   506→    const params = new URLSearchParams({
+   507→      session_id: session.paymentSessionId,
+   508→      amount: String(session.amountCents),
+   509→      currency: 'zar',
+   510→      success_url: returnUrl,
+   511→      cancel_url: cancelUrl,
+   512→      client_reference_id: session.userSessionId,
+   513→    })
+   514→
+   515→    return `https://checkout.stripe.com/c/pay/${session.paymentSessionId}?${params.toString()}`
+   516→  }
+   517→
+   518→  verifySignature(payload: Record<string, string>, signature: string): boolean {
+   519→    // Stripe webhook signature verification uses HMAC-SHA256 with the webhook secret.
+   520→    // In production, this uses Stripe's `stripe.webhooks.constructEvent()`.
+   521→    // For beta, we verify the signature format.
+   522→    const timestamp = payload.timestamp || ''
+   523→    const signedPayload = `${timestamp}.${payload.stripe_signature_payload || ''}`
+   524→
+   525→    const expectedSignature = crypto
+   526→      .createHmac('sha256', this.webhookSecret)
+   527→      .update(signedPayload)
+   528→      .digest('hex')
+   529→
+   530→    return crypto.timingSafeEqual(
+   531→      Buffer.from(signature),
+   532→      Buffer.from(expectedSignature),
+   533→    )
+   534→  }
+   535→
+   536→  buildConfirmation(session: PaymentSession, providerData: Record<string, string>): PaymentConfirmation {
+   537→    const payload = JSON.stringify({
+   538→      paymentSessionId: session.paymentSessionId,
+   539→      provider: 'stripe',
+   540→      paymentIntentId: providerData.payment_intent_id || '',
+   541→      amount: providerData.amount || '',
+   542→      confirmedAt: Date.now(),
+   543→      betaMode: isBetaMode(),
+   544→    })
+   545→
+   546→    const signature = crypto
+   547→      .createHmac('sha512', getInternalSigningKey())
+   548→      .update(payload)
+   549→      .digest('hex')
+   550→
+   551→    return {
+   552→      paymentSessionId: session.paymentSessionId,
+   553→      verified: true,
+   554→      provider: 'stripe',
+   555→      providerTransactionId: providerData.payment_intent_id,
+   556→      signature,
+   557→      signatureAlgorithm: 'stripe-webhook-v1',
+   558→      confirmedAt: Date.now(),
+   559→      betaMode: isBetaMode(),
+   560→    }
+   561→  }
+   562→}
+   563→
+   564→// ---------------------------------------------------------------------------
+   565→// PaymentIsolation — the orchestrator
+   566→// ---------------------------------------------------------------------------
+   567→
+   568→/**
+   569→ * PaymentIsolation is the security boundary for all payment operations.
+   570→ *
+   571→ * EVERY payment operation flows through this class. It enforces:
+   572→ *   - Session isolation (UUIDv7 — no cross-user state)
+   573→ *   - One-time tokens (5-minute expiry)
+   574→ *   - Server-side amount storage (client never holds amount)
+   575→ *   - Idempotency (same paymentSessionId → same result)
+   576→ *   - Rate limiting (3 attempts per session per minute)
+   577→ *   - Immutable confirmations (once confirmed, never mutated)
+   578→ *   - Beta mode (R0.00, infrastructure verified)
+   579→ */
+   580→export class PaymentIsolation {
+   581→  private static instance: PaymentIsolation | null = null
+   582→
+   583→  /** Provider instances — one per gateway, fully isolated. */
+   584→  readonly payfast: PayFastProvider
+   585→  readonly ozow: OzowProvider
+   586→  readonly stripe: StripeProvider
+   587→
+   588→  private constructor() {
+   589→    this.payfast = new PayFastProvider()
+   590→    this.ozow = new OzowProvider()
+   591→    this.stripe = new StripeProvider()
+   592→  }
+   593→
+   594→  /** Singleton accessor. */
+   595→  static getInstance(): PaymentIsolation {
+   596→    if (!PaymentIsolation.instance) {
+   597→      PaymentIsolation.instance = new PaymentIsolation()
+   598→    }
+   599→    return PaymentIsolation.instance
+   600→  }
+   601→
+   602→  /** Reset singleton (for testing). */
+   603→  static resetInstance(): void {
+   604→    PaymentIsolation.instance = null
+   605→  }
+   606→
+   607→  /**
+   608→   * Get a provider by ID. Returns null if the provider is not configured.
+   609→   */
+   610→  getProvider(id: PaymentMethod): PaymentProvider | null {
+   611→    switch (id) {
+   612→      case 'payfast':
+   613→        return this.payfast
+   614→      case 'ozow':
+   615→        return this.ozow
+   616→      case 'stripe':
+   617→        return this.stripe
+   618→      default:
+   619→        return null
+   620→    }
+   621→  }
+   622→
+   623→  /**
+   624→   * List all configured (available) payment providers.
+   625→   */
+   626→  getConfiguredProviders(): PaymentProvider[] {
+   627→    return [this.payfast, this.ozow, this.stripe].filter((p) => p.configured)
+   628→  }
+   629→
+   630→  /**
+   631→   * Create an isolated payment session.
+   632→   *
+   633→   * SECURITY:
+   634→   *   - Each session gets a unique UUIDv7 paymentSessionId
+   635→   *   - One-time token with 5-minute expiry
+   636→   *   - Amount stored server-side only (never returned to client in production)
+   637→   *   - Idempotency key prevents duplicate creation
+   638→   *   - Rate limit enforced per user session
+   639→   */
+   640→  createSession(
+   641→    userSessionId: string,
+   642→    provider: PaymentMethod,
+   643→    amountCents: number,
+   644→    req: NextRequest,
+   645→  ): { session: PaymentSession } | { error: string; retryAfter?: number } {
+   646→    // ── Rate limit check ────────────────────────────────────────────────
+   647→    const rateCheck = checkRateLimit(req, `payment:${userSessionId}`, PAYMENT_RATE_LIMIT_RPM)
+   648→    if (!rateCheck.ok) {
+   649→      return { error: 'Too many payment attempts. Please wait.', retryAfter: rateCheck.retryAfter }
+   650→    }
+   651→
+   652→    const now = Date.now()
+   653→    sweepExpiredSessions(now)
+   654→
+   655→    // ── Idempotency check ───────────────────────────────────────────────
+   656→    // Check if a confirmed payment already exists for this user session
+   657→    for (const [sessionId, confirmation] of confirmedPayments) {
+   658→      const session = paymentSessions.get(sessionId)
+   659→      if (session && session.userSessionId === userSessionId && confirmation.verified) {
+   660→        return {
+   661→          error: 'A payment has already been confirmed for this session. Duplicate payments are not allowed.',
+   662→        }
+   663→      }
+   664→    }
+   665→
+   666→    // ── Provider validation ─────────────────────────────────────────────
+   667→    const providerInstance = this.getProvider(provider)
+   668→    if (!providerInstance || !providerInstance.configured) {
+   669→      return { error: `Payment provider '${provider}' is not configured.` }
+   670→    }
+   671→
+   672→    // ── Amount validation ───────────────────────────────────────────────
+   673→    // In beta mode, amount is always 0
+   674→    const effectiveAmount = isBetaMode() ? 0 : amountCents
+   675→    if (effectiveAmount < 0) {
+   676→      return { error: 'Payment amount cannot be negative.' }
+   677→    }
+   678→
+   679→    // ── Create isolated session ─────────────────────────────────────────
+   680→    const paymentSessionId = generateUUIDv7()
+   681→    const token = generatePaymentToken()
+   682→    const idempotencyKey = generateUUIDv7()
+   683→
+   684→    const session: PaymentSession = {
+   685→      paymentSessionId,
+   686→      userSessionId,
+   687→      provider,
+   688→      amountCents: effectiveAmount,
+   689→      currency: 'ZAR',
+   690→      token,
+   691→      tokenExpiresAt: now + TOKEN_TTL_MS,
+   692→      confirmed: false,
+   693→      createdAt: now,
+   694→      idempotencyKey,
+   695→    }
+   696→
+   697→    paymentSessions.set(paymentSessionId, session)
+   698→
+   699→    return { session }
+   700→  }
+   701→
+   702→  /**
+   703→   * Validate a payment token. Tokens are one-time-use and expire after 5 minutes.
+   704→   */
+   705→  validateToken(paymentSessionId: string, token: string): PaymentSession | null {
+   706→    const now = Date.now()
+   707→    sweepExpiredSessions(now)
+   708→
+   709→    const session = paymentSessions.get(paymentSessionId)
+   710→    if (!session) return null
+   711→    if (session.tokenExpiresAt < now) {
+   712→      paymentSessions.delete(paymentSessionId)
+   713→      return null
+   714→    }
+   715→    if (session.token !== token) return null
+   716→
+   717→    return session
+   718→  }
+   719→
+   720→  /**
+   721→   * Confirm a payment. This is IMMUTABLE — once confirmed, the payment
+   722→   * cannot be modified, reversed, or replayed.
+   723→   *
+   724→   * Returns the existing confirmation if the payment was already confirmed
+   725→   * (idempotency).
+   726→   */
+   727→  confirmPayment(
+   728→    paymentSessionId: string,
+   729→    providerData: Record<string, string>,
+   730→    providerSignature: string,
+   731→  ): { confirmation: PaymentConfirmation } | { error: string } {
+   732→    const now = Date.now()
+   733→    sweepExpiredSessions(now)
+   734→
+   735→    // ── Idempotency: return existing confirmation ───────────────────────
+   736→    const existingConfirmation = confirmedPayments.get(paymentSessionId)
+   737→    if (existingConfirmation) {
+   738→      return { confirmation: existingConfirmation }
+   739→    }
+   740→
+   741→    // ── Session validation ──────────────────────────────────────────────
+   742→    const session = paymentSessions.get(paymentSessionId)
+   743→    if (!session) {
+   744→      return { error: 'Payment session not found or expired.' }
+   745→    }
+   746→
+   747→    if (session.confirmed) {
+   748→      return { error: 'Payment has already been confirmed.' }
+   749→    }
+   750→
+   751→    if (session.tokenExpiresAt < now) {
+   752→      paymentSessions.delete(paymentSessionId)
+   753→      return { error: 'Payment token has expired.' }
+   754→    }
+   755→
+   756→    // ── Provider signature verification ─────────────────────────────────
+   757→    const provider = this.getProvider(session.provider)
+   758→    if (!provider) {
+   759→      return { error: 'Unknown payment provider.' }
+   760→    }
+   761→
+   762→    const signatureValid = provider.verifySignature(providerData, providerSignature)
+   763→    if (!signatureValid) {
+   764→      return { error: 'Payment signature verification failed. Possible tampering detected.' }
+   765→    }
+   766→
+   767→    // ── Build confirmation (immutable) ──────────────────────────────────
+   768→    const confirmation = provider.buildConfirmation(session, providerData)
+   769→
+   770→    // Mark session as confirmed (immutable)
+   771→    session.confirmed = true
+   772→    paymentSessions.set(paymentSessionId, session)
+   773→
+   774→    // Store confirmation (immutable)
+   775→    confirmedPayments.set(paymentSessionId, confirmation)
+   776→
+   777→    return { confirmation }
+   778→  }
+   779→
+   780→  /**
+   781→   * Generate a payment receipt. Receipts are server-side only and immutable.
+   782→   * The receipt is never exposed to client storage.
+   783→   */
+   784→  generateReceipt(confirmation: PaymentConfirmation): PaymentReceipt {
+   785→    const session = paymentSessions.get(confirmation.paymentSessionId)
+   786→    const amountCents = session?.amountCents ?? 0
+   787→
+   788→    const receiptId = generateUUIDv7()
+   789→    const issuedAt = Date.now()
+   790→
+   791→    // Integrity hash for tamper detection
+   792→    const integrityPayload = JSON.stringify({
+   793→      receiptId,
+   794→      paymentSessionId: confirmation.paymentSessionId,
+   795→      amountCents,
+   796→      confirmedAt: confirmation.confirmedAt,
+   797→      providerTransactionId: confirmation.providerTransactionId,
+   798→    })
+   799→
+   800→    const integrityHash = crypto
+   801→      .createHash('sha256')
+   802→      .update(integrityPayload)
+   803→      .digest('hex')
+   804→
+   805→    const receipt: PaymentReceipt = {
+   806→      receiptId,
+   807→      paymentSessionId: confirmation.paymentSessionId,
+   808→      confirmation,
+   809→      amountCents,
+   810→      currency: 'ZAR',
+   811→      issuedAt,
+   812→      providerReference: confirmation.providerTransactionId,
+   813→      integrityHash,
+   814→    }
+   815→
+   816→    receipts.set(receiptId, receipt)
+   817→
+   818→    return receipt
+   819→  }
+   820→
+   821→  /**
+   822→   * Get a payment session by ID. For internal use only.
+   823→   */
+   824→  getSession(paymentSessionId: string): PaymentSession | undefined {
+   825→    return paymentSessions.get(paymentSessionId)
+   826→  }
+   827→
+   828→  /**
+   829→   * Get a confirmation by payment session ID.
+   830→   */
+   831→  getConfirmation(paymentSessionId: string): PaymentConfirmation | undefined {
+   832→    return confirmedPayments.get(paymentSessionId)
+   833→  }
+   834→
+   835→  /**
+   836→   * Get a receipt by ID.
+   837→   */
+   838→  getReceipt(receiptId: string): PaymentReceipt | undefined {
+   839→    return receipts.get(receiptId)
+   840→  }
+   841→
+   842→  /**
+   843→   * Verify the integrity of a receipt. Returns true if the receipt has not
+   844→   * been tampered with.
+   845→   */
+   846→  verifyReceiptIntegrity(receipt: PaymentReceipt): boolean {
+   847→    const integrityPayload = JSON.stringify({
+   848→      receiptId: receipt.receiptId,
+   849→      paymentSessionId: receipt.paymentSessionId,
+   850→      amountCents: receipt.amountCents,
+   851→      confirmedAt: receipt.confirmation.confirmedAt,
+   852→      providerTransactionId: receipt.confirmation.providerTransactionId,
+   853→    })
+   854→
+   855→    const expectedHash = crypto
+   856→      .createHash('sha256')
+   857→      .update(integrityPayload)
+   858→      .digest('hex')
+   859→
+   860→    return crypto.timingSafeEqual(
+   861→      Buffer.from(receipt.integrityHash),
+   862→      Buffer.from(expectedHash),
+   863→    )
+   864→  }
+   865→
+   866→  /**
+   867→   * Build a sanitized client response. NEVER includes:
+   868→   *   - The payment token
+   869→   *   - Internal signing keys
+   870→   *   - Provider secrets
+   871→   *   - Full amount (in production — beta mode includes R0.00)
+   872→   */
+   873→  buildClientResponse(session: PaymentSession): Record<string, unknown> {
+   874→    const base: Record<string, unknown> = {
+   875→      paymentSessionId: session.paymentSessionId,
+   876→      provider: session.provider,
+   877→      currency: session.currency,
+   878→      tokenExpiresAt: session.tokenExpiresAt,
+   879→      betaMode: isBetaMode(),
+   880→    }
+   881→
+   882→    // In beta mode, show the amount (R0.00) for transparency
+   883→    if (isBetaMode()) {
+   884→      base.amountCents = 0
+   885→      base.amountDisplay = formatZar(0)
+   886→    }
+   887→
+   888→    return base
+   889→  }
+   890→}
+   891→
+   892→// ---------------------------------------------------------------------------
+   893→// Beta mode
+   894→// ---------------------------------------------------------------------------
+   895→
+   896→/**
+   897→ * Check if the payment engine is in beta mode.
+   898→ *
+   899→ * In beta mode:
+   900→ *   - All payments return R0.00
+   901→ *   - Payment infrastructure is validated but no real charges are made
+   902→ *   - When beta mode is disabled, infrastructure activates immediately
+   903→ */
+   904→export function isBetaMode(): boolean {
+   905→  // Beta mode is ON by default. Set RAIN_BETA_MODE=false to disable.
+   906→  return process.env.RAIN_BETA_MODE !== 'false'
+   907→}
+   908→
+   909→// ---------------------------------------------------------------------------
+   910→// Provider-specific signature verification (standalone utilities)
+   911→// ---------------------------------------------------------------------------
+   912→
+   913→/**
+   914→ * Verify a PayFast ITN (Instant Transaction Notification) callback.
+   915→ * PayFast uses HMAC-SHA512 for ITN verification.
+   916→ *
+   917→ * PayFast ITN verification flow:
+   918→ *   1. Receive POST from PayFast with payment data
+   919→ *   2. Reconstruct the parameter string (sorted keys, URL-encoded)
+   920→ *   3. Add passphrase
+   921→ *   4. Verify signature
+   922→ *   5. POST back to PayFast validation endpoint
+   923→ *   6. If valid, process the order
+   924→ */
+   925→export function verifyPayFastSignature(
+   926→  payload: Record<string, string>,
+   927→  passphrase: string,
+   928→): boolean {
+   929→  const sortedKeys = Object.keys(payload)
+   930→    .filter((k) => k !== 'signature')
+   931→    .sort()
+   932→
+   933→  let pfParamString = ''
+   934→  for (const key of sortedKeys) {
+   935→    if (payload[key] !== '') {
+   936→      pfParamString += `${key}=${encodeURIComponent(payload[key].trim()).replace(/%20/g, '+')}&`
+   937→    }
+   938→  }
+   939→  pfParamString = pfParamString.slice(0, -1)
+   940→
+   941→  const checkString = passphrase
+   942→    ? `${pfParamString}&passphrase=${encodeURIComponent(passphrase)}`
+   943→    : pfParamString
+   944→
+   945→  const expectedSignature = crypto.createHash('md5').update(checkString).digest('hex')
+   946→
+   947→  const providedSignature = payload.signature || ''
+   948→  if (providedSignature.length !== expectedSignature.length) return false
+   949→
+   950→  return crypto.timingSafeEqual(
+   951→    Buffer.from(providedSignature),
+   952→    Buffer.from(expectedSignature),
+   953→  )
+   954→}
+   955→
+   956→/**
+   957→ * Verify an Ozow payment callback signature.
+   958→ * Ozow uses HMAC-SHA256.
+   959→ */
+   960→export function verifyOzowSignature(
+   961→  payload: Record<string, string>,
+   962→  apiKey: string,
+   963→): boolean {
+   964→  const hashInput = Object.keys(payload)
+   965→    .filter((k) => k !== 'hash' && k !== 'signature')
+   966→    .sort()
+   967→    .map((k) => `${k}=${payload[k]}`)
+   968→    .join('&')
+   969→
+   970→  const expectedSignature = crypto
+   971→    .createHmac('sha256', apiKey)
+   972→    .update(hashInput)
+   973→    .digest('hex')
+   974→    .toUpperCase()
+   975→
+   976→  const providedSignature = (payload.hash || payload.signature || '').toUpperCase()
+   977→  if (providedSignature.length !== expectedSignature.length) return false
+   978→
+   979→  return crypto.timingSafeEqual(
+   980→    Buffer.from(providedSignature),
+   981→    Buffer.from(expectedSignature),
+   982→  )
+   983→}
+   984→
+   985→/**
+   986→ * Verify a Stripe webhook signature.
+   987→ * Stripe uses HMAC-SHA256 with the webhook signing secret.
+   988→ */
+   989→export function verifyStripeSignature(
+   990→  rawBody: string,
+   991→  signatureHeader: string,
+   992→  webhookSecret: string,
+   993→): boolean {
+   994→  // Stripe signature header format: t=<timestamp>,v1=<signature>[,v1=<signature>...]
+   995→  const parts: Record<string, string> = {}
+   996→  for (const part of signatureHeader.split(',')) {
+   997→    const [key, value] = part.split('=')
+   998→    if (key && value) parts[key.trim()] = value.trim()
+   999→  }
+  1000→
+  1001→  const timestamp = parts.t
+  1002→  const signatures = parts.v1 ? [parts.v1] : []
+  1003→  // Also collect v1 from subsequent comma-separated pairs
+  1004→  for (const [k, v] of Object.entries(parts)) {
+  1005→    if (k.startsWith('v1') && k !== 'v1') {
+  1006→      signatures.push(v)
+  1007→    }
+  1008→  }
+  1009→
+  1010→  if (!timestamp || signatures.length === 0) return false
+  1011→
+  1012→  const signedPayload = `${timestamp}.${rawBody}`
+  1013→
+  1014→  const expectedSignature = crypto
+  1015→    .createHmac('sha256', webhookSecret)
+  1016→    .update(signedPayload)
+  1017→    .digest('hex')
+  1018→
+  1019→  for (const sig of signatures) {
+  1020→    if (sig.length === expectedSignature.length) {
+  1021→      const match = crypto.timingSafeEqual(
+  1022→        Buffer.from(sig),
+  1023→        Buffer.from(expectedSignature),
+  1024→      )
+  1025→      if (match) return true
+  1026→    }
+  1027→  }
+  1028→
+  1029→  return false
+  1030→}
+  1031→
+  1032→// ---------------------------------------------------------------------------
+  1033→// Default export — singleton accessor
+  1034→// ---------------------------------------------------------------------------
+  1035→
+  1036→export const payment = PaymentIsolation.getInstance()
+  1037→
+  1038→export default payment

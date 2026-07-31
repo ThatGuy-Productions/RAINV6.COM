@@ -63,6 +63,9 @@ export function SignInModal({ onClose }: SignInModalProps) {
       <div
         className="relative w-full max-w-md rounded-xl border border-[rgba(170,255,0,0.18)] bg-[rgba(14,16,22,0.98)] shadow-2xl overflow-hidden"
         style={{ boxShadow: '0 24px 80px -12px rgba(0,0,0,0.8), 0 0 0 1px rgba(170,255,0,0.05)' }}
+        role="dialog"
+        aria-labelledby="signin-modal-title"
+        aria-modal="true"
       >
         {/* Top accent gradient line */}
         <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-[#AAFF00] to-transparent opacity-60" />
@@ -74,7 +77,7 @@ export function SignInModal({ onClose }: SignInModalProps) {
               <LogIn className="w-5 h-5 text-[#AAFF00]" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold tracking-tight">Welcome back</h2>
+              <h2 id="signin-modal-title" className="text-base font-semibold tracking-tight">Welcome back</h2>
               <p className="text-[11px] text-muted-foreground font-mono leading-tight mt-0.5">
                 Sign in to your free beta account
               </p>

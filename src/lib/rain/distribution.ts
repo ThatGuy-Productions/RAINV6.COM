@@ -345,7 +345,7 @@ export interface DdexMetadata {
   dspLabels?: Record<string, string>
 }
 
-function escapeXml(s: string): string {
+export function escapeXml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

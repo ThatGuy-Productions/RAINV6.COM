@@ -14,7 +14,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { X, AlertTriangle } from 'lucide-react'
 
 const DISMISS_KEY = 'rain_incident_notice_dismissed_v1'
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { registerUser, loginWithPassword } from '@/lib/rain/auth'
+import { validatePasswordStrength } from '@/lib/rain/auth-hardening'
 import { trackEvent } from '@/lib/rain/server-analytics'
 
 export const runtime = 'nodejs'
@@ -35,6 +36,12 @@ export async function POST(req: NextRequest) {
 
   if (!email || !password) {
     return NextResponse.json({ error: 'Email and password are required' }, { status: 400 })
+  }
+
+  // Password strength validation (Phase 4 — auth hardening)
+  const strength = validatePasswordStrength(password)
+  if (!strength.valid) {
+    return NextResponse.json({ error: strength.errors.join('. ') }, { status: 400 })
   }
 
   // Register the account on the free tier

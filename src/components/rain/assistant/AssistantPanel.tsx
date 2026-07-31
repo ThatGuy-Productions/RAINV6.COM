@@ -98,7 +98,7 @@ export function AssistantPanel() {
       void recordAiStat(Date.now() - aiStart).catch(() => {
         /* swallow — analytics failure must not break AI flow */
       })
-    } catch (e) {
+    } catch {
       const errMsg: AssistantMessage = {
         id: `e-${Date.now()}`,
         role: 'assistant',

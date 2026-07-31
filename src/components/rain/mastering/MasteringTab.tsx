@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import dynamic from 'next/dynamic'
 import { motion } from 'framer-motion'
 import { AlertCircle, ArrowLeftRight, Download, Eye, FileAudio, FileText, Loader2, Play, Sparkles, Wand2, Zap } from 'lucide-react'
 import { audioEngine } from '@/lib/rain/audio-engine'
@@ -12,7 +13,6 @@ import { applySimpleMode } from '@/lib/rain/simple-mode'
 import { UploadZone } from './UploadZone'
 import { CreativeMacros } from './CreativeMacros'
 import { SimpleModePanel } from './SimpleModePanel'
-import { MasteringReportDialog } from './MasteringReportDialog'
 import { GenrePresets } from './GenrePresets'
 import { SnapshotBar } from './SnapshotBar'
 import { SignalChain } from './SignalChain'
@@ -25,13 +25,27 @@ import { AssistantPanel } from '@/components/rain/assistant/AssistantPanel'
 import { generateProvenance } from '@/lib/rain/provenance'
 import { recordRenderTelemetry, recordExportDetails, recordQCResult } from '@/lib/rain/analytics'
 import { computeQCResults, summarizeQCResults } from '@/lib/rain/qc'
-import { BeforeAfterOverlay } from './BeforeAfterOverlay'
 import { ABComparisonToggle } from './ABComparisonToggle'
-import { BlindTestModal } from './BlindTestModal'
 import { AiDisclosurePanel, type DisclosureState } from '@/components/rain/forms/AiDisclosurePanel'
 import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
 import { getAnonId } from '@/lib/rain/anon-id'
+
+// ── Lazy-loaded heavy dialog components ────────────────────────────────────
+// These are only rendered when the user opens them, so defer their code
+// splitting to reduce initial bundle size.
+const MasteringReportDialog = dynamic(
+  () => import('./MasteringReportDialog').then((m) => m.MasteringReportDialog),
+  { ssr: false },
+)
+const BeforeAfterOverlay = dynamic(
+  () => import('./BeforeAfterOverlay').then((m) => m.BeforeAfterOverlay),
+  { ssr: false },
+)
+const BlindTestModal = dynamic(
+  () => import('./BlindTestModal').then((m) => m.BlindTestModal),
+  { ssr: false },
+)
 
 export function MasteringTab() {
   const fileName = useSessionStore((s) => s.fileName)
@@ -52,7 +66,6 @@ export function MasteringTab() {
   const setGenre = useSessionStore((s) => s.setGenre)
   const setPlatform = useSessionStore((s) => s.setPlatform)
   const rainScore = useSessionStore((s) => s.rainScore)
-  const isDemo = useSessionStore((s) => s.isDemo)
   const setProcessingStageProgress = useSessionStore((s) => s.setProcessingStageProgress)
   const triggerCompletionCelebration = useSessionStore((s) => s.triggerCompletionCelebration)
   const setRenderAbortController = useSessionStore((s) => s.setRenderAbortController)
@@ -224,7 +237,7 @@ export function MasteringTab() {
         // Populate the session store so the Stems tab shows them immediately
         // (no separate "Run Separation" click required).
         setStemResults(stems)
-      })
+      }, simpleMode)
 
       // Clear the progress interval
       if (progressIntervalRef.current) {

@@ -1,0 +1,1055 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — Ditto-standard release metadata form.
+     5→ *
+     6→ * Single source of truth for everything the DDEX ERN 4.3.2 manifest, the
+     7→ * RAIN-CERT provenance cert, and the ID3/RIFF embedded tags need to know
+     8→ * about a release. Reads + writes the Zustand `metadata` slice directly
+     9→ * (auto-saves on every keystroke); the "Save to release" button is just a
+    10→ * visual confirmation toast.
+    11→ *
+    12→ * Sections (accordion, all expanded by default on desktop):
+    13→ *   1. Release Information
+    14→ *   2. Track Information
+    15→ *   3. Copyright & Publishing
+    16→ *   4. Contributors / Credits  (table with add/remove rows)
+    17→ *   5. AI Disclosure           (5-row × 3-column grid)
+    18→ *   6. Release Notes / Comments
+    19→ *
+    20→ * Sticky top toolbar: live validation badge, "Generate ISRC + UPC",
+    21→ * "Save to release" (toast), "Reset" (confirm dialog).
+    22→ *
+    23→ * Visual language: dark rain-panel/rain-surface-2, lime accent, font-mono
+    24→ * uppercase labels, subtle Framer Motion entrance.
+    25→ */
+    26→
+    27→import * as React from 'react'
+    28→import { motion } from 'framer-motion'
+    29→import {
+    30→  AlertTriangle,
+    31→  CheckCircle2,
+    32→  ListChecks,
+    33→  Loader2,
+    34→  Plus,
+    35→  RotateCcw,
+    36→  Save,
+    37→  Sparkles,
+    38→  Trash2,
+    39→  Wand2,
+    40→} from 'lucide-react'
+    41→import {
+    42→  Accordion,
+    43→  AccordionContent,
+    44→  AccordionItem,
+    45→  AccordionTrigger,
+    46→} from '@/components/ui/accordion'
+    47→import {
+    48→  AlertDialog,
+    49→  AlertDialogAction,
+    50→  AlertDialogCancel,
+    51→  AlertDialogContent,
+    52→  AlertDialogDescription,
+    53→  AlertDialogFooter,
+    54→  AlertDialogHeader,
+    55→  AlertDialogTitle,
+    56→} from '@/components/ui/alert-dialog'
+    57→import { Badge } from '@/components/ui/badge'
+    58→import { Button } from '@/components/ui/button'
+    59→import { Checkbox } from '@/components/ui/checkbox'
+    60→import { Switch } from '@/components/ui/switch'
+    61→import {
+    62→  Popover,
+    63→  PopoverContent,
+    64→  PopoverTrigger,
+    65→} from '@/components/ui/popover'
+    66→import {
+    67→  Table,
+    68→  TableBody,
+    69→  TableCell,
+    70→  TableHead,
+    71→  TableHeader,
+    72→  TableRow,
+    73→} from '@/components/ui/table'
+    74→import {
+    75→  Select,
+    76→  SelectContent,
+    77→  SelectItem,
+    78→  SelectTrigger,
+    79→  SelectValue,
+    80→} from '@/components/ui/select'
+    81→import { Field, TextAreaField } from './Field'
+    82→import { SelectField } from './SelectField'
+    83→import { RadioField } from './RadioField'
+    84→import { useSessionStore } from '@/lib/rain/store'
+    85→import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+    86→import { notifySuccess, notifyInfo, notifyWarning } from '@/lib/rain/notifications'
+    87→import {
+    88→  CONTRIBUTOR_ROLE_OPTIONS,
+    89→  GENRE_SUBGENRE_OPTIONS,
+    90→  LANGUAGE_OPTIONS,
+    91→  PRO_OPTIONS,
+    92→  TERRITORY_OPTIONS,
+    93→  WRITER_ROLES,
+    94→  validateIsrc,
+    95→  validateIswc,
+    96→  validateMetadata,
+    97→  validateUpc,
+    98→} from '@/lib/rain/metadata-validation'
+    99→import type {
+   100→  AiDisclosure,
+   101→  Contributor,
+   102→  ContributorRole,
+   103→  TrackMetadata,
+   104→} from '@/lib/rain/types'
+   105→
+   106→// ---------------------------------------------------------------------------
+   107→// Helpers
+   108→// ---------------------------------------------------------------------------
+   109→
+   110→const DISCLOSURE_FIELDS: { key: keyof AiDisclosure; label: string; tooltip: string }[] = [
+   111→  { key: 'vocals', label: 'Vocals', tooltip: 'Lead + backing vocal performances. Generated = AI voice clone or synth voice.' },
+   112→  { key: 'instrumentation', label: 'Instrumentation', tooltip: 'Instrumental performances. Generated = MIDI rendered by an AI instrument model.' },
+   113→  { key: 'composition', label: 'Composition', tooltip: 'The underlying musical work (melody + harmony). Generated = AI-composed.' },
+   114→  { key: 'mixing', label: 'Mixing', tooltip: 'Mix balance + automation. Assisted = AI tools used as one input among many.' },
+   115→  { key: 'mastering', label: 'Mastering', tooltip: 'Final loudness + colour. RAIN V6 mastering is AI-assisted by default.' },
+   116→]
+   117→
+   118→function issueForField(issues: { field: string; message: string }[], field: string): string | undefined {
+   119→  return issues.find((i) => i.field === field || i.field.startsWith(field + '.'))?.message
+   120→}
+   121→
+   122→// ---------------------------------------------------------------------------
+   123→// Main component
+   124→// ---------------------------------------------------------------------------
+   125→
+   126→export function MetadataForm() {
+   127→  const metadata = useSessionStore((s) => s.metadata)
+   128→  const setMetadata = useSessionStore((s) => s.setMetadata)
+   129→  const reset = useSessionStore((s) => s.reset)
+   130→
+   131→  const [resetOpen, setResetOpen] = React.useState(false)
+   132→  const [saving, setSaving] = React.useState(false)
+   133→
+   134→  // ---- Live validation ----
+   135→  const issues = React.useMemo(() => validateMetadata(metadata), [metadata])
+   136→  const issueCount = issues.length
+   137→  const ready = issueCount === 0
+   138→
+   139→  // ---- Update helpers (each writes through the Zustand shallow-merge) ----
+   140→  const update = React.useCallback(
+   141→    (patch: Partial<TrackMetadata>) => setMetadata(patch),
+   142→    [setMetadata],
+   143→  )
+   144→
+   145→  const updateDisclosure = React.useCallback(
+   146→    (key: keyof AiDisclosure, value: 'none' | 'assisted' | 'generated') => {
+   147→      setMetadata({
+   148→        aiDisclosure: { ...(metadata.aiDisclosure as AiDisclosure), [key]: value },
+   149→      })
+   150→    },
+   151→    [metadata.aiDisclosure, setMetadata],
+   152→  )
+   153→
+   154→  // ---- Featured-artists parsing: comma-separated string → contributors[] ----
+   155→  // We reconcile the contributors array: featured-artist rows that were auto-
+   156→  // generated from the input are removed and re-added whenever the string
+   157→  // changes, preserving user-added rows for other roles.
+   158→  const featuredString = React.useMemo(
+   159→    () => (metadata.contributors ?? [])
+   160→      .filter((c) => c.role === 'featured')
+   161→      .map((c) => c.name)
+   162→      .join(', '),
+   163→    [metadata.contributors],
+   164→  )
+   165→
+   166→  const setFeaturedArtists = React.useCallback(
+   167→    (raw: string) => {
+   168→      const names = raw.split(',').map((s) => s.trim()).filter(Boolean)
+   169→      const nonFeatured = (metadata.contributors ?? []).filter((c) => c.role !== 'featured')
+   170→      const featured: Contributor[] = names.map((name) => ({ name, role: 'featured' }))
+   171→      setMetadata({ contributors: [...nonFeatured, ...featured] })
+   172→    },
+   173→    [metadata.contributors, setMetadata],
+   174→  )
+   175→
+   176→  // ---- Auto-populate: when primary artist changes and there's no performer row, add one ----
+   177→  const ensurePerformer = React.useCallback(
+   178→    (artist: string) => {
+   179→      const existing = (metadata.contributors ?? []).find((c) => c.role === 'performer')
+   180→      if (existing) {
+   181→        // Update the existing performer's name (don't add a duplicate).
+   182→        const next = (metadata.contributors ?? []).map((c) =>
+   183→          c.role === 'performer' ? { ...c, name: artist } : c,
+   184→        )
+   185→        setMetadata({ contributors: next })
+   186→      } else if (artist.trim()) {
+   187→        setMetadata({
+   188→          contributors: [{ name: artist, role: 'performer' }, ...(metadata.contributors ?? [])],
+   189→        })
+   190→      }
+   191→    },
+   192→    [metadata.contributors, setMetadata],
+   193→  )
+   194→
+   195→  // ---- Contributor row operations ----
+   196→  const addContributor = React.useCallback(() => {
+   197→    const next: Contributor[] = [
+   198→      ...(metadata.contributors ?? []),
+   199→      { name: '', role: 'songwriter', share: undefined },
+   200→    ]
+   201→    setMetadata({ contributors: next })
+   202→  }, [metadata.contributors, setMetadata])
+   203→
+   204→  const updateContributor = React.useCallback(
+   205→    (index: number, patch: Partial<Contributor>) => {
+   206→      const next = (metadata.contributors ?? []).map((c, i) =>
+   207→        i === index ? { ...c, ...patch } : c,
+   208→      )
+   209→      setMetadata({ contributors: next })
+   210→    },
+   211→    [metadata.contributors, setMetadata],
+   212→  )
+   213→
+   214→  const removeContributor = React.useCallback(
+   215→    (index: number) => {
+   216→      const next = (metadata.contributors ?? []).filter((_, i) => i !== index)
+   217→      setMetadata({ contributors: next })
+   218→    },
+   219→    [metadata.contributors, setMetadata],
+   220→  )
+   221→
+   222→  // ---- Writer share total ----
+   223→  const writerShareTotal = React.useMemo(() => {
+   224→    return (metadata.contributors ?? [])
+   225→      .filter((c) => WRITER_ROLES.includes(c.role))
+   226→      .reduce((sum, c) => sum + (typeof c.share === 'number' && !Number.isNaN(c.share) ? c.share : 0), 0)
+   227→  }, [metadata.contributors])
+   228→
+   229→  // ---- Re-release toggle ----
+   230→  const [isRerelease, setIsRerelease] = React.useState(Boolean(metadata.originalReleaseDate))
+   231→
+   232→  // ---- Genre:Subgenre parsing (combined "Genre:Subgenre" string in metadata.genreSubgenre) ----
+   233→  const [selectedGenre, selectedSubgenre] = React.useMemo(() => {
+   234→    const v = metadata.genreSubgenre ?? ''
+   235→    const [g, s] = v.split(':')
+   236→    return [g ?? '', s ?? '']
+   237→  }, [metadata.genreSubgenre])
+   238→
+   239→  const setGenreSubgenre = React.useCallback(
+   240→    (genre: string, subgenre: string) => {
+   241→      update({
+   242→        genreSubgenre: subgenre ? `${genre}:${subgenre}` : genre,
+   243→        // Also keep the legacy `genre` field in sync (top-level only).
+   244→        genre: genre.toLowerCase(),
+   245→      })
+   246→    },
+   247→    [update],
+   248→  )
+   249→
+   250→  // ---- Territories multi-select ----
+   251→  const toggleTerritory = React.useCallback(
+   252→    (code: string) => {
+   253→      const current = metadata.territories ?? []
+   254→      // If 'WORLDWIDE' is in the list and the user picks a specific country,
+   255→      // remove 'WORLDWIDE' (mutually exclusive intent).
+   256→      let next: string[]
+   257→      if (current.includes(code)) {
+   258→        next = current.filter((c) => c !== code)
+   259→      } else {
+   260→        next = code === 'WORLDWIDE'
+   261→          ? ['WORLDWIDE']
+   262→          : [...current.filter((c) => c !== 'WORLDWIDE'), code]
+   263→      }
+   264→      if (next.length === 0) next = ['WORLDWIDE'] // never empty
+   265→      update({ territories: next })
+   266→    },
+   267→    [metadata.territories, update],
+   268→  )
+   269→
+   270→  // ---- Toolbar actions ----
+   271→  const handleGenerateIds = React.useCallback(() => {
+   272→    update({ isrc: generateIsrc(), upc: generateUpc() })
+   273→    notifyInfo('Identifiers generated', 'ISRC + UPC populated with valid check digits.')
+   274→  }, [update])
+   275→
+   276→  const handleSave = React.useCallback(() => {
+   277→    setSaving(true)
+   278→    // The store is already up to date (auto-save). This is just a
+   279→    // visual confirmation + a brief saving indicator for UX.
+   280→    setTimeout(() => {
+   281→      setSaving(false)
+   282→      if (ready) {
+   283→        notifySuccess('Metadata saved', 'Release metadata is valid and ready for distribution.')
+   284→      } else {
+   285→        notifyWarning(
+   286→          'Metadata saved with issues',
+   287→          `${issueCount} validation issue${issueCount === 1 ? '' : 's'} remain — review before distributing.`,
+   288→        )
+   289→      }
+   290→    }, 350)
+   291→  }, [ready, issueCount])
+   292→
+   293→  const handleReset = React.useCallback(() => {
+   294→    reset()
+   295→    setResetOpen(false)
+   296→    notifyInfo('Metadata reset', 'All fields restored to defaults.')
+   297→  }, [reset])
+   298→
+   299→  // ---- Auto-suggest P-line holder from artist + copyrightYear ----
+   300→  const suggestPline = React.useCallback(() => {
+   301→    const yr = metadata.copyrightYear || String(new Date().getFullYear())
+   302→    const who = metadata.artist || metadata.copyrightHolder || ''
+   303→    if (who) update({ copyrightHolder: `${yr} ${who}` })
+   304→  }, [metadata.artist, metadata.copyrightHolder, metadata.copyrightYear, update])
+   305→
+   306→  // ---------------------------------------------------------------------
+   307→  // Render
+   308→  // ---------------------------------------------------------------------
+   309→
+   310→  const disclosureHasGenerated = React.useMemo(() => {
+   311→    const d = metadata.aiDisclosure
+   312→    if (!d) return false
+   313→    return (Object.values(d) as string[]).some((v) => v === 'generated')
+   314→  }, [metadata.aiDisclosure])
+   315→
+   316→  // Accordion value state — all expanded by default.
+   317→  const [accordionValue, setAccordionValue] = React.useState<string[]>([
+   318→    'release', 'track', 'copyright', 'contributors', 'ai', 'notes',
+   319→  ])
+   320→
+   321→  return (
+   322→    <div className="space-y-3">
+   323→      {/* ----------------------------------------------------------------- */}
+   324→      {/* Sticky toolbar                                                    */}
+   325→      {/* ----------------------------------------------------------------- */}
+   326→      <div
+   327→        className="sticky top-0 z-20 -mx-4 px-4 py-2.5 mb-3 backdrop-blur-xl bg-[rgba(10,12,18,0.85)] border-b border-rain-border"
+   328→        style={{ boxShadow: '0 4px 16px -8px rgba(0,0,0,0.5)' }}
+   329→      >
+   330→        <div className="flex flex-wrap items-center gap-2">
+   331→          <div className="flex items-center gap-2 mr-auto">
+   332→            <ListChecks className="w-4 h-4 text-rain-accent" />
+   333→            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   334→              Validation
+   335→            </span>
+   336→            <Badge
+   337→              variant="outline"
+   338→              className={
+   339→                ready
+   340→                  ? 'border-rain-accent/50 text-rain-accent bg-rain-accent/10'
+   341→                  : 'border-amber-400/50 text-amber-400 bg-amber-400/10'
+   342→              }
+   343→            >
+   344→              {ready ? (
+   345→                <>
+   346→                  <CheckCircle2 className="w-3 h-3" />
+   347→                  Ready
+   348→                </>
+   349→              ) : (
+   350→                <>
+   351→                  <AlertTriangle className="w-3 h-3" />
+   352→                  {issueCount} issue{issueCount === 1 ? '' : 's'}
+   353→                </>
+   354→              )}
+   355→            </Badge>
+   356→          </div>
+   357→
+   358→          <Button
+   359→            type="button"
+   360→            size="sm"
+   361→            variant="outline"
+   362→            onClick={handleGenerateIds}
+   363→            className="bg-rain-surface-2 border-rain-border hover:border-rain-accent/50 hover:text-rain-accent font-mono text-[11px]"
+   364→          >
+   365→            <Wand2 className="w-3.5 h-3.5" />
+   366→            Generate ISRC + UPC
+   367→          </Button>
+   368→
+   369→          <Button
+   370→            type="button"
+   371→            size="sm"
+   372→            onClick={handleSave}
+   373→            disabled={saving}
+   374→            className="bg-rain-accent text-black hover:bg-rain-accent/90 font-mono text-[11px]"
+   375→          >
+   376→            {saving ? (
+   377→              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+   378→            ) : (
+   379→              <Save className="w-3.5 h-3.5" />
+   380→            )}
+   381→            Save to release
+   382→          </Button>
+   383→
+   384→          <Button
+   385→            type="button"
+   386→            size="sm"
+   387→            variant="outline"
+   388→            onClick={() => setResetOpen(true)}
+   389→            className="bg-rain-surface-2 border-rain-border hover:border-red-400/50 hover:text-red-400 font-mono text-[11px]"
+   390→          >
+   391→            <RotateCcw className="w-3.5 h-3.5" />
+   392→            Reset
+   393→          </Button>
+   394→        </div>
+   395→      </div>
+   396→
+   397→      {/* ----------------------------------------------------------------- */}
+   398→      {/* Accordion form                                                    */}
+   399→      {/* ----------------------------------------------------------------- */}
+   400→      <motion.div
+   401→        initial={{ opacity: 0, y: 6 }}
+   402→        animate={{ opacity: 1, y: 0 }}
+   403→        transition={{ duration: 0.25, ease: 'easeOut' }}
+   404→      >
+   405→        <Accordion
+   406→          type="multiple"
+   407→          value={accordionValue}
+   408→          onValueChange={setAccordionValue}
+   409→          className="rain-panel rounded-lg px-4"
+   410→        >
+   411→          {/* ----------------------------------------------------------- */}
+   412→          {/* 1. Release Information                                       */}
+   413→          {/* ----------------------------------------------------------- */}
+   414→          <AccordionItem value="release" className="border-rain-border">
+   415→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+   416→              <span className="flex items-center gap-2">
+   417→                <span className="text-[9px] text-muted-foreground">01</span>
+   418→                Release Information
+   419→              </span>
+   420→            </AccordionTrigger>
+   421→            <AccordionContent>
+   422→              <div className="grid lg:grid-cols-2 gap-3 pb-2">
+   423→                <Field
+   424→                  label="Release Title"
+   425→                  value={metadata.title}
+   426→                  onValueChange={(v) => update({ title: v })}
+   427→                  required
+   428→                  placeholder="e.g. Midnight Protocol"
+   429→                  error={issueForField(issues, 'title')}
+   430→                  warning={!metadata.title ? 'Required' : undefined}
+   431→                />
+   432→                <Field
+   433→                  label="Primary Artist"
+   434→                  value={metadata.artist}
+   435→                  onValueChange={(v) => {
+   436→                    update({ artist: v })
+   437→                    ensurePerformer(v)
+   438→                  }}
+   439→                  required
+   440→                  placeholder="e.g. GLM Collective"
+   441→                  error={issueForField(issues, 'artist')}
+   442→                  warning={!metadata.artist ? 'Required' : undefined}
+   443→                />
+   444→
+   445→                <RadioField
+   446→                  label="Release Type"
+   447→                  value={metadata.releaseType ?? 'single'}
+   448→                  onValueChange={(v) => update({ releaseType: v as TrackMetadata['releaseType'] })}
+   449→                  layout="grid"
+   450→                  options={[
+   451→                    { value: 'single', label: 'Single' },
+   452→                    { value: 'ep', label: 'EP' },
+   453→                    { value: 'album', label: 'Album' },
+   454→                    { value: 'compilation', label: 'Compilation' },
+   455→                  ]}
+   456→                  hint="Drives DDEX <ReleaseType> + DSP categorisation."
+   457→                />
+   458→
+   459→                <Field
+   460→                  label="Featured Artists"
+   461→                  value={featuredString}
+   462→                  onValueChange={setFeaturedArtists}
+   463→                  placeholder="Comma-separated — added as contributors with role 'featured'"
+   464→                  hint="Parsed into the Contributors table with role 'featured'."
+   465→                  containerClassName="lg:col-span-2"
+   466→                />
+   467→
+   468→                <Field
+   469→                  label="Label"
+   470→                  value={metadata.label ?? ''}
+   471→                  onValueChange={(v) => update({ label: v })}
+   472→                  placeholder="Record label name (optional)"
+   473→                />
+   474→                <Field
+   475→                  label="Distributor"
+   476→                  value={metadata.distributor ?? ''}
+   477→                  onValueChange={(v) => update({ distributor: v })}
+   478→                  placeholder="RAIN V6"
+   479→                  hint="Default 'RAIN V6' — change if delivering through a different aggregator."
+   480→                />
+   481→
+   482→                <Field
+   483→                  label="Release Date"
+   484→                  type="date"
+   485→                  value={metadata.releaseDate ?? ''}
+   486→                  onValueChange={(v) => update({ releaseDate: v })}
+   487→                  error={issueForField(issues, 'releaseDate')}
+   488→                  hint="Official release date — drives the DDEX <ReleaseDate> element."
+   489→                />
+   490→                <div className="flex flex-col gap-1">
+   491→                  <div className="flex items-center justify-between">
+   492→                    <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   493→                      Re-release?
+   494→                    </label>
+   495→                    <Switch
+   496→                      checked={isRerelease}
+   497→                      onCheckedChange={(checked) => {
+   498→                        setIsRerelease(checked)
+   499→                        if (!checked) update({ originalReleaseDate: '' })
+   500→                      }}
+   501→                    />
+   502→                  </div>
+   503→                  {isRerelease && (
+   504→                    <Field
+   505→                      label="Original Release Date"
+   506→                      type="date"
+   507→                      value={metadata.originalReleaseDate ?? ''}
+   508→                      onValueChange={(v) => update({ originalReleaseDate: v })}
+   509→                      error={issueForField(issues, 'originalReleaseDate')}
+   510→                      containerClassName="mt-1"
+   511→                    />
+   512→                  )}
+   513→                  {!isRerelease && (
+   514→                    <div className="text-[9px] font-mono text-muted-foreground/70">
+   515→                      Toggle on if this is a re-release of previously-released material.
+   516→                    </div>
+   517→                  )}
+   518→                </div>
+   519→
+   520→                {/* Territories multi-select */}
+   521→                <div className="flex flex-col gap-1 lg:col-span-2">
+   522→                  <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+   523→                    Territories
+   524→                  </label>
+   525→                  <Popover>
+   526→                    <PopoverTrigger asChild>
+   527→                      <button
+   528→                        type="button"
+   529→                        className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-2 py-1.5 text-xs font-mono text-left flex items-center justify-between hover:border-rain-accent/40 transition-colors"
+   530→                      >
+   531→                        <span className="truncate">
+   532→                          {(metadata.territories ?? []).length === 0
+   533→                            ? '— none —'
+   534→                            : (metadata.territories ?? ['WORLDWIDE']).join(', ')}
+   535→                        </span>
+   536→                        <span className="text-[9px] text-muted-foreground">
+   537→                          {(metadata.territories ?? []).length} selected
+   538→                        </span>
+   539→                      </button>
+   540→                    </PopoverTrigger>
+   541→                    <PopoverContent
+   542→                      className="w-80 bg-rain-surface-2 border-rain-border p-2 max-h-80 overflow-y-auto rain-scrollbar"
+   543→                      align="start"
+   544→                    >
+   545→                      <div className="grid grid-cols-1 gap-1">
+   546→                        {TERRITORY_OPTIONS.map((t) => (
+   547→                          <label
+   548→                            key={t.value}
+   549→                            className="flex items-center gap-2 px-2 py-1 rounded hover:bg-rain-accent/10 cursor-pointer text-xs font-mono"
+   550→                          >
+   551→                            <Checkbox
+   552→                              checked={(metadata.territories ?? []).includes(t.value)}
+   553→                              onCheckedChange={() => toggleTerritory(t.value)}
+   554→                            />
+   555→                            <span className="text-rain-accent/80 w-10">{t.value === 'WORLDWIDE' ? 'WW' : t.value}</span>
+   556→                            <span className="text-foreground/90">{t.label}</span>
+   557→                          </label>
+   558→                        ))}
+   559→                      </div>
+   560→                    </PopoverContent>
+   561→                  </Popover>
+   562→                  <div className="text-[9px] font-mono text-muted-foreground/70">
+   563→                    Default Worldwide. Picking specific countries removes Worldwide.
+   564→                  </div>
+   565→                </div>
+   566→              </div>
+   567→            </AccordionContent>
+   568→          </AccordionItem>
+   569→
+   570→          {/* ----------------------------------------------------------- */}
+   571→          {/* 2. Track Information                                         */}
+   572→          {/* ----------------------------------------------------------- */}
+   573→          <AccordionItem value="track" className="border-rain-border">
+   574→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+   575→              <span className="flex items-center gap-2">
+   576→                <span className="text-[9px] text-muted-foreground">02</span>
+   577→                Track Information
+   578→              </span>
+   579→            </AccordionTrigger>
+   580→            <AccordionContent>
+   581→              <div className="grid lg:grid-cols-2 gap-3 pb-2">
+   582→                <Field
+   583→                  label="Track Title"
+   584→                  value={metadata.title}
+   585→                  onValueChange={(v) => update({ title: v })}
+   586→                  required
+   587→                  placeholder="Defaults from Release Title for singles"
+   588→                  error={issueForField(issues, 'title')}
+   589→                  containerClassName="lg:col-span-2"
+   590→                />
+   591→
+   592→                <div className="grid grid-cols-2 gap-2">
+   593→                  <Field
+   594→                    label="Track Number"
+   595→                    value={metadata.trackNumber}
+   596→                    onValueChange={(v) => update({ trackNumber: v })}
+   597→                    placeholder="1"
+   598→                    error={issueForField(issues, 'trackNumber')}
+   599→                  />
+   600→                  <Field
+   601→                    label="Track Total"
+   602→                    value={metadata.trackTotal ?? ''}
+   603→                    onValueChange={(v) => update({ trackTotal: v })}
+   604→                    placeholder="1"
+   605→                    hint="Total tracks in this release."
+   606→                    error={issueForField(issues, 'trackTotal')}
+   607→                  />
+   608→                </div>
+   609→                <Field
+   610→                  label="Volume / Disc Number"
+   611→                  value={metadata.trackVolume ?? ''}
+   612→                  onValueChange={(v) => update({ trackVolume: v })}
+   613→                  placeholder="1"
+   614→                  hint="For multi-disc releases."
+   615→                  error={issueForField(issues, 'trackVolume')}
+   616→                />
+   617→
+   618→                {/* ISRC with Generate button */}
+   619→                <Field
+   620→                  label="ISRC"
+   621→                  value={metadata.isrc}
+   622→                  onValueChange={(v) => update({ isrc: v })}
+   623→                  placeholder="US-XXX-YY-NNNNN"
+   624→                  hint="ISO 3901 — CC-XXX-YY-NNNNN. Generate or paste existing."
+   625→                  error={metadata.isrc && !validateIsrc(metadata.isrc) ? 'ISRC must match CC-XXX-YY-NNNNN.' : issueForField(issues, 'isrc')}
+   626→                  warning={!metadata.isrc ? 'Recommended — generate if you don\'t have one' : undefined}
+   627→                  suffix={
+   628→                    <button
+   629→                      type="button"
+   630→                      onClick={() => update({ isrc: generateIsrc() })}
+   631→                      className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
+   632→                    >
+   633→                      <Sparkles className="w-3 h-3 inline mr-1" />Gen
+   634→                    </button>
+   635→                  }
+   636→                />
+   637→                {/* ISWC with format hint */}
+   638→                <Field
+   639→                  label="ISWC"
+   640→                  value={metadata.iswc ?? ''}
+   641→                  onValueChange={(v) => update({ iswc: v })}
+   642→                  placeholder="T-XXX.XXX.XXX-X"
+   643→                  hint="ISO 15707 — for the underlying composition (not the recording)."
+   644→                  error={metadata.iswc && !validateIswc(metadata.iswc) ? 'ISWC must match T-XXX.XXX.XXX-X with valid check digit.' : undefined}
+   645→                />
+   646→                {/* UPC with Generate button */}
+   647→                <Field
+   648→                  label="UPC"
+   649→                  value={metadata.upc}
+   650→                  onValueChange={(v) => update({ upc: v })}
+   651→                  placeholder="12-digit UPC"
+   652→                  hint="EAN-13 minus the leading zero. Generate or paste existing."
+   653→                  error={metadata.upc && !validateUpc(metadata.upc) ? 'UPC must be 12 digits with valid check digit.' : issueForField(issues, 'upc')}
+   654→                  warning={!metadata.upc ? 'Recommended — generate if you don\'t have one' : undefined}
+   655→                  suffix={
+   656→                    <button
+   657→                      type="button"
+   658→                      onClick={() => update({ upc: generateUpc() })}
+   659→                      className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
+   660→                    >
+   661→                      <Sparkles className="w-3 h-3 inline mr-1" />Gen
+   662→                    </button>
+   663→                  }
+   664→                />
+   665→                <Field
+   666→                  label="Recording Year"
+   667→                  value={metadata.recordingYear ?? ''}
+   668→                  onValueChange={(v) => update({ recordingYear: v })}
+   669→                  placeholder={String(new Date().getFullYear())}
+   670→                  hint="May differ from release year for back-catalogue."
+   671→                  error={issueForField(issues, 'recordingYear')}
+   672→                />
+   673→
+   674→                {/* Genre:Subgenre cascading selects */}
+   675→                <SelectField
+   676→                  label="Genre"
+   677→                  value={selectedGenre}
+   678→                  onValueChange={(g) => setGenreSubgenre(g, '')}
+   679→                  options={GENRE_SUBGENRE_OPTIONS.map((g) => ({ value: g.genre, label: g.genre }))}
+   680→                  placeholder="— Select genre —"
+   681→                  hint="Top-level DDEX genre."
+   682→                  containerClassName="lg:col-span-1"
+   683→                />
+   684→                <SelectField
+   685→                  label="Subgenre"
+   686→                  value={selectedSubgenre}
+   687→                  onValueChange={(s) => setGenreSubgenre(selectedGenre, s)}
+   688→                  options={
+   689→                    selectedGenre
+   690→                      ? (GENRE_SUBGENRE_OPTIONS.find((g) => g.genre === selectedGenre)?.subgenres.map((s) => ({ value: s, label: s })) ?? [])
+   691→                      : []
+   692→                  }
+   693→                  placeholder={selectedGenre ? '— Select subgenre —' : '— Pick a genre first —'}
+   694→                  hint="DDEX subgenre — written as Genre:Subgenre."
+   695→                  containerClassName="lg:col-span-1"
+   696→                />
+   697→
+   698→                <SelectField
+   699→                  label="Language"
+   700→                  value={metadata.language ?? 'eng'}
+   701→                  onValueChange={(v) => update({ language: v })}
+   702→                  options={LANGUAGE_OPTIONS.map((l) => ({ value: l.value, label: `${l.value.toUpperCase()} — ${l.label}` }))}
+   703→                  hint="ISO 639-2 — primary lyrical language."
+   704→                />
+   705→
+   706→                {/* Explicit + Parental Advisory */}
+   707→                <div className="flex flex-col gap-1">
+   708→                  <RadioField
+   709→                    label="Explicit Lyrics"
+   710→                    value={metadata.explicitLyrics ?? 'none'}
+   711→                    onValueChange={(v) => update({ explicitLyrics: v as TrackMetadata['explicitLyrics'] })}
+   712→                    layout="grid"
+   713→                    options={[
+   714→                      { value: 'none', label: 'None' },
+   715→                      { value: 'explicit', label: 'Explicit' },
+   716→                      { value: 'clean', label: 'Clean' },
+   717→                    ]}
+   718→                  />
+   719→                  <label className="flex items-center gap-2 mt-1 px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 cursor-pointer w-fit">
+   720→                    <Checkbox
+   721→                      checked={Boolean(metadata.parentalAdvisory)}
+   722→                      onCheckedChange={(c) => update({ parentalAdvisory: c === true })}
+   723→                    />
+   724→                    <span className="text-[11px] font-mono">Parental Advisory (PAL sticker)</span>
+   725→                  </label>
+   726→                </div>
+   727→              </div>
+   728→            </AccordionContent>
+   729→          </AccordionItem>
+   730→
+   731→          {/* ----------------------------------------------------------- */}
+   732→          {/* 3. Copyright & Publishing                                    */}
+   733→          {/* ----------------------------------------------------------- */}
+   734→          <AccordionItem value="copyright" className="border-rain-border">
+   735→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+   736→              <span className="flex items-center gap-2">
+   737→                <span className="text-[9px] text-muted-foreground">03</span>
+   738→                Copyright &amp; Publishing
+   739→              </span>
+   740→            </AccordionTrigger>
+   741→            <AccordionContent>
+   742→              <div className="grid lg:grid-cols-2 gap-3 pb-2">
+   743→                <Field
+   744→                  label="P-Line Holder"
+   745→                  value={metadata.copyrightHolder ?? ''}
+   746→                  onValueChange={(v) => update({ copyrightHolder: v })}
+   747→                  placeholder="2024 Artist Name"
+   748→                  hint="Sound-recording copyright holder. Click Auto-suggest."
+   749→                  suffix={
+   750→                    <button
+   751→                      type="button"
+   752→                      onClick={suggestPline}
+   753→                      className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
+   754→                    >
+   755→                      <Wand2 className="w-3 h-3 inline mr-1" />Auto
+   756→                    </button>
+   757→                  }
+   758→                />
+   759→                <Field
+   760→                  label="C-Line Year"
+   761→                  value={metadata.copyrightYear ?? ''}
+   762→                  onValueChange={(v) => update({ copyrightYear: v })}
+   763→                  placeholder={String(new Date().getFullYear())}
+   764→                  hint="Year for the C-line (composition copyright)."
+   765→                  error={issueForField(issues, 'copyrightYear')}
+   766→                />
+   767→
+   768→                <Field
+   769→                  label="Publisher"
+   770→                  value={metadata.publisher ?? ''}
+   771→                  onValueChange={(v) => update({ publisher: v })}
+   772→                  placeholder="Music publisher name"
+   773→                />
+   774→                <Field
+   775→                  label="Publisher IPI"
+   776→                  value={metadata.publisherIpi ?? ''}
+   777→                  onValueChange={(v) => update({ publisherIpi: v })}
+   778→                  placeholder="9-11 digit CISAC IPI"
+   779→                  hint="Interested Parties Information (CISAC)."
+   780→                  error={issueForField(issues, 'publisherIpi')}
+   781→                />
+   782→
+   783→                <SelectField
+   784→                  label="PRO / Collecting Society"
+   785→                  value={metadata.pro ?? ''}
+   786→                  onValueChange={(v) => update({ pro: v })}
+   787→                  options={PRO_OPTIONS.map((p) => ({ value: p.value, label: p.label }))}
+   788→                  hint="Performance Rights Organisation — PRS, ASCAP, BMI, SACEM, GEMA, etc."
+   789→                />
+   790→
+   791→                <Field
+   792→                  label="Master Rights Owner"
+   793→                  value={metadata.masterOwner ?? ''}
+   794→                  onValueChange={(v) => update({ masterOwner: v })}
+   795→                  placeholder="Owner of the sound recording master"
+   796→                  hint="Distinct from P-line holder — often the label or artist."
+   797→                />
+   798→
+   799→                <Field
+   800→                  label="Contract Reference"
+   801→                  value={metadata.contractReference ?? ''}
+   802→                  onValueChange={(v) => update({ contractReference: v })}
+   803→                  placeholder="Internal catalogue / contract ID"
+   804→                  hint="Optional — for your own bookkeeping."
+   805→                  containerClassName="lg:col-span-2"
+   806→                />
+   807→              </div>
+   808→            </AccordionContent>
+   809→          </AccordionItem>
+   810→
+   811→          {/* ----------------------------------------------------------- */}
+   812→          {/* 4. Contributors / Credits                                    */}
+   813→          {/* ----------------------------------------------------------- */}
+   814→          <AccordionItem value="contributors" className="border-rain-border">
+   815→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+   816→              <span className="flex items-center gap-2">
+   817→                <span className="text-[9px] text-muted-foreground">04</span>
+   818→                Contributors / Credits
+   819→              </span>
+   820→            </AccordionTrigger>
+   821→            <AccordionContent>
+   822→              <div className="space-y-2 pb-2">
+   823→                <div className="flex items-center justify-between gap-2 flex-wrap">
+   824→                  <div className="text-[10px] font-mono text-muted-foreground">
+   825→                    {(metadata.contributors ?? []).length} contributor{(metadata.contributors ?? []).length === 1 ? '' : 's'}
+   826→                    {writerShareTotal > 0 && (
+   827→                      <span
+   828→                        className={
+   829→                          Math.abs(writerShareTotal - 100) < 0.5
+   830→                            ? 'ml-2 text-rain-accent'
+   831→                            : 'ml-2 text-amber-400'
+   832→                        }
+   833→                      >
+   834→                        · Writer shares: {writerShareTotal.toFixed(1)}%
+   835→                        {Math.abs(writerShareTotal - 100) >= 0.5 && ' (should be 100%)'}
+   836→                      </span>
+   837→                    )}
+   838→                  </div>
+   839→                  <Button
+   840→                    type="button"
+   841→                    size="sm"
+   842→                    variant="outline"
+   843→                    onClick={addContributor}
+   844→                    className="bg-rain-surface-2 border-rain-border hover:border-rain-accent/50 hover:text-rain-accent font-mono text-[11px]"
+   845→                  >
+   846→                    <Plus className="w-3.5 h-3.5" />
+   847→                    Add Contributor
+   848→                  </Button>
+   849→                </div>
+   850→
+   851→                {(metadata.contributors ?? []).length === 0 ? (
+   852→                  <div className="text-center py-6 text-[10px] font-mono text-muted-foreground/70 border border-dashed border-rain-border rounded-md">
+   853→                    No contributors yet. The primary artist is auto-added as Performer.
+   854→                  </div>
+   855→                ) : (
+   856→                  <div className="border border-rain-border rounded-md overflow-hidden">
+   857→                    <Table>
+   858→                      <TableHeader>
+   859→                        <TableRow className="border-rain-border hover:bg-transparent">
+   860→                          <TableHead className="text-[10px] font-mono uppercase text-muted-foreground">Name</TableHead>
+   861→                          <TableHead className="text-[10px] font-mono uppercase text-muted-foreground w-32">Role</TableHead>
+   862→                          <TableHead className="text-[10px] font-mono uppercase text-muted-foreground w-24">IPI</TableHead>
+   863→                          <TableHead className="text-[10px] font-mono uppercase text-muted-foreground w-24">ISNI</TableHead>
+   864→                          <TableHead className="text-[10px] font-mono uppercase text-muted-foreground w-20">Share %</TableHead>
+   865→                          <TableHead className="w-10" />
+   866→                        </TableRow>
+   867→                      </TableHeader>
+   868→                      <TableBody>
+   869→                        {(metadata.contributors ?? []).map((c, i) => (
+   870→                          <TableRow key={i} className="border-rain-border">
+   871→                            <TableCell>
+   872→                              <input
+   873→                                type="text"
+   874→                                value={c.name}
+   875→                                onChange={(e) => updateContributor(i, { name: e.target.value })}
+   876→                                placeholder="Contributor name"
+   877→                                className="w-full bg-transparent px-1 py-1 text-xs font-mono focus:outline-none focus:bg-rain-surface-2/60 rounded"
+   878→                              />
+   879→                            </TableCell>
+   880→                            <TableCell>
+   881→                              <Select
+   882→                                value={c.role}
+   883→                                onValueChange={(v) => updateContributor(i, { role: v as ContributorRole })}
+   884→                              >
+   885→                                <SelectTrigger className="bg-rain-surface-2 border-rain-border h-7 text-[10px] font-mono px-1 w-full">
+   886→                                  <SelectValue />
+   887→                                </SelectTrigger>
+   888→                                <SelectContent className="bg-rain-surface-2 border-rain-border">
+   889→                                  {CONTRIBUTOR_ROLE_OPTIONS.map((r) => (
+   890→                                    <SelectItem key={r.value} value={r.value} className="text-[10px] font-mono focus:bg-rain-accent/15 focus:text-rain-accent">
+   891→                                      {r.label}
+   892→                                    </SelectItem>
+   893→                                  ))}
+   894→                                </SelectContent>
+   895→                              </Select>
+   896→                            </TableCell>
+   897→                            <TableCell>
+   898→                              <input
+   899→                                type="text"
+   900→                                value={c.ipi ?? ''}
+   901→                                onChange={(e) => updateContributor(i, { ipi: e.target.value })}
+   902→                                placeholder="———"
+   903→                                className="w-full bg-transparent px-1 py-1 text-[10px] font-mono focus:outline-none focus:bg-rain-surface-2/60 rounded"
+   904→                              />
+   905→                            </TableCell>
+   906→                            <TableCell>
+   907→                              <input
+   908→                                type="text"
+   909→                                value={c.isni ?? ''}
+   910→                                onChange={(e) => updateContributor(i, { isni: e.target.value })}
+   911→                                placeholder="———"
+   912→                                className="w-full bg-transparent px-1 py-1 text-[10px] font-mono focus:outline-none focus:bg-rain-surface-2/60 rounded"
+   913→                              />
+   914→                            </TableCell>
+   915→                            <TableCell>
+   916→                              <input
+   917→                                type="number"
+   918→                                min={0}
+   919→                                max={100}
+   920→                                step="0.1"
+   921→                                value={c.share ?? ''}
+   922→                                onChange={(e) => updateContributor(i, { share: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
+   923→                                placeholder="—"
+   924→                                disabled={!WRITER_ROLES.includes(c.role)}
+   925→                                className="w-full bg-transparent px-1 py-1 text-[10px] font-mono focus:outline-none focus:bg-rain-surface-2/60 rounded disabled:opacity-40"
+   926→                              />
+   927→                            </TableCell>
+   928→                            <TableCell>
+   929→                              <button
+   930→                                type="button"
+   931→                                onClick={() => removeContributor(i)}
+   932→                                className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-400/10 transition-colors"
+   933→                                aria-label={`Remove contributor ${i + 1}`}
+   934→                              >
+   935→                                <Trash2 className="w-3.5 h-3.5" />
+   936→                              </button>
+   937→                            </TableCell>
+   938→                          </TableRow>
+   939→                        ))}
+   940→                      </TableBody>
+   941→                    </Table>
+   942→                  </div>
+   943→                )}
+   944→                <div className="text-[9px] font-mono text-muted-foreground/70">
+   945→                  Share % applies only to songwriter / composer / lyricist / publisher roles — should sum to 100 across the release.
+   946→                </div>
+   947→              </div>
+   948→            </AccordionContent>
+   949→          </AccordionItem>
+   950→
+   951→          {/* ----------------------------------------------------------- */}
+   952→          {/* 5. AI Disclosure                                             */}
+   953→          {/* ----------------------------------------------------------- */}
+   954→          <AccordionItem value="ai" className="border-rain-border">
+   955→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+   956→              <span className="flex items-center gap-2">
+   957→                <span className="text-[9px] text-muted-foreground">05</span>
+   958→                AI Disclosure
+   959→                <Badge variant="outline" className="border-rain-accent/30 text-rain-accent text-[9px]">
+   960→                  EU AI Act §50
+   961→                </Badge>
+   962→              </span>
+   963→            </AccordionTrigger>
+   964→            <AccordionContent>
+   965→              <div className="space-y-3 pb-2">
+   966→                {disclosureHasGenerated && (
+   967→                  <div className="flex items-start gap-2 px-3 py-2 rounded-md bg-amber-400/10 border border-amber-400/30">
+   968→                    <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+   969→                    <div className="text-[10px] font-mono text-amber-400/90">
+   970→                      Spotify requires AI-generated content disclosure. This will be flagged in the DDEX
+   971→                      <span className="text-rain-accent"> &lt;AIInvolvement&gt;</span> block of the ern.xml manifest.
+   972→                    </div>
+   973→                  </div>
+   974→                )}
+   975→
+   976→                <div className="grid gap-3">
+   977→                  {DISCLOSURE_FIELDS.map((f) => (
+   978→                    <RadioField
+   979→                      key={f.key}
+   980→                      label={f.label}
+   981→                      value={(metadata.aiDisclosure as AiDisclosure)?.[f.key] ?? 'none'}
+   982→                      onValueChange={(v) => updateDisclosure(f.key, v as 'none' | 'assisted' | 'generated')}
+   983→                      layout="grid"
+   984→                      options={[
+   985→                        { value: 'none', label: 'None', tooltip: 'No AI used at this stage.' },
+   986→                        { value: 'assisted', label: 'Assisted', tooltip: 'AI tools used as one input among human decisions.' },
+   987→                        { value: 'generated', label: 'Generated', tooltip: f.tooltip },
+   988→                      ]}
+   989→                    />
+   990→                  ))}
+   991→                </div>
+   992→
+   993→                <div className="text-[9px] font-mono text-muted-foreground/70">
+   994→                  Per-stage disclosure. RAIN V6 mastering is AI-assisted by default — set the Mastering
+   995→                  stage to <span className="text-rain-accent">assisted</span> to honestly reflect this.
+   996→                </div>
+   997→              </div>
+   998→            </AccordionContent>
+   999→          </AccordionItem>
+  1000→
+  1001→          {/* ----------------------------------------------------------- */}
+  1002→          {/* 6. Release Notes / Comments                                  */}
+  1003→          {/* ----------------------------------------------------------- */}
+  1004→          <AccordionItem value="notes" className="border-rain-border">
+  1005→            <AccordionTrigger className="text-sm font-mono uppercase tracking-wider text-rain-accent hover:no-underline">
+  1006→              <span className="flex items-center gap-2">
+  1007→                <span className="text-[9px] text-muted-foreground">06</span>
+  1008→                Release Notes
+  1009→              </span>
+  1010→            </AccordionTrigger>
+  1011→            <AccordionContent>
+  1012→              <div className="pb-2">
+  1013→                <TextAreaField
+  1014→                  label="Comments / Release Notes"
+  1015→                  value={metadata.comment}
+  1016→                  onValueChange={(v) => update({ comment: v })}
+  1017→                  placeholder="Liner notes, credits narrative, anything you want embedded as RIFF INFO ICMT (WAV) / ID3v2 COMM (MP3) when the Metadata toggle is on at export."
+  1018→                  hint="Embedded as the RIFF INFO ICMT chunk (WAV) or ID3v2 COMM frame (MP3) on export."
+  1019→                />
+  1020→              </div>
+  1021→            </AccordionContent>
+  1022→          </AccordionItem>
+  1023→        </Accordion>
+  1024→      </motion.div>
+  1025→
+  1026→      {/* ----------------------------------------------------------------- */}
+  1027→      {/* Reset confirmation                                                */}
+  1028→      {/* ----------------------------------------------------------------- */}
+  1029→      <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+  1030→        <AlertDialogContent className="bg-rain-surface-2 border-rain-border">
+  1031→          <AlertDialogHeader>
+  1032→            <AlertDialogTitle className="text-rain-accent font-mono">Reset all metadata?</AlertDialogTitle>
+  1033→            <AlertDialogDescription className="text-muted-foreground font-mono text-xs">
+  1034→              This restores every field to its default (single, worldwide, English, no AI disclosure,
+  1035→              no parental advisory, RAIN V6 distributor). The rendered audio and provenance cert are
+  1036→              not affected. This cannot be undone.
+  1037→            </AlertDialogDescription>
+  1038→          </AlertDialogHeader>
+  1039→          <AlertDialogFooter>
+  1040→            <AlertDialogCancel className="bg-rain-surface border-rain-border font-mono text-xs">
+  1041→              Cancel
+  1042→            </AlertDialogCancel>
+  1043→            <AlertDialogAction
+  1044→              onClick={handleReset}
+  1045→              className="bg-red-500 text-white hover:bg-red-500/90 font-mono text-xs"
+  1046→            >
+  1047→              Reset to defaults
+  1048→            </AlertDialogAction>
+  1049→          </AlertDialogFooter>
+  1050→        </AlertDialogContent>
+  1051→      </AlertDialog>
+  1052→    </div>
+  1053→  )
+  1054→}
+  1055→

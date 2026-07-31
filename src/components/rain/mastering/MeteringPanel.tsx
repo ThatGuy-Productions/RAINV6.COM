@@ -51,7 +51,7 @@ export function MeteringPanel({ variant = 'output' }: MeteringPanelProps) {
       <div>
         <div className="flex items-baseline justify-between mb-1">
           <span className="text-[10px] font-mono uppercase text-muted-foreground">LUFS (Integrated)</span>
-          <span className={`text-base font-bold font-mono tabular-nums ${lufsOk ? 'rain-gradient-text-lime' : 'text-orange-400'}`}>
+          <span className={`text-base font-bold font-mono tabular-nums ${lufsOk ? 'rain-gradient-text-lime' : 'text-orange-400'}`} role="status" aria-live="polite">
             {analysis.lufs.toFixed(1)}
           </span>
         </div>
@@ -92,7 +92,7 @@ export function MeteringPanel({ variant = 'output' }: MeteringPanelProps) {
       <div>
         <div className="flex items-baseline justify-between mb-1">
           <span className="text-[10px] font-mono uppercase text-muted-foreground">True Peak</span>
-          <span className={`text-base font-bold font-mono tabular-nums ${tpOk ? 'rain-gradient-text-lime' : 'text-red-400'}`}>
+          <span className={`text-base font-bold font-mono tabular-nums ${tpOk ? 'rain-gradient-text-lime' : 'text-red-400'}`} role="status" aria-live="polite">
             {analysis.truePeak.toFixed(1)} <span className="text-[10px] opacity-60">dBTP</span>
           </span>
         </div>

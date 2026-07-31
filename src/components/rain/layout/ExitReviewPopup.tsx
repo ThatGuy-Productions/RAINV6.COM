@@ -18,11 +18,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Star, Send, X, MessageSquare, Loader2, CheckCircle2 } from 'lucide-react'
+import { Star, Send, MessageSquare, Loader2, CheckCircle2 } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 
 const DISMISS_KEY = 'rain_exit_review_dismissed'
-const INTERACTION_THRESHOLD = 3 // minimum tab views / actions to trigger
 
 export function ExitReviewPopup() {
   const [show, setShow] = useState(false)

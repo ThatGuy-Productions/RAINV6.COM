@@ -15,6 +15,7 @@ export function LandingNav({ onLaunch }: LandingNavProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
       className="sticky top-0 z-40 border-b border-rain-border/50 backdrop-blur-xl bg-background/70"
+      role="banner"
     >
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
         <a href="#" className="flex items-center gap-2.5 group">

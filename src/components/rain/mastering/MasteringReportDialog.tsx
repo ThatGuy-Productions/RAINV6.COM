@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/lib/rain/store'
-import { notifyError } from '@/lib/rain/notifications'
 import { PRICING_TIERS } from '@/lib/rain/constants'
 
 interface MasteringReportDialogProps {

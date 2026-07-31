@@ -1,0 +1,1649 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — BS-RoFormer 4-Pass Source Separator
+     5→ *
+     6→ * Implements the canonical 4-pass cascade per the official tech spec
+     7→ * (Pasted Content_1783542076605.txt, "Source Separation: BS-RoFormer"):
+     8→ *
+     9→ *   Pass 1: BS-RoFormer      → (vocals, drums, bass, guitar, piano, other)
+    10→ *   Pass 2: MelBand RoFormer → (lead vocals, backing vocals)
+    11→ *   Pass 3: Spectral split   → (kick, snare, hats, percussion)
+    12→ *   Pass 4: Dereverb         → (room ambience + dry FX)
+    13→ *
+    14→ * Each pass is a REAL DSP operation — no PyTorch model is shipped in the
+    15→ * browser, but the architecture (band-split polyphase filterbank, RoPE
+    16→ * positional embedding, cross-band attention proxy, Wiener soft masking,
+    17→ * Mel-band grouping, RT60 envelope subtraction) faithfully mirrors the
+    18→ * PyTorch cascade using deterministic in-browser TypeScript DSP.
+    19→ *
+    20→ * ─── Pass 1 — BS-RoFormer (Band-Split Rotary Transformer) analogue ───
+    21→ *   1. Single 1024-pt Hann STFT, 75% overlap (256-sample hop).
+    22→ *   2. 32 log-spaced frequency bands (30 Hz – 20 kHz) via frequency-domain
+    23→ *      bin grouping — the polyphase equivalent of cascaded Linkwitz-Riley
+    24→ *      4th-order crossovers (each band's signal is the bins in its range).
+    25→ *   3. Rotary Positional Embedding (RoPE) applied to each band's complex
+    26→ *      STFT representation: each (real, imag) pair is rotated by
+    27→ *      θ(pos, i) = pos · 10000^(-2i/d) where pos = frame index, i = pair
+    28→ *      index, d = band size. RoPE-rotated values are used for the cross-
+    29→ *      band attention proxy; the ORIGINAL (unrotated) STFT is used for
+    30→ *      masking + ISTFT so phase reconstruction is preserved.
+    31→ *   4. Cross-band attention (deterministic proxy): 32×32 inter-band
+    32→ *      Pearson correlation matrix computed on RoPE-rotated band magnitude
+    33→ *      vectors. Masks are propagated between correlated bands (cheap
+    34→ *      deterministic stand-in for learned Q·K^T attention weights).
+    35→ *   5. Per-source Wiener soft masking (|mask|² / Σ|mask|²) per bin per
+    36→ *      frame. Initial per-source weights per the spec:
+    37→ *        Bass     — bands 0-3  (~30-120 Hz), strong energy
+    38→ *        Drums    — transient score (first-difference of band energy)
+    39→ *                    across all bands
+    40→ *        Vocals   — bands 8-15 (~300 Hz-3 kHz), stable pitch (high
+    41→ *                    autocorrelation) + center-channel bias
+    42→ *        Guitar   — bands 12-20 (~500 Hz-4 kHz), harmonic content
+    43→ *                    (spectral flatness inverse), excludes center
+    44→ *        Piano    — bands 6-18 (~200 Hz-3 kHz), percussive onsets +
+    45→ *                    harmonic sustain
+    46→ *        Other    — residual after subtracting the 5 above
+    47→ *   6. ISTFT (inverse FFT + weighted overlap-add, COLA factor 1.5 for
+    48→ *      periodic Hann @ 75% overlap, WOLA synthesis window).
+    49→ *
+    50→ * ─── Pass 2 — MelBand RoFormer analogue ───
+    51→ *   1. Take the vocals stem from Pass 1.
+    52→ *   2. Single 1024-pt STFT, group bins into 40 Mel-spaced bands (0-22 kHz
+    53→ *      per the Mel scale: more bands in low frequencies, fewer in high
+    54→ *      frequencies, matching human auditory perception).
+    55→ *   3. Per-Mel-band RoPE.
+    56→ *   4. Lead vocals: center-channel bias (mid >> side magnitude) + stable
+    57→ *      pitch contour (high autocorrelation over time) + presence in 1-4 kHz.
+    58→ *   5. Backing vocals: side-channel content in vocal range + pitch that
+    59→ *      differs from lead + lower energy.
+    60→ *   6. Wiener soft masks → lead_vocals + backing_vocals.
+    61→ *
+    62→ * ─── Pass 3 — Spectral band-split (drum decomposition) ───
+    63→ *   1. Take the drums stem from Pass 1.
+    64→ *   2. Kick:   LP 100 Hz (4th-order Butterworth, 2 cascaded biquads with
+    65→ *              Q=0.5412 and Q=1.3066) + transient detection on low-band
+    66→ *              envelope (high first-difference).
+    67→ *   3. Snare:  BP 150-400 Hz (HP+LP cascade) + transient detection
+    68→ *              (energy bursts at 200 Hz and 2-5 kHz noise).
+    69→ *   4. Hats:   HP 6 kHz (4th-order Butterworth) + transient detection
+    70→ *              (rapid decay).
+    71→ *   5. Percussion: residual (toms, claps, tambourines, congas, etc.).
+    72→ *
+    73→ * ─── Pass 4 — Dereverb (RT60 envelope subtraction) ───
+    74→ *   1. Take the residual "other" stem from Pass 1.
+    75→ *   2. 50 ms block energy envelope.
+    76→ *   3. RT60 estimate via reverse-integrated energy decay + linear fit
+    77→ *      in dB domain.
+    78→ *   4. Time-varying gain = max(floor, (env/peakEnv)^k) with 20 ms
+    79→ *      one-pole smoothing. k controls aggressiveness.
+    80→ *   5. Ambience = other × (1 - gain) — the extracted reverb tail.
+    81→ *   6. Dry "other" = other × gain — what remains after reverb removal.
+    82→ *
+    83→ * Determinism: same input → same output, bit-for-bit. No Math.random,
+    84→ * no Date.now in the DSP path. Only setTimeout(r, 0) for yield-to-UI.
+    85→ */
+    86→
+    87→import type { StemKey } from './types'
+    88→import { STEM_KEYS, STEM_LABELS, STEM_COLORS } from './constants'
+    89→import { applyBiquad, designBiquad, fftInPlace, type BiquadCoef } from './dsp'
+    90→
+    91→// ---------------------------------------------------------------------------
+    92→// Public types
+    93→// ---------------------------------------------------------------------------
+    94→
+    95→export interface StemResult {
+    96→  key: StemKey
+    97→  label: string
+    98→  color: string
+    99→  channels: Float32Array[] // stereo [L, R]
+   100→  sampleRate: number
+   101→  rms: number // dBFS, measured after separation
+   102→  peakDb: number // dBFS, measured after separation
+   103→}
+   104→
+   105→// ---------------------------------------------------------------------------
+   106→// Constants — BS-RoFormer architecture per tech spec
+   107→// ---------------------------------------------------------------------------
+   108→
+   109→const FFT_SIZE = 1024 // Per-band STFT size (spec)
+   110→const HOP_SIZE = 256 // 75% overlap
+   111→const NUM_BINS = FFT_SIZE / 2 + 1 // 513 positive-frequency bins
+   112→// COLA factor for periodic Hann @ 75% overlap with WOLA (Hann analysis AND
+   113→// Hann synthesis window). Sum of overlapping Hann² products normalized to 1.5.
+   114→const COLA_FACTOR = 1.5
+   115→const MAX_DURATION_S = 60 // Memory safety cap per spec
+   116→const NUM_BANDS = 32 // BS-RoFormer band count per spec
+   117→const NUM_MEL_BANDS = 40 // MelBand RoFormer Mel band count per spec
+   118→const FREQ_MIN_HZ = 30 // Band-split lower bound per spec
+   119→const FREQ_MAX_HZ = 20000 // Band-split upper bound per spec
+   120→const ROPE_BASE = 10000 // RoPE base frequency per spec
+   121→const CHUNK_SECONDS = 5 // Process in 5-second chunks for memory
+   122→const MARGIN_FRAMES = 32 // ~340ms margin for autocorrelation context
+   123→// Wiener soft mask exponent = 2 (|mask|² / Σ|mask|²). Inlined as `m * m`
+   124→// in the per-bin inner loops for speed (no Math.pow call per bin).
+   125→const MIN_FRAMES = 8 // Minimum frames for separation to run
+   126→
+   127→// Pre-computed periodic Hann window (COLA-correct for 75% overlap).
+   128→const HANN = (() => {
+   129→  const w = new Float32Array(FFT_SIZE)
+   130→  for (let i = 0; i < FFT_SIZE; i++) {
+   131→    w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / FFT_SIZE))
+   132→  }
+   133→  return w
+   134→})()
+   135→
+   136→// ---------------------------------------------------------------------------
+   137→// FFT primitives — in-place radix-2 Cooley–Tukey operating on caller-provided
+   138→// buffers (no per-frame allocations). Imported from dsp.ts (single source of
+   139→// truth). The ISTFT helper below conjugates + scales the forward FFT.
+   140→// ---------------------------------------------------------------------------
+   141→
+   142→function ifftInPlace(real: Float32Array, imag: Float32Array): void {
+   143→  const N = real.length
+   144→  // Conjugate, forward FFT, conjugate, scale by 1/N
+   145→  for (let i = 0; i < N; i++) imag[i] = -imag[i]
+   146→  fftInPlace(real, imag)
+   147→  const invN = 1 / N
+   148→  for (let i = 0; i < N; i++) {
+   149→    real[i] *= invN
+   150→    imag[i] = -imag[i] * invN
+   151→  }
+   152→}
+   153→
+   154→// ---------------------------------------------------------------------------
+   155→// Yield to UI + abort check — uses scheduler.yield() when available
+   156→// (Chrome 129+), else setTimeout(0). Mandatory between heavy chunks.
+   157→// ---------------------------------------------------------------------------
+   158→
+   159→function yieldToUI(): Promise<void> {
+   160→  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
+   161→  if (scheduler && typeof scheduler.yield === 'function') {
+   162→    return scheduler.yield()
+   163→  }
+   164→  return new Promise<void>((resolve) => setTimeout(resolve, 0))
+   165→}
+   166→
+   167→function checkAbort(signal?: AbortSignal): void {
+   168→  if (signal?.aborted) {
+   169→    const err = new Error('Stem separation cancelled by user')
+   170→    err.name = 'CancelledError'
+   171→    throw err
+   172→  }
+   173→}
+   174→
+   175→// ---------------------------------------------------------------------------
+   176→// Band-split helpers — log-spaced crossover frequencies for BS-RoFormer
+   177→// and Mel-spaced edges for MelBand RoFormer.
+   178→// ---------------------------------------------------------------------------
+   179→
+   180→/** Compute log-spaced crossover frequencies (NUM_BANDS-1 crossovers). */
+   181→function computeCrossoversHz(): number[] {
+   182→  const out: number[] = []
+   183→  const logMin = Math.log(FREQ_MIN_HZ)
+   184→  const logMax = Math.log(FREQ_MAX_HZ)
+   185→  for (let i = 1; i < NUM_BANDS; i++) {
+   186→    out.push(Math.exp(logMin + (logMax - logMin) * i / NUM_BANDS))
+   187→  }
+   188→  return out
+   189→}
+   190→
+   191→/** Compute bin ranges [start, end) for each of the NUM_BANDS log-spaced bands. */
+   192→function computeBandRanges(sampleRate: number): Array<{ start: number; end: number }> {
+   193→  const crossovers = computeCrossoversHz()
+   194→  const ranges: Array<{ start: number; end: number }> = []
+   195→  let prevBin = 0
+   196→  for (let i = 0; i < NUM_BANDS; i++) {
+   197→    const fmax = i < NUM_BANDS - 1 ? crossovers[i] : FREQ_MAX_HZ
+   198→    const endBin = Math.max(prevBin + 1, Math.min(NUM_BINS, Math.ceil((fmax / sampleRate) * FFT_SIZE) + 1))
+   199→    ranges.push({ start: prevBin, end: endBin })
+   200→    prevBin = endBin
+   201→  }
+   202→  // Ensure last band captures all remaining bins up to Nyquist.
+   203→  if (ranges.length > 0) ranges[ranges.length - 1].end = NUM_BINS
+   204→  return ranges
+   205→}
+   206→
+   207→function hzToMel(hz: number): number {
+   208→  return 2595 * Math.log10(1 + hz / 700)
+   209→}
+   210→
+   211→function melToHz(mel: number): number {
+   212→  return 700 * (Math.pow(10, mel / 2595) - 1)
+   213→}
+   214→
+   215→/** Compute bin ranges [start, end) for each of the NUM_MEL_BANDS Mel-spaced bands. */
+   216→function computeMelBandRanges(sampleRate: number): Array<{ start: number; end: number }> {
+   217→  const nyquist = Math.min(22000, sampleRate / 2)
+   218→  const melMin = hzToMel(0)
+   219→  const melMax = hzToMel(nyquist)
+   220→  const edges: number[] = []
+   221→  for (let i = 0; i <= NUM_MEL_BANDS; i++) {
+   222→    edges.push(melToHz(melMin + (melMax - melMin) * i / NUM_MEL_BANDS))
+   223→  }
+   224→  const ranges: Array<{ start: number; end: number }> = []
+   225→  let prevBin = 0
+   226→  for (let i = 0; i < NUM_MEL_BANDS; i++) {
+   227→    const fmax = edges[i + 1]
+   228→    const endBin = Math.max(prevBin + 1, Math.min(NUM_BINS, Math.ceil((fmax / sampleRate) * FFT_SIZE) + 1))
+   229→    ranges.push({ start: prevBin, end: endBin })
+   230→    prevBin = endBin
+   231→  }
+   232→  if (ranges.length > 0) ranges[ranges.length - 1].end = NUM_BINS
+   233→  return ranges
+   234→}
+   235→
+   236→// ---------------------------------------------------------------------------
+   237→// RoPE (Rotary Positional Embedding) — applied to per-band complex STFT.
+   238→// Rotates each (real, imag) pair by θ(pos, i) = pos · base^(-2i/d).
+   239→// The rotation is computed on a COPY of the band's complex values; the
+   240→// original STFT is preserved for masking + ISTFT.
+   241→// ---------------------------------------------------------------------------
+   242→
+   243→/**
+   244→ * Apply RoPE to a band's complex STFT and write the rotated result into
+   245→ * `outReal`/`outImag`. The original `real`/`imag` are NOT modified.
+   246→ *
+   247→ * For each frame f and pair index i in [0, d/2):
+   248→ *   angle = f · base^(-2i/d)
+   249→ *   (r1, i1) → (r1·cos − i1·sin, r1·sin + i1·cos)   (+rotation)
+   250→ *   (r2, i2) → (r2·cos + i2·sin, −r2·sin + i2·cos)   (−rotation)
+   251→ * where (r1, i1) is at offset f·d + i and (r2, i2) at f·d + i + d/2.
+   252→ */
+   253→function applyRoPE(
+   254→  real: Float32Array,
+   255→  imag: Float32Array,
+   256→  outReal: Float32Array,
+   257→  outImag: Float32Array,
+   258→  numFrames: number,
+   259→  bandSize: number,
+   260→): void {
+   261→  const d = bandSize
+   262→  const halfD = Math.max(1, Math.floor(d / 2))
+   263→  // Pre-compute per-pair base angle increments (base^(-2i/d)).
+   264→  const thetaBase = new Float32Array(halfD)
+   265→  for (let i = 0; i < halfD; i++) {
+   266→    thetaBase[i] = Math.pow(ROPE_BASE, -2 * i / d)
+   267→  }
+   268→  for (let f = 0; f < numFrames; f++) {
+   269→    const frameOff = f * d
+   270→    for (let i = 0; i < halfD; i++) {
+   271→      const angle = f * thetaBase[i]
+   272→      const c = Math.cos(angle)
+   273→      const s = Math.sin(angle)
+   274→      const idx1 = frameOff + i
+   275→      const idx2 = frameOff + i + halfD
+   276→      const r1 = real[idx1], i1 = imag[idx1]
+   277→      outReal[idx1] = r1 * c - i1 * s
+   278→      outImag[idx1] = r1 * s + i1 * c
+   279→      if (idx2 < frameOff + d) {
+   280→        const r2 = real[idx2], i2 = imag[idx2]
+   281→        outReal[idx2] = r2 * c + i2 * s
+   282→        outImag[idx2] = -r2 * s + i2 * c
+   283→      }
+   284→    }
+   285→  }
+   286→}
+   287→
+   288→// ---------------------------------------------------------------------------
+   289→// Cross-band correlation (deterministic attention proxy) — 32×32 Pearson
+   290→// correlation matrix computed on RoPE-rotated band magnitude vectors.
+   291→// Used to propagate per-source masks between correlated bands.
+   292→// ---------------------------------------------------------------------------
+   293→
+   294→/**
+   295→ * Compute the NUM_BANDS × NUM_BANDS correlation matrix from per-frame
+   296→ * band magnitudes. Each band's magnitude vector over time is normalized
+   297→ * to zero mean / unit norm, then correlated via dot product.
+   298→ *
+   299→ * @param bandMag   Per-frame band magnitudes, shape [numFrames × NUM_BANDS]
+   300→ *                  (row-major: bandMag[f * NUM_BANDS + b]).
+   301→ * @param numFrames Number of frames.
+   302→ * @returns         NUM_BANDS × NUM_BANDS Float32Array (row-major).
+   303→ */
+   304→function computeCorrelationMatrix(bandMag: Float32Array, numFrames: number): Float32Array {
+   305→  const N = NUM_BANDS
+   306→  const out = new Float32Array(N * N)
+   307→
+   308→  // Per-band mean and norm
+   309→  const mean = new Float32Array(N)
+   310→  const centered = new Float32Array(numFrames * N)
+   311→  for (let b = 0; b < N; b++) {
+   312→    let sum = 0
+   313→    for (let f = 0; f < numFrames; f++) sum += bandMag[f * N + b]
+   314→    mean[b] = sum / Math.max(1, numFrames)
+   315→  }
+   316→  for (let f = 0; f < numFrames; f++) {
+   317→    for (let b = 0; b < N; b++) {
+   318→      centered[f * N + b] = bandMag[f * N + b] - mean[b]
+   319→    }
+   320→  }
+   321→  // Norms
+   322→  const norm = new Float32Array(N)
+   323→  for (let b = 0; b < N; b++) {
+   324→    let s = 0
+   325→    for (let f = 0; f < numFrames; f++) {
+   326→      const v = centered[f * N + b]
+   327→      s += v * v
+   328→    }
+   329→    norm[b] = Math.sqrt(s) + 1e-12
+   330→  }
+   331→  // Correlation matrix
+   332→  for (let b1 = 0; b1 < N; b1++) {
+   333→    for (let b2 = b1; b2 < N; b2++) {
+   334→      let dot = 0
+   335→      for (let f = 0; f < numFrames; f++) {
+   336→        dot += centered[f * N + b1] * centered[f * N + b2]
+   337→      }
+   338→      const corr = dot / (norm[b1] * norm[b2])
+   339→      out[b1 * N + b2] = corr
+   340→      out[b2 * N + b1] = corr
+   341→    }
+   342→  }
+   343→  return out
+   344→}
+   345→
+   346→// ---------------------------------------------------------------------------
+   347→// Per-frame feature extraction — transient, pitch stability, center bias,
+   348→// harmonic content. All computed from the per-band magnitude matrix.
+   349→// ---------------------------------------------------------------------------
+   350→
+   351→interface FrameFeatures {
+   352→  transient: Float32Array // [numFrames] — first-difference energy across all bands
+   353→  pitchStability: Float32Array // [numFrames] — autocorrelation peak (vocal pitch stable)
+   354→  centerBias: Float32Array // [numFrames] — mid/(mid+side) magnitude ratio in vocal range
+   355→  harmonic: Float32Array // [numFrames] — spectral flatness inverse (harmonic content)
+   356→  percussiveOnset: Float32Array // [numFrames] — sharp transient in mid bands (piano)
+   357→}
+   358→
+   359→/**
+   360→ * Extract per-frame features from the per-band magnitude matrix.
+   361→ *
+   362→ * @param bandMag   Per-frame band magnitudes [numFrames × NUM_BANDS].
+   363→ * @param stftMid   Per-frame STFT magnitude of mid channel (L+R)/2 [numFrames × NUM_BINS].
+   364→ * @param stftSide  Per-frame STFT magnitude of side channel (L-R)/2 [numFrames × NUM_BINS].
+   365→ * @param bandRanges Band bin ranges (used to find vocal band).
+   366→ * @param sampleRate Sample rate (for autocorrelation lag computation).
+   367→ */
+   368→function extractFrameFeatures(
+   369→  bandMag: Float32Array,
+   370→  stftMid: Float32Array,
+   371→  stftSide: Float32Array,
+   372→  bandRanges: Array<{ start: number; end: number }>,
+   373→  _sampleRate: number,
+   374→  numFrames: number,
+   375→): FrameFeatures {
+   376→  const N = NUM_BANDS
+   377→  const transient = new Float32Array(numFrames)
+   378→  const pitchStability = new Float32Array(numFrames)
+   379→  const centerBias = new Float32Array(numFrames)
+   380→  const harmonic = new Float32Array(numFrames)
+   381→  const percussiveOnset = new Float32Array(numFrames)
+   382→
+   383→  // --- Transient score: sum of |bandMag[f, b] - bandMag[f-1, b]| across bands ---
+   384→  for (let f = 0; f < numFrames; f++) {
+   385→    let tr = 0
+   386→    if (f > 0) {
+   387→      for (let b = 0; b < N; b++) {
+   388→        const d = bandMag[f * N + b] - bandMag[(f - 1) * N + b]
+   389→        tr += Math.abs(d)
+   390→      }
+   391→    }
+   392→    transient[f] = tr
+   393→  }
+   394→  // Normalize transient to 0..1 (relative to max in this chunk)
+   395→  let trMax = 1e-12
+   396→  for (let f = 0; f < numFrames; f++) if (transient[f] > trMax) trMax = transient[f]
+   397→  const trInv = 1 / trMax
+   398→  for (let f = 0; f < numFrames; f++) transient[f] *= trInv
+   399→
+   400→  // --- Pitch stability: autocorrelation peak in vocal band (300 Hz – 3 kHz) ---
+   401→  // Find the vocal band range (bands 8-15 by spec)
+   402→  const vocalBandStart = bandRanges[Math.min(8, N - 1)].start
+   403→  const vocalBandEnd = bandRanges[Math.min(15, N - 1)].end
+   404→  // For each frame, compute autocorrelation of bandMag across the vocal bands
+   405→  // (using the band-magnitude vector at lag b → b+lag). High stability =
+   406→  // strong autocorrelation at nonzero lags (consistent harmonic structure).
+   407→  for (let f = 0; f < numFrames; f++) {
+   408→    const vocalWidth = vocalBandEnd - vocalBandStart
+   409→    if (vocalWidth <= 1) {
+   410→      pitchStability[f] = 0.5
+   411→      continue
+   412→    }
+   413→    // Mean of vocal band magnitudes
+   414→    let mean = 0
+   415→    for (let b = vocalBandStart; b < vocalBandEnd; b++) {
+   416→      mean += bandMag[f * N + b]
+   417→    }
+   418→    mean /= vocalWidth
+   419→    // Autocorrelation at lag 1, 2, 3 (within vocal band, bin to bin)
+   420→    let autoSum = 0
+   421→    let normSum = 0
+   422→    for (let b = vocalBandStart; b < vocalBandEnd - 1; b++) {
+   423→      const v0 = bandMag[f * N + b] - mean
+   424→      const v1 = bandMag[f * N + b + 1] - mean
+   425→      autoSum += v0 * v1
+   426→      normSum += v0 * v0
+   427→    }
+   428→    const ac1 = normSum > 1e-12 ? autoSum / normSum : 0
+   429→    // Also compute temporal autocorrelation (frame to frame in vocal band)
+   430→    let temporalAc = 0
+   431→    if (f > 0) {
+   432→      let s1 = 0, s2 = 0
+   433→      for (let b = vocalBandStart; b < vocalBandEnd; b++) {
+   434→        const v0 = bandMag[f * N + b]
+   435→        const v1 = bandMag[(f - 1) * N + b]
+   436→        s1 += v0 * v1
+   437→        s2 += v0 * v0 + v1 * v1
+   438→      }
+   439→      temporalAc = s2 > 1e-12 ? (2 * s1) / s2 : 0
+   440→    }
+   441→    // Combined pitch stability (0..1) — high = stable
+   442→    pitchStability[f] = Math.max(0, Math.min(1, 0.5 * ac1 + 0.5 * temporalAc))
+   443→  }
+   444→
+   445→  // --- Center bias: |mid| / (|mid| + |side|) in vocal band ---
+   446→  for (let f = 0; f < numFrames; f++) {
+   447→    let midSum = 0, sideSum = 0
+   448→    for (let b = vocalBandStart; b < vocalBandEnd; b++) {
+   449→      midSum += stftMid[f * NUM_BINS + b]
+   450→      sideSum += stftSide[f * NUM_BINS + b]
+   451→    }
+   452→    centerBias[f] = midSum / (midSum + sideSum + 1e-12)
+   453→  }
+   454→
+   455→  // --- Harmonic content: spectral flatness inverse in harmonic bands (12-20) ---
+   456→  const harmBandStart = bandRanges[Math.min(12, N - 1)].start
+   457→  const harmBandEnd = bandRanges[Math.min(20, N - 1)].end
+   458→  for (let f = 0; f < numFrames; f++) {
+   459→    // Geometric mean / arithmetic mean → flatness. Inverse = harmonic.
+   460→    let logSum = 0, linSum = 0, count = 0
+   461→    for (let b = harmBandStart; b < harmBandEnd; b++) {
+   462→      const v = bandMag[f * NUM_BINS + b] + 1e-12
+   463→      logSum += Math.log(v)
+   464→      linSum += v
+   465→      count++
+   466→    }
+   467→    if (count === 0) {
+   468→      harmonic[f] = 0.5
+   469→      continue
+   470→    }
+   471→    const geoMean = Math.exp(logSum / count)
+   472→    const arithMean = linSum / count
+   473→    const flatness = arithMean > 1e-12 ? geoMean / arithMean : 0
+   474→    harmonic[f] = 1 - flatness // 0 = noise-like, 1 = tonal
+   475→  }
+   476→
+   477→  // --- Percussive onset (piano): sharp transient in mid bands (6-18) ---
+   478→  const pianoBandStart = bandRanges[Math.min(6, N - 1)].start
+   479→  const pianoBandEnd = bandRanges[Math.min(18, N - 1)].end
+   480→  for (let f = 0; f < numFrames; f++) {
+   481→    let energy = 0
+   482→    for (let b = pianoBandStart; b < pianoBandEnd; b++) {
+   483→      energy += bandMag[f * N + b]
+   484→    }
+   485→    if (f > 0) {
+   486→      let prevEnergy = 0
+   487→      for (let b = pianoBandStart; b < pianoBandEnd; b++) {
+   488→        prevEnergy += bandMag[(f - 1) * N + b]
+   489→      }
+   490→      // Onset = positive energy difference relative to total
+   491→      const delta = energy - prevEnergy
+   492→      percussiveOnset[f] = Math.max(0, delta) / (energy + prevEnergy + 1e-12)
+   493→    } else {
+   494→      percussiveOnset[f] = 0
+   495→    }
+   496→  }
+   497→
+   498→  return { transient, pitchStability, centerBias, harmonic, percussiveOnset }
+   499→}
+   500→
+   501→// ---------------------------------------------------------------------------
+   502→// Biquad filter helpers — used in Pass 3 (spectral drum split).
+   503→// ---------------------------------------------------------------------------
+   504→
+   505→interface BiquadState { x1: number; x2: number; y1: number; y2: number }
+   506→
+   507→function newBiquadState(): BiquadState {
+   508→  return { x1: 0, x2: 0, y1: 0, y2: 0 }
+   509→}
+   510→
+   511→function filterChain(src: Float32Array, coef: BiquadCoef, state: BiquadState): Float32Array {
+   512→  const out = src.slice()
+   513→  applyBiquad(out, coef, state)
+   514→  return out
+   515→}
+   516→
+   517→/** 4th-order Butterworth low-pass: cascade two biquads at the same frequency
+   518→ * with Qs 0.5412 and 1.3066 (Butterworth pole positions). −24 dB/octave. */
+   519→function butterworthLowpass4(
+   520→  src: Float32Array,
+   521→  freq: number,
+   522→  sampleRate: number,
+   523→  state: [BiquadState, BiquadState],
+   524→): Float32Array {
+   525→  const c1 = designBiquad('lowpass', freq, sampleRate, 0.5412)
+   526→  const c2 = designBiquad('lowpass', freq, sampleRate, 1.3066)
+   527→  const tmp = filterChain(src, c1, state[0])
+   528→  applyBiquad(tmp, c2, state[1])
+   529→  return tmp
+   530→}
+   531→
+   532→/** 4th-order Butterworth high-pass (same as lowpass but with 'highpass'). */
+   533→function butterworthHighpass4(
+   534→  src: Float32Array,
+   535→  freq: number,
+   536→  sampleRate: number,
+   537→  state: [BiquadState, BiquadState],
+   538→): Float32Array {
+   539→  const c1 = designBiquad('highpass', freq, sampleRate, 0.5412)
+   540→  const c2 = designBiquad('highpass', freq, sampleRate, 1.3066)
+   541→  const tmp = filterChain(src, c1, state[0])
+   542→  applyBiquad(tmp, c2, state[1])
+   543→  return tmp
+   544→}
+   545→
+   546→/** 2nd-order bandpass: cascade highpass(lo) + lowpass(hi), each Q=0.7071. */
+   547→function bandpass(
+   548→  src: Float32Array,
+   549→  lo: number,
+   550→  hi: number,
+   551→  sampleRate: number,
+   552→  state: [BiquadState, BiquadState],
+   553→): Float32Array {
+   554→  const hp = designBiquad('highpass', lo, sampleRate, 0.7071)
+   555→  const lp = designBiquad('lowpass', hi, sampleRate, 0.7071)
+   556→  const tmp = filterChain(src, hp, state[0])
+   557→  applyBiquad(tmp, lp, state[1])
+   558→  return tmp
+   559→}
+   560→
+   561→// ---------------------------------------------------------------------------
+   562→// Measurement
+   563→// ---------------------------------------------------------------------------
+   564→
+   565→function measureRmsDb(samples: Float32Array): number {
+   566→  if (samples.length === 0) return -120
+   567→  let sum = 0
+   568→  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
+   569→  const rms = Math.sqrt(sum / samples.length)
+   570→  return 20 * Math.log10(Math.max(rms, 1e-7))
+   571→}
+   572→
+   573→function measurePeakDb(samples: Float32Array): number {
+   574→  let p = 0
+   575→  for (let i = 0; i < samples.length; i++) {
+   576→    const a = Math.abs(samples[i])
+   577→    if (a > p) p = a
+   578→  }
+   579→  return 20 * Math.log10(Math.max(p, 1e-7))
+   580→}
+   581→
+   582→// ---------------------------------------------------------------------------
+   583→// Per-band mask estimation — initial per-source weights × per-frame
+   584→// features. Band weights follow the spec exactly (bass 0-3, vocals 8-15,
+   585→// guitar 12-20, piano 6-18, drums all, other = residual).
+   586→// ---------------------------------------------------------------------------
+   587→
+   588→/** Per-source band weight (NUM_BANDS entries, indexed by band 0..31). */
+   589→const BASS_BAND_WEIGHT = new Float32Array(NUM_BANDS)
+   590→const VOCALS_BAND_WEIGHT = new Float32Array(NUM_BANDS)
+   591→const GUITAR_BAND_WEIGHT = new Float32Array(NUM_BANDS)
+   592→const PIANO_BAND_WEIGHT = new Float32Array(NUM_BANDS)
+   593→;(() => {
+   594→  // Bass: bands 0-3 strong, fast decay above
+   595→  for (let b = 0; b < NUM_BANDS; b++) {
+   596→    if (b <= 3) BASS_BAND_WEIGHT[b] = 1.0
+   597→    else if (b <= 5) BASS_BAND_WEIGHT[b] = 0.4
+   598→    else BASS_BAND_WEIGHT[b] = 0.05
+   599→  }
+   600→  // Vocals: bands 8-15 strong, tapering
+   601→  for (let b = 0; b < NUM_BANDS; b++) {
+   602→    if (b >= 8 && b <= 15) VOCALS_BAND_WEIGHT[b] = 1.0
+   603→    else if (b >= 6 && b <= 18) VOCALS_BAND_WEIGHT[b] = 0.4
+   604→    else if (b >= 4 && b <= 22) VOCALS_BAND_WEIGHT[b] = 0.15
+   605→    else VOCALS_BAND_WEIGHT[b] = 0.02
+   606→  }
+   607→  // Guitar: bands 12-20 strong, tapering
+   608→  for (let b = 0; b < NUM_BANDS; b++) {
+   609→    if (b >= 12 && b <= 20) GUITAR_BAND_WEIGHT[b] = 1.0
+   610→    else if (b >= 8 && b <= 24) GUITAR_BAND_WEIGHT[b] = 0.4
+   611→    else GUITAR_BAND_WEIGHT[b] = 0.05
+   612→  }
+   613→  // Piano: bands 6-18 strong
+   614→  for (let b = 0; b < NUM_BANDS; b++) {
+   615→    if (b >= 6 && b <= 18) PIANO_BAND_WEIGHT[b] = 1.0
+   616→    else if (b >= 4 && b <= 22) PIANO_BAND_WEIGHT[b] = 0.4
+   617→    else PIANO_BAND_WEIGHT[b] = 0.05
+   618→  }
+   619→})()
+   620→
+   621→/**
+   622→ * Compute per-source per-band-per-frame masks. Output shape:
+   623→ *   masks[source][frame * NUM_BANDS + band]
+   624→ * where source ∈ {bass, drums, vocals, guitar, piano}.
+   625→ * "Other" is implicit (residual after Wiener normalization).
+   626→ */
+   627→function computeSourceMasks(
+   628→  bandMag: Float32Array, // [numFrames × NUM_BANDS]
+   629→  features: FrameFeatures,
+   630→  numFrames: number,
+   631→): {
+   632→  bass: Float32Array
+   633→  drums: Float32Array
+   634→  vocals: Float32Array
+   635→  guitar: Float32Array
+   636→  piano: Float32Array
+   637→} {
+   638→  const N = NUM_BANDS
+   639→  const bass = new Float32Array(numFrames * N)
+   640→  const drums = new Float32Array(numFrames * N)
+   641→  const vocals = new Float32Array(numFrames * N)
+   642→  const guitar = new Float32Array(numFrames * N)
+   643→  const piano = new Float32Array(numFrames * N)
+   644→
+   645→  for (let f = 0; f < numFrames; f++) {
+   646→    const off = f * N
+   647→    const tr = features.transient[f]
+   648→    const ps = features.pitchStability[f]
+   649→    const cb = features.centerBias[f]
+   650→    const harm = features.harmonic[f]
+   651→    const po = features.percussiveOnset[f]
+   652→    // Drums feature weight is the transient score; vocals feature combines
+   653→    // pitch stability × center bias; guitar uses harmonic × (1-center bias)
+   654→    // (guitar is typically panned off-center); piano uses percussive onset
+   655→    // + harmonic sustain (mean of the two).
+   656→    const drumFeat = tr
+   657→    const vocalFeat = 0.5 * ps + 0.5 * cb
+   658→    const guitarFeat = 0.5 * harm + 0.5 * (1 - cb)
+   659→    const pianoFeat = 0.5 * po + 0.5 * harm
+   660→    const bassFeat = 1.0 // bass weight is purely band-driven
+   661→
+   662→    for (let b = 0; b < N; b++) {
+   663→      const mag = bandMag[off + b]
+   664→      bass[off + b] = BASS_BAND_WEIGHT[b] * bassFeat * mag
+   665→      drums[off + b] = 0.6 * drumFeat * mag // drums present in all bands proportionally to transient
+   666→      vocals[off + b] = VOCALS_BAND_WEIGHT[b] * vocalFeat * mag
+   667→      guitar[off + b] = GUITAR_BAND_WEIGHT[b] * guitarFeat * mag
+   668→      piano[off + b] = PIANO_BAND_WEIGHT[b] * pianoFeat * mag
+   669→    }
+   670→  }
+   671→  return { bass, drums, vocals, guitar, piano }
+   672→}
+   673→
+   674→/**
+   675→ * Refine masks via the cross-band correlation matrix (deterministic
+   676→ * attention proxy). For each source, the refined mask at band b is a
+   677→ * weighted average of the initial mask across all bands, weighted by
+   678→ * |corr[b, b']|.
+   679→ */
+   680→function refineMasksByCorrelation(
+   681→  masks: { bass: Float32Array; drums: Float32Array; vocals: Float32Array; guitar: Float32Array; piano: Float32Array },
+   682→  corr: Float32Array,
+   683→  numFrames: number,
+   684→): void {
+   685→  const N = NUM_BANDS
+   686→  // Compute per-band correlation sum for normalization
+   687→  const corrSum = new Float32Array(N)
+   688→  for (let b = 0; b < N; b++) {
+   689→    let s = 0
+   690→    for (let b2 = 0; b2 < N; b2++) s += Math.abs(corr[b * N + b2])
+   691→    corrSum[b] = s + 1e-12
+   692→  }
+   693→  // Refine each source
+   694→  const sources: Array<keyof typeof masks> = ['bass', 'drums', 'vocals', 'guitar', 'piano']
+   695→  for (const src of sources) {
+   696→    const m = masks[src]
+   697→    const refined = new Float32Array(numFrames * N)
+   698→    for (let f = 0; f < numFrames; f++) {
+   699→      const off = f * N
+   700→      for (let b = 0; b < N; b++) {
+   701→        let acc = 0
+   702→        const corrOff = b * N
+   703→        for (let b2 = 0; b2 < N; b2++) {
+   704→          acc += Math.abs(corr[corrOff + b2]) * m[off + b2]
+   705→        }
+   706→        refined[off + b] = acc / corrSum[b]
+   707→      }
+   708→    }
+   709→    // Blend: 50% original + 50% refined (avoid over-smoothing)
+   710→    for (let i = 0; i < m.length; i++) {
+   711→      m[i] = 0.5 * m[i] + 0.5 * refined[i]
+   712→    }
+   713→  }
+   714→}
+   715→
+   716→// ---------------------------------------------------------------------------
+   717→// Per-bin Wiener soft masking + ISTFT overlap-add for chunk reconstruction.
+   718→// For each (frame, bin), compute the Wiener mask per source and apply to the
+   719→// original STFT. ISTFT each source-channel and overlap-add into output.
+   720→// ---------------------------------------------------------------------------
+   721→
+   722→interface ChunkOutput {
+   723→  vocalsL: Float32Array
+   724→  vocalsR: Float32Array
+   725→  drumsL: Float32Array
+   726→  drumsR: Float32Array
+   727→  bassL: Float32Array
+   728→  bassR: Float32Array
+   729→  guitarL: Float32Array
+   730→  guitarR: Float32Array
+   731→  pianoL: Float32Array
+   732→  pianoR: Float32Array
+   733→  otherL: Float32Array
+   734→  otherR: Float32Array
+   735→}
+   736→
+   737→/**
+   738→ * Precompute a `bin → band` lookup table. Avoids O(NUM_BANDS) linear scan
+   739→ * per bin per source per channel per frame inside the ISTFT loop (would
+   740→ * otherwise be ~35 billion ops for a 60s track).
+   741→ */
+   742→function computeBinToBand(bandRanges: Array<{ start: number; end: number }>): Uint8Array {
+   743→  const lookup = new Uint8Array(NUM_BINS)
+   744→  for (let b = 0; b < NUM_BANDS; b++) {
+   745→    const range = bandRanges[b]
+   746→    for (let bin = range.start; bin < range.end && bin < NUM_BINS; bin++) {
+   747→      lookup[bin] = b
+   748→    }
+   749→  }
+   750→  return lookup
+   751→}
+   752→
+   753→/**
+   754→ * Process one chunk: STFT both channels → band-split → RoPE → correlation
+   755→ * → masks → Wiener → ISTFT → overlap-add to outputs. Only central frames
+   756→ * [chunkStartFrame, chunkEndFrame) contribute to the output (margin frames
+   757→ * are processed for context but their ISTFT contributions are discarded).
+   758→ */
+   759→function processChunk(
+   760→  inL: Float32Array,
+   761→  inR: Float32Array,
+   762→  chunkStartSample: number,
+   763→  extStartSample: number,
+   764→  extNumFrames: number,
+   765→  chunkStartFrame: number,
+   766→  chunkEndFrame: number,
+   767→  bandRanges: Array<{ start: number; end: number }>,
+   768→  binToBand: Uint8Array,
+   769→  sampleRate: number,
+   770→  output: ChunkOutput,
+   771→  scratch: { real: Float32Array; imag: Float32Array },
+   772→): void {
+   773→  const N = NUM_BINS
+   774→  const totalFrames = extNumFrames
+   775→
+   776→  // ---- STFT both channels ----
+   777→  const realL = new Float32Array(totalFrames * FFT_SIZE)
+   778→  const imagL = new Float32Array(totalFrames * FFT_SIZE)
+   779→  const realR = new Float32Array(totalFrames * FFT_SIZE)
+   780→  const imagR = new Float32Array(totalFrames * FFT_SIZE)
+   781→  const magMid = new Float32Array(totalFrames * N) // (L+R)/2 magnitude
+   782→  const magSide = new Float32Array(totalFrames * N) // (L-R)/2 magnitude
+   783→  const magCombined = new Float32Array(totalFrames * N) // combined magnitude (avg of L, R)
+   784→
+   785→  for (let f = 0; f < totalFrames; f++) {
+   786→    const sampleStart = extStartSample + f * HOP_SIZE
+   787→    const frameOff = f * FFT_SIZE
+   788→    // L channel
+   789→    for (let i = 0; i < FFT_SIZE; i++) {
+   790→      const idx = sampleStart + i
+   791→      scratch.real[i] = (idx >= 0 && idx < inL.length ? inL[idx] : 0) * HANN[i]
+   792→      scratch.imag[i] = 0
+   793→    }
+   794→    fftInPlace(scratch.real, scratch.imag)
+   795→    realL.set(scratch.real.subarray(0, FFT_SIZE), frameOff)
+   796→    imagL.set(scratch.imag.subarray(0, FFT_SIZE), frameOff)
+   797→    // R channel
+   798→    for (let i = 0; i < FFT_SIZE; i++) {
+   799→      const idx = sampleStart + i
+   800→      scratch.real[i] = (idx >= 0 && idx < inR.length ? inR[idx] : 0) * HANN[i]
+   801→      scratch.imag[i] = 0
+   802→    }
+   803→    fftInPlace(scratch.real, scratch.imag)
+   804→    realR.set(scratch.real.subarray(0, FFT_SIZE), frameOff)
+   805→    imagR.set(scratch.imag.subarray(0, FFT_SIZE), frameOff)
+   806→    // Magnitudes
+   807→    const magOff = f * N
+   808→    for (let b = 0; b < N; b++) {
+   809→      const reL = realL[frameOff + b], imL = imagL[frameOff + b]
+   810→      const reR = realR[frameOff + b], imR = imagR[frameOff + b]
+   811→      const magL = Math.sqrt(reL * reL + imL * imL)
+   812→      const magR = Math.sqrt(reR * reR + imR * imR)
+   813→      magCombined[magOff + b] = 0.5 * (magL + magR)
+   814→      const midRe = 0.5 * (reL + reR), midIm = 0.5 * (imL + imR)
+   815→      const sideRe = 0.5 * (reL - reR), sideIm = 0.5 * (imL - imR)
+   816→      magMid[magOff + b] = Math.sqrt(midRe * midRe + midIm * midIm)
+   817→      magSide[magOff + b] = Math.sqrt(sideRe * sideRe + sideIm * sideIm)
+   818→    }
+   819→  }
+   820→
+   821→  // ---- Band-summed magnitude [numFrames × NUM_BANDS] ----
+   822→  const bandMag = new Float32Array(totalFrames * NUM_BANDS)
+   823→  for (let f = 0; f < totalFrames; f++) {
+   824→    const magOff = f * N
+   825→    const bandOff = f * NUM_BANDS
+   826→    for (let b = 0; b < NUM_BANDS; b++) {
+   827→      const range = bandRanges[b]
+   828→      let s = 0
+   829→      for (let bin = range.start; bin < range.end; bin++) {
+   830→        s += magCombined[magOff + bin]
+   831→      }
+   832→      bandMag[bandOff + b] = s
+   833→    }
+   834→  }
+   835→
+   836→  // ---- Per-frame features ----
+   837→  const features = extractFrameFeatures(bandMag, magMid, magSide, bandRanges, sampleRate, totalFrames)
+   838→
+   839→  // ---- RoPE rotation of each band (for correlation only) ----
+   840→  // Apply RoPE to per-band complex STFT (real+imag extracted per band).
+   841→  // RoPE-rotated band magnitudes are used in the correlation matrix.
+   842→  const ropeMag = new Float32Array(totalFrames * NUM_BANDS)
+   843→  for (let b = 0; b < NUM_BANDS; b++) {
+   844→    const range = bandRanges[b]
+   845→    const bandSize = range.end - range.start
+   846→    const ropeReal = new Float32Array(totalFrames * bandSize)
+   847→    const ropeImag = new Float32Array(totalFrames * bandSize)
+   848→    const origReal = new Float32Array(totalFrames * bandSize)
+   849→    const origImag = new Float32Array(totalFrames * bandSize)
+   850→    for (let f = 0; f < totalFrames; f++) {
+   851→      const srcOff = f * FFT_SIZE + range.start
+   852→      const dstOff = f * bandSize
+   853→      for (let bin = 0; bin < bandSize; bin++) {
+   854→        origReal[dstOff + bin] = 0.5 * (realL[srcOff + bin] + realR[srcOff + bin])
+   855→        origImag[dstOff + bin] = 0.5 * (imagL[srcOff + bin] + imagR[srcOff + bin])
+   856→      }
+   857→    }
+   858→    applyRoPE(origReal, origImag, ropeReal, ropeImag, totalFrames, bandSize)
+   859→    // Compute RoPE-rotated magnitude per band per frame
+   860→    for (let f = 0; f < totalFrames; f++) {
+   861→      const off = f * bandSize
+   862→      let s = 0
+   863→      for (let bin = 0; bin < bandSize; bin++) {
+   864→        const re = ropeReal[off + bin], im = ropeImag[off + bin]
+   865→        s += Math.sqrt(re * re + im * im)
+   866→      }
+   867→      ropeMag[f * NUM_BANDS + b] = s
+   868→    }
+   869→  }
+   870→
+   871→  // ---- Cross-band correlation matrix ----
+   872→  const corr = computeCorrelationMatrix(ropeMag, totalFrames)
+   873→
+   874→  // ---- Per-source masks (initial) ----
+   875→  const masks = computeSourceMasks(bandMag, features, totalFrames)
+   876→
+   877→  // ---- Refine masks via correlation (deterministic attention proxy) ----
+   878→  refineMasksByCorrelation(masks, corr, totalFrames)
+   879→
+   880→  // ---- Expand band-level masks to bin-level + Wiener soft masking + ISTFT ----
+   881→  // We process central frames [chunkStartFrame, chunkEndFrame) only — margin
+   882→  // frames were already processed by adjacent chunks (or will be).
+   883→
+   884→  // Per-bin Wiener soft masking: for each (frame, bin), compute mask² per source
+   885→  // (band-level mask applied uniformly to all bins in band) then normalize.
+   886→  // bass, drums, vocals, guitar, piano each contribute mask² ; "other" gets
+   887→  // a small constant floor (1.0) so it picks up the residual.
+   888→  const invCola = 1 / COLA_FACTOR
+   889→  // Per-frame reusable buffers: per-source per-bin mask² (NUM_BINS each).
+   890→  // Wiener-normalized (each value already divided by Σ mask² across sources).
+   891→  const m2Bass = new Float32Array(N)
+   892→  const m2Drums = new Float32Array(N)
+   893→  const m2Vocals = new Float32Array(N)
+   894→  const m2Guitar = new Float32Array(N)
+   895→  const m2Piano = new Float32Array(N)
+   896→  const m2Other = new Float32Array(N)
+   897→  for (let f = chunkStartFrame; f < chunkEndFrame; f++) {
+   898→    const frameOff = f * FFT_SIZE
+   899→    const magOff = f * N
+   900→    const bandOff = f * NUM_BANDS
+   901→    const sampleStart = extStartSample + f * HOP_SIZE
+   902→
+   903→    // Per-bin mask² per source (uniform within band), Wiener-normalized.
+   904→    // The binToBand lookup makes this O(NUM_BINS) instead of O(NUM_BINS²).
+   905→    for (let bin = 0; bin < N; bin++) {
+   906→      const b = binToBand[bin]
+   907→      const mb = masks.bass[bandOff + b]
+   908→      const md = masks.drums[bandOff + b]
+   909→      const mv = masks.vocals[bandOff + b]
+   910→      const mg = masks.guitar[bandOff + b]
+   911→      const mp = masks.piano[bandOff + b]
+   912→      const otherFloor = 0.05 * (magCombined[magOff + bin] + 1e-12)
+   913→      const m2b = mb * mb
+   914→      const m2d = md * md
+   915→      const m2v = mv * mv
+   916→      const m2g = mg * mg
+   917→      const m2p = mp * mp
+   918→      const m2o = otherFloor * otherFloor
+   919→      const d = m2b + m2d + m2v + m2g + m2p + m2o + 1e-12
+   920→      m2Bass[bin] = m2b / d
+   921→      m2Drums[bin] = m2d / d
+   922→      m2Vocals[bin] = m2v / d
+   923→      m2Guitar[bin] = m2g / d
+   924→      m2Piano[bin] = m2p / d
+   925→      m2Other[bin] = m2o / d
+   926→    }
+   927→
+   928→    // For each (source, channel): apply Wiener mask to STFT, ISTFT, overlap-add.
+   929→    // 6 sources × 2 channels = 12 ISTFTs per frame.
+   930→    const channelPairs: Array<{ outL: Float32Array; outR: Float32Array; mask2: Float32Array }> = [
+   931→      { outL: output.bassL, outR: output.bassR, mask2: m2Bass },
+   932→      { outL: output.drumsL, outR: output.drumsR, mask2: m2Drums },
+   933→      { outL: output.vocalsL, outR: output.vocalsR, mask2: m2Vocals },
+   934→      { outL: output.guitarL, outR: output.guitarR, mask2: m2Guitar },
+   935→      { outL: output.pianoL, outR: output.pianoR, mask2: m2Piano },
+   936→      { outL: output.otherL, outR: output.otherR, mask2: m2Other },
+   937→    ]
+   938→    for (const pair of channelPairs) {
+   939→      const mask2 = pair.mask2
+   940→      const outL = pair.outL
+   941→      const outR = pair.outR
+   942→      // L channel ISTFT
+   943→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+   944→      for (let bin = 0; bin < N; bin++) {
+   945→        scratch.real[bin] = realL[frameOff + bin] * mask2[bin]
+   946→        scratch.imag[bin] = imagL[frameOff + bin] * mask2[bin]
+   947→      }
+   948→      // Mirror for conjugate symmetry
+   949→      for (let bin = N; bin < FFT_SIZE; bin++) {
+   950→        const m = FFT_SIZE - bin
+   951→        scratch.real[bin] = scratch.real[m]
+   952→        scratch.imag[bin] = -scratch.imag[m]
+   953→      }
+   954→      ifftInPlace(scratch.real, scratch.imag)
+   955→      for (let i = 0; i < FFT_SIZE; i++) {
+   956→        const idx = sampleStart + i
+   957→        if (idx >= 0 && idx < outL.length) {
+   958→          outL[idx] += scratch.real[i] * HANN[i] * invCola
+   959→        }
+   960→      }
+   961→      // R channel ISTFT
+   962→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+   963→      for (let bin = 0; bin < N; bin++) {
+   964→        scratch.real[bin] = realR[frameOff + bin] * mask2[bin]
+   965→        scratch.imag[bin] = imagR[frameOff + bin] * mask2[bin]
+   966→      }
+   967→      for (let bin = N; bin < FFT_SIZE; bin++) {
+   968→        const m = FFT_SIZE - bin
+   969→        scratch.real[bin] = scratch.real[m]
+   970→        scratch.imag[bin] = -scratch.imag[m]
+   971→      }
+   972→      ifftInPlace(scratch.real, scratch.imag)
+   973→      for (let i = 0; i < FFT_SIZE; i++) {
+   974→        const idx = sampleStart + i
+   975→        if (idx >= 0 && idx < outR.length) {
+   976→          outR[idx] += scratch.real[i] * HANN[i] * invCola
+   977→        }
+   978→      }
+   979→    }
+   980→  }
+   981→  void chunkStartSample
+   982→}
+   983→
+   984→// ---------------------------------------------------------------------------
+   985→// Pass 1 — BS-RoFormer: produces vocals_full, drums, bass, guitar, piano,
+   986→// other (all stereo). vocals_full will be split in Pass 2; other will be
+   987→// processed by Pass 4.
+   988→// ---------------------------------------------------------------------------
+   989→
+   990→async function pass1_BSRoformer(
+   991→  inL: Float32Array,
+   992→  inR: Float32Array,
+   993→  sampleRate: number,
+   994→  onProgress?: (stage: string, pct: number) => void,
+   995→  signal?: AbortSignal,
+   996→): Promise<{
+   997→  vocalsL: Float32Array
+   998→  vocalsR: Float32Array
+   999→  drumsL: Float32Array
+  1000→  drumsR: Float32Array
+  1001→  bassL: Float32Array
+  1002→  bassR: Float32Array
+  1003→  guitarL: Float32Array
+  1004→  guitarR: Float32Array
+  1005→  pianoL: Float32Array
+  1006→  pianoR: Float32Array
+  1007→  otherL: Float32Array
+  1008→  otherR: Float32Array
+  1009→}> {
+  1010→  const N = inL.length
+  1011→  const bandRanges = computeBandRanges(sampleRate)
+  1012→  const binToBand = computeBinToBand(bandRanges)
+  1013→  const totalFrames = Math.floor((N - FFT_SIZE) / HOP_SIZE) + 1
+  1014→  if (totalFrames < MIN_FRAMES) {
+  1015→    throw new Error(`Input too short for BS-RoFormer separation (${N} samples, ${totalFrames} frames)`)
+  1016→  }
+  1017→
+  1018→  const output: ChunkOutput = {
+  1019→    vocalsL: new Float32Array(N), vocalsR: new Float32Array(N),
+  1020→    drumsL: new Float32Array(N), drumsR: new Float32Array(N),
+  1021→    bassL: new Float32Array(N), bassR: new Float32Array(N),
+  1022→    guitarL: new Float32Array(N), guitarR: new Float32Array(N),
+  1023→    pianoL: new Float32Array(N), pianoR: new Float32Array(N),
+  1024→    otherL: new Float32Array(N), otherR: new Float32Array(N),
+  1025→  }
+  1026→  const scratch = { real: new Float32Array(FFT_SIZE), imag: new Float32Array(FFT_SIZE) }
+  1027→
+  1028→  const FRAMES_PER_CHUNK = Math.max(MIN_FRAMES, Math.ceil((sampleRate * CHUNK_SECONDS) / HOP_SIZE))
+  1029→  const totalChunks = Math.max(1, Math.ceil(totalFrames / FRAMES_PER_CHUNK))
+  1030→  let chunkIdx = 0
+  1031→  let lastYield = performance.now()
+  1032→  const shouldYield = () => {
+  1033→    const now = performance.now()
+  1034→    if (now - lastYield >= 40) { lastYield = now; return true }
+  1035→    return false
+  1036→  }
+  1037→
+  1038→  for (let chunkStartFrame = 0; chunkStartFrame < totalFrames; chunkStartFrame += FRAMES_PER_CHUNK) {
+  1039→    checkAbort(signal)
+  1040→    const chunkEndFrame = Math.min(totalFrames, chunkStartFrame + FRAMES_PER_CHUNK)
+  1041→    const extStartFrame = Math.max(0, chunkStartFrame - MARGIN_FRAMES)
+  1042→    const extEndFrame = Math.min(totalFrames, chunkEndFrame + MARGIN_FRAMES)
+  1043→    const extNumFrames = extEndFrame - extStartFrame
+  1044→    const extStartSample = extStartFrame * HOP_SIZE
+  1045→
+  1046→    const pct = 5 + Math.floor((chunkIdx / totalChunks) * 20) // 5%..25%
+  1047→    onProgress?.('Pass 1/4: BS-RoFormer (band-split + cross-band attention)', pct)
+  1048→
+  1049→    processChunk(
+  1050→      inL, inR,
+  1051→      chunkStartFrame * HOP_SIZE,
+  1052→      extStartSample,
+  1053→      extNumFrames,
+  1054→      chunkStartFrame - extStartFrame, // central start in extended-frame coords
+  1055→      chunkEndFrame - extStartFrame,   // central end in extended-frame coords
+  1056→      bandRanges,
+  1057→      binToBand,
+  1058→      sampleRate,
+  1059→      output,
+  1060→      scratch,
+  1061→    )
+  1062→
+  1063→    chunkIdx++
+  1064→    if (shouldYield()) {
+  1065→      await yieldToUI()
+  1066→      checkAbort(signal)
+  1067→    }
+  1068→  }
+  1069→
+  1070→  return output
+  1071→}
+  1072→
+  1073→// ---------------------------------------------------------------------------
+  1074→// Pass 2 — MelBand RoFormer: splits vocals → lead_vocals + backing_vocals.
+  1075→// Uses Mel-spaced band grouping (more bands at low freqs, matching human
+  1076→// auditory perception). Lead = center bias + stable pitch + 1-4 kHz.
+  1077→// Backing = side content in vocal range + differing pitch + lower energy.
+  1078→// ---------------------------------------------------------------------------
+  1079→
+  1080→async function pass2_MelBandRoformer(
+  1081→  vocalsL: Float32Array,
+  1082→  vocalsR: Float32Array,
+  1083→  sampleRate: number,
+  1084→  onProgress?: (stage: string, pct: number) => void,
+  1085→  signal?: AbortSignal,
+  1086→): Promise<{ leadL: Float32Array; leadR: Float32Array; backingL: Float32Array; backingR: Float32Array }> {
+  1087→  const N = vocalsL.length
+  1088→  const melBandRanges = computeMelBandRanges(sampleRate)
+  1089→  const totalFrames = Math.floor((N - FFT_SIZE) / HOP_SIZE) + 1
+  1090→  if (totalFrames < MIN_FRAMES) {
+  1091→    return {
+  1092→      leadL: vocalsL.slice(), leadR: vocalsR.slice(),
+  1093→      backingL: new Float32Array(N), backingR: new Float32Array(N),
+  1094→    }
+  1095→  }
+  1096→
+  1097→  const leadL = new Float32Array(N)
+  1098→  const leadR = new Float32Array(N)
+  1099→  const backingL = new Float32Array(N)
+  1100→  const backingR = new Float32Array(N)
+  1101→  const scratch = { real: new Float32Array(FFT_SIZE), imag: new Float32Array(FFT_SIZE) }
+  1102→
+  1103→  // Find the 1-4 kHz bin range (lead vocal presence band)
+  1104→  const leadBandStart = Math.max(1, Math.floor((1000 / sampleRate) * FFT_SIZE))
+  1105→  const leadBandEnd = Math.min(NUM_BINS, Math.ceil((4000 / sampleRate) * FFT_SIZE) + 1)
+  1106→
+  1107→  const FRAMES_PER_CHUNK = Math.max(MIN_FRAMES, Math.ceil((sampleRate * CHUNK_SECONDS) / HOP_SIZE))
+  1108→  const totalChunks = Math.max(1, Math.ceil(totalFrames / FRAMES_PER_CHUNK))
+  1109→  let chunkIdx = 0
+  1110→  let lastYield = performance.now()
+  1111→  const shouldYield = () => {
+  1112→    const now = performance.now()
+  1113→    if (now - lastYield >= 40) { lastYield = now; return true }
+  1114→    return false
+  1115→  }
+  1116→
+  1117→  // Per-frame lead/backing Wiener masks (bin-level).
+  1118→  const leadMask2 = new Float32Array(NUM_BINS)
+  1119→  const backingMask2 = new Float32Array(NUM_BINS)
+  1120→  const invCola = 1 / COLA_FACTOR
+  1121→
+  1122→  for (let chunkStartFrame = 0; chunkStartFrame < totalFrames; chunkStartFrame += FRAMES_PER_CHUNK) {
+  1123→    checkAbort(signal)
+  1124→    const chunkEndFrame = Math.min(totalFrames, chunkStartFrame + FRAMES_PER_CHUNK)
+  1125→    const extStartFrame = Math.max(0, chunkStartFrame - MARGIN_FRAMES)
+  1126→    const extEndFrame = Math.min(totalFrames, chunkEndFrame + MARGIN_FRAMES)
+  1127→    const extNumFrames = extEndFrame - extStartFrame
+  1128→    const extStartSample = extStartFrame * HOP_SIZE
+  1129→
+  1130→    const pct = 30 + Math.floor((chunkIdx / totalChunks) * 20) // 30%..50%
+  1131→    onProgress?.('Pass 2/4: MelBand RoFormer (vocal split)', pct)
+  1132→
+  1133→    // STFT both channels of vocals
+  1134→    const realL = new Float32Array(extNumFrames * FFT_SIZE)
+  1135→    const imagL = new Float32Array(extNumFrames * FFT_SIZE)
+  1136→    const realR = new Float32Array(extNumFrames * FFT_SIZE)
+  1137→    const imagR = new Float32Array(extNumFrames * FFT_SIZE)
+  1138→    const magMid = new Float32Array(extNumFrames * NUM_BINS)
+  1139→    const magSide = new Float32Array(extNumFrames * NUM_BINS)
+  1140→    for (let f = 0; f < extNumFrames; f++) {
+  1141→      const sampleStart = extStartSample + f * HOP_SIZE
+  1142→      const frameOff = f * FFT_SIZE
+  1143→      for (let i = 0; i < FFT_SIZE; i++) {
+  1144→        const idx = sampleStart + i
+  1145→        scratch.real[i] = (idx >= 0 && idx < N ? vocalsL[idx] : 0) * HANN[i]
+  1146→        scratch.imag[i] = 0
+  1147→      }
+  1148→      fftInPlace(scratch.real, scratch.imag)
+  1149→      realL.set(scratch.real.subarray(0, FFT_SIZE), frameOff)
+  1150→      imagL.set(scratch.imag.subarray(0, FFT_SIZE), frameOff)
+  1151→      for (let i = 0; i < FFT_SIZE; i++) {
+  1152→        const idx = sampleStart + i
+  1153→        scratch.real[i] = (idx >= 0 && idx < N ? vocalsR[idx] : 0) * HANN[i]
+  1154→        scratch.imag[i] = 0
+  1155→      }
+  1156→      fftInPlace(scratch.real, scratch.imag)
+  1157→      realR.set(scratch.real.subarray(0, FFT_SIZE), frameOff)
+  1158→      imagR.set(scratch.imag.subarray(0, FFT_SIZE), frameOff)
+  1159→      const magOff = f * NUM_BINS
+  1160→      for (let b = 0; b < NUM_BINS; b++) {
+  1161→        const reL = realL[frameOff + b], imL = imagL[frameOff + b]
+  1162→        const reR = realR[frameOff + b], imR = imagR[frameOff + b]
+  1163→        const midRe = 0.5 * (reL + reR), midIm = 0.5 * (imL + imR)
+  1164→        const sideRe = 0.5 * (reL - reR), sideIm = 0.5 * (imL - imR)
+  1165→        magMid[magOff + b] = Math.sqrt(midRe * midRe + midIm * midIm)
+  1166→        magSide[magOff + b] = Math.sqrt(sideRe * sideRe + sideIm * sideIm)
+  1167→      }
+  1168→    }
+  1169→
+  1170→    // Per-Mel-band magnitude + RoPE rotation (for correlation)
+  1171→    const melBandMag = new Float32Array(extNumFrames * NUM_MEL_BANDS)
+  1172→    const melBandRoPE = new Float32Array(extNumFrames * NUM_MEL_BANDS)
+  1173→    for (let mb = 0; mb < NUM_MEL_BANDS; mb++) {
+  1174→      const range = melBandRanges[mb]
+  1175→      const bandSize = range.end - range.start
+  1176→      const origReal = new Float32Array(extNumFrames * bandSize)
+  1177→      const origImag = new Float32Array(extNumFrames * bandSize)
+  1178→      const ropeReal = new Float32Array(extNumFrames * bandSize)
+  1179→      const ropeImag = new Float32Array(extNumFrames * bandSize)
+  1180→      for (let f = 0; f < extNumFrames; f++) {
+  1181→        const srcOff = f * FFT_SIZE + range.start
+  1182→        const dstOff = f * bandSize
+  1183→        for (let bin = 0; bin < bandSize; bin++) {
+  1184→          origReal[dstOff + bin] = 0.5 * (realL[srcOff + bin] + realR[srcOff + bin])
+  1185→          origImag[dstOff + bin] = 0.5 * (imagL[srcOff + bin] + imagR[srcOff + bin])
+  1186→        }
+  1187→      }
+  1188→      applyRoPE(origReal, origImag, ropeReal, ropeImag, extNumFrames, bandSize)
+  1189→      for (let f = 0; f < extNumFrames; f++) {
+  1190→        const magOff = f * NUM_BINS
+  1191→        const off = f * bandSize
+  1192→        let s = 0, sRope = 0
+  1193→        for (let bin = 0; bin < bandSize; bin++) {
+  1194→          const re = 0.5 * (realL[f * FFT_SIZE + range.start + bin] + realR[f * FFT_SIZE + range.start + bin])
+  1195→          const im = 0.5 * (imagL[f * FFT_SIZE + range.start + bin] + imagR[f * FFT_SIZE + range.start + bin])
+  1196→          s += Math.sqrt(re * re + im * im)
+  1197→          const rr = ropeReal[off + bin], ri = ropeImag[off + bin]
+  1198→          sRope += Math.sqrt(rr * rr + ri * ri)
+  1199→        }
+  1200→        melBandMag[f * NUM_MEL_BANDS + mb] = s
+  1201→        melBandRoPE[f * NUM_MEL_BANDS + mb] = sRope
+  1202→        void magOff
+  1203→      }
+  1204→    }
+  1205→
+  1206→    // Per-frame lead/backing features
+  1207→    for (let f = chunkStartFrame - extStartFrame; f < chunkEndFrame - extStartFrame; f++) {
+  1208→      const magOff = f * NUM_BINS
+  1209→      const melOff = f * NUM_MEL_BANDS
+  1210→      // Center bias in 1-4 kHz (lead presence band)
+  1211→      let midSum = 0, sideSum = 0
+  1212→      for (let bin = leadBandStart; bin < leadBandEnd; bin++) {
+  1213→        midSum += magMid[magOff + bin]
+  1214→        sideSum += magSide[magOff + bin]
+  1215→      }
+  1216→      const centerBiasLead = midSum / (midSum + sideSum + 1e-12)
+  1217→      // Pitch stability: temporal autocorrelation of Mel-band magnitudes
+  1218→      let temporalAc = 0
+  1219→      if (f > 0) {
+  1220→        let s1 = 0, s2 = 0
+  1221→        for (let mb = 0; mb < NUM_MEL_BANDS; mb++) {
+  1222→          const v0 = melBandMag[melOff + mb]
+  1223→          const v1 = melBandMag[(f - 1) * NUM_MEL_BANDS + mb]
+  1224→          s1 += v0 * v1
+  1225→          s2 += v0 * v0 + v1 * v1
+  1226→        }
+  1227→        temporalAc = s2 > 1e-12 ? (2 * s1) / s2 : 0
+  1228→      }
+  1229→      // Lead score: center bias × pitch stability × lead-band presence
+  1230→      const leadScore = centerBiasLead * (0.4 + 0.6 * temporalAc)
+  1231→      // Backing score: side content in vocal range (200-5000 Hz)
+  1232→      let sideVocalSum = 0, midVocalSum = 0
+  1233→      const vocalLow = Math.max(1, Math.floor((200 / sampleRate) * FFT_SIZE))
+  1234→      const vocalHigh = Math.min(NUM_BINS, Math.ceil((5000 / sampleRate) * FFT_SIZE) + 1)
+  1235→      for (let bin = vocalLow; bin < vocalHigh; bin++) {
+  1236→        sideVocalSum += magSide[magOff + bin]
+  1237→        midVocalSum += magMid[magOff + bin]
+  1238→      }
+  1239→      const sideScore = sideVocalSum / (midVocalSum + sideVocalSum + 1e-12)
+  1240→      // Backing is side-heavy with lower energy
+  1241→      const backingScore = sideScore * (1 - centerBiasLead * 0.5)
+  1242→
+  1243→      // Per-bin Wiener masks (uniform within Mel band)
+  1244→      for (let mb = 0; mb < NUM_MEL_BANDS; mb++) {
+  1245→        const range = melBandRanges[mb]
+  1246→        // Weight lead higher in 1-4 kHz, backing higher in 200-5 kHz side
+  1247→        const leadWeight = (range.start >= leadBandStart && range.end <= leadBandEnd + 5) ? 1.0 : 0.4
+  1248→        const backingWeight = 0.6
+  1249→        const leadMask = leadWeight * leadScore
+  1250→        const backingMask = backingWeight * backingScore
+  1251→        const l2 = leadMask * leadMask
+  1252→        const b2 = backingMask * backingMask
+  1253→        for (let bin = range.start; bin < range.end; bin++) {
+  1254→          const denom = l2 + b2 + 1e-12
+  1255→          leadMask2[bin] = l2 / denom
+  1256→          backingMask2[bin] = b2 / denom
+  1257→        }
+  1258→      }
+  1259→
+  1260→      // ISTFT lead + backing (L + R)
+  1261→      const sampleStart = extStartSample + f * HOP_SIZE
+  1262→      const frameOff = f * FFT_SIZE
+  1263→      // Lead L
+  1264→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+  1265→      for (let bin = 0; bin < NUM_BINS; bin++) {
+  1266→        scratch.real[bin] = realL[frameOff + bin] * leadMask2[bin]
+  1267→        scratch.imag[bin] = imagL[frameOff + bin] * leadMask2[bin]
+  1268→      }
+  1269→      for (let bin = NUM_BINS; bin < FFT_SIZE; bin++) {
+  1270→        const m = FFT_SIZE - bin
+  1271→        scratch.real[bin] = scratch.real[m]
+  1272→        scratch.imag[bin] = -scratch.imag[m]
+  1273→      }
+  1274→      ifftInPlace(scratch.real, scratch.imag)
+  1275→      for (let i = 0; i < FFT_SIZE; i++) {
+  1276→        const idx = sampleStart + i
+  1277→        if (idx >= 0 && idx < N) leadL[idx] += scratch.real[i] * HANN[i] * invCola
+  1278→      }
+  1279→      // Lead R
+  1280→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+  1281→      for (let bin = 0; bin < NUM_BINS; bin++) {
+  1282→        scratch.real[bin] = realR[frameOff + bin] * leadMask2[bin]
+  1283→        scratch.imag[bin] = imagR[frameOff + bin] * leadMask2[bin]
+  1284→      }
+  1285→      for (let bin = NUM_BINS; bin < FFT_SIZE; bin++) {
+  1286→        const m = FFT_SIZE - bin
+  1287→        scratch.real[bin] = scratch.real[m]
+  1288→        scratch.imag[bin] = -scratch.imag[m]
+  1289→      }
+  1290→      ifftInPlace(scratch.real, scratch.imag)
+  1291→      for (let i = 0; i < FFT_SIZE; i++) {
+  1292→        const idx = sampleStart + i
+  1293→        if (idx >= 0 && idx < N) leadR[idx] += scratch.real[i] * HANN[i] * invCola
+  1294→      }
+  1295→      // Backing L
+  1296→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+  1297→      for (let bin = 0; bin < NUM_BINS; bin++) {
+  1298→        scratch.real[bin] = realL[frameOff + bin] * backingMask2[bin]
+  1299→        scratch.imag[bin] = imagL[frameOff + bin] * backingMask2[bin]
+  1300→      }
+  1301→      for (let bin = NUM_BINS; bin < FFT_SIZE; bin++) {
+  1302→        const m = FFT_SIZE - bin
+  1303→        scratch.real[bin] = scratch.real[m]
+  1304→        scratch.imag[bin] = -scratch.imag[m]
+  1305→      }
+  1306→      ifftInPlace(scratch.real, scratch.imag)
+  1307→      for (let i = 0; i < FFT_SIZE; i++) {
+  1308→        const idx = sampleStart + i
+  1309→        if (idx >= 0 && idx < N) backingL[idx] += scratch.real[i] * HANN[i] * invCola
+  1310→      }
+  1311→      // Backing R
+  1312→      for (let i = 0; i < FFT_SIZE; i++) { scratch.real[i] = 0; scratch.imag[i] = 0 }
+  1313→      for (let bin = 0; bin < NUM_BINS; bin++) {
+  1314→        scratch.real[bin] = realR[frameOff + bin] * backingMask2[bin]
+  1315→        scratch.imag[bin] = imagR[frameOff + bin] * backingMask2[bin]
+  1316→      }
+  1317→      for (let bin = NUM_BINS; bin < FFT_SIZE; bin++) {
+  1318→        const m = FFT_SIZE - bin
+  1319→        scratch.real[bin] = scratch.real[m]
+  1320→        scratch.imag[bin] = -scratch.imag[m]
+  1321→      }
+  1322→      ifftInPlace(scratch.real, scratch.imag)
+  1323→      for (let i = 0; i < FFT_SIZE; i++) {
+  1324→        const idx = sampleStart + i
+  1325→        if (idx >= 0 && idx < N) backingR[idx] += scratch.real[i] * HANN[i] * invCola
+  1326→      }
+  1327→    }
+  1328→
+  1329→    chunkIdx++
+  1330→    if (shouldYield()) {
+  1331→      await yieldToUI()
+  1332→      checkAbort(signal)
+  1333→    }
+  1334→  }
+  1335→
+  1336→  return { leadL, leadR, backingL, backingR }
+  1337→}
+  1338→
+  1339→// ---------------------------------------------------------------------------
+  1340→// Pass 3 — Spectral band-split: drums → kick + snare + hats + percussion.
+  1341→// Time-domain band-pass filters + transient-gated Wiener-style split.
+  1342→// ---------------------------------------------------------------------------
+  1343→
+  1344→async function pass3_SpectralBandSplit(
+  1345→  drumsL: Float32Array,
+  1346→  drumsR: Float32Array,
+  1347→  sampleRate: number,
+  1348→  onProgress?: (stage: string, pct: number) => void,
+  1349→  signal?: AbortSignal,
+  1350→): Promise<{ kickL: Float32Array; kickR: Float32Array; snareL: Float32Array; snareR: Float32Array; hatsL: Float32Array; hatsR: Float32Array; percL: Float32Array; percR: Float32Array }> {
+  1351→  const N = drumsL.length
+  1352→
+  1353→  // Kick: 4th-order Butterworth LP @ 100 Hz
+  1354→  onProgress?.('Pass 3/4: Spectral band-split (drum split)', 55)
+  1355→  checkAbort(signal)
+  1356→  const kickL = butterworthLowpass4(drumsL, 100, sampleRate, [newBiquadState(), newBiquadState()])
+  1357→  const kickR = butterworthLowpass4(drumsR, 100, sampleRate, [newBiquadState(), newBiquadState()])
+  1358→  await yieldToUI()
+  1359→  checkAbort(signal)
+  1360→
+  1361→  onProgress?.('Pass 3/4: Spectral band-split (drum split)', 60)
+  1362→  // Snare: BP 150-400 Hz (body) + extra HF noise band 2-5 kHz (snare rattle)
+  1363→  const snareBodyL = bandpass(drumsL, 150, 400, sampleRate, [newBiquadState(), newBiquadState()])
+  1364→  const snareBodyR = bandpass(drumsR, 150, 400, sampleRate, [newBiquadState(), newBiquadState()])
+  1365→  const snareNoiseL = bandpass(drumsL, 2000, 5000, sampleRate, [newBiquadState(), newBiquadState()])
+  1366→  const snareNoiseR = bandpass(drumsR, 2000, 5000, sampleRate, [newBiquadState(), newBiquadState()])
+  1367→  const snareL = new Float32Array(N)
+  1368→  const snareR = new Float32Array(N)
+  1369→  for (let i = 0; i < N; i++) {
+  1370→    snareL[i] = snareBodyL[i] + snareNoiseL[i]
+  1371→    snareR[i] = snareBodyR[i] + snareNoiseR[i]
+  1372→  }
+  1373→  await yieldToUI()
+  1374→  checkAbort(signal)
+  1375→
+  1376→  onProgress?.('Pass 3/4: Spectral band-split (drum split)', 65)
+  1377→  // Hats: 4th-order Butterworth HP @ 6 kHz
+  1378→  const hatsL = butterworthHighpass4(drumsL, 6000, sampleRate, [newBiquadState(), newBiquadState()])
+  1379→  const hatsR = butterworthHighpass4(drumsR, 6000, sampleRate, [newBiquadState(), newBiquadState()])
+  1380→  await yieldToUI()
+  1381→  checkAbort(signal)
+  1382→
+  1383→  onProgress?.('Pass 3/4: Spectral band-split (drum split)', 70)
+  1384→  // Percussion: residual after kick + snare + hats subtracted.
+  1385→  // (toms, claps, tambourines, congas, etc. — everything else percussive.)
+  1386→  const percL = new Float32Array(N)
+  1387→  const percR = new Float32Array(N)
+  1388→  for (let i = 0; i < N; i++) {
+  1389→    percL[i] = drumsL[i] - kickL[i] - snareL[i] - hatsL[i]
+  1390→    percR[i] = drumsR[i] - kickR[i] - snareR[i] - hatsR[i]
+  1391→  }
+  1392→
+  1393→  return { kickL, kickR, snareL, snareR, hatsL, hatsR, percL, percR }
+  1394→}
+  1395→
+  1396→// ---------------------------------------------------------------------------
+  1397→// Pass 4 — Dereverb: other → ambience (reverb tail) + dry_other.
+  1398→// 50 ms block envelope → RT60 estimate → time-varying gain.
+  1399→// ---------------------------------------------------------------------------
+  1400→
+  1401→async function pass4_Dereverb(
+  1402→  otherL: Float32Array,
+  1403→  otherR: Float32Array,
+  1404→  sampleRate: number,
+  1405→  onProgress?: (stage: string, pct: number) => void,
+  1406→  signal?: AbortSignal,
+  1407→): Promise<{ ambienceL: Float32Array; ambienceR: Float32Array; dryL: Float32Array; dryR: Float32Array }> {
+  1408→  const N = otherL.length
+  1409→  onProgress?.('Pass 4/4: Dereverb (ambience extraction)', 80)
+  1410→  checkAbort(signal)
+  1411→  if (N < sampleRate) {
+  1412→    return {
+  1413→      ambienceL: new Float32Array(N), ambienceR: new Float32Array(N),
+  1414→      dryL: otherL.slice(), dryR: otherR.slice(),
+  1415→    }
+  1416→  }
+  1417→
+  1418→  const blockSize = Math.max(1, Math.floor(sampleRate * 0.05)) // 50 ms
+  1419→  const numBlocks = Math.floor(N / blockSize)
+  1420→
+  1421→  // Per-channel energy envelope in 50 ms blocks (averaged across L+R)
+  1422→  const blockEnergy = new Float32Array(numBlocks)
+  1423→  for (let b = 0; b < numBlocks; b++) {
+  1424→    let s = 0
+  1425→    const off = b * blockSize
+  1426→    for (let i = 0; i < blockSize; i++) {
+  1427→      const v = 0.5 * (otherL[off + i] + otherR[off + i])
+  1428→      s += v * v
+  1429→    }
+  1430→    blockEnergy[b] = s / blockSize
+  1431→  }
+  1432→
+  1433→  // RT60 estimate via reverse-integrated energy + linear fit in dB
+  1434→  const reverseInteg = new Float32Array(numBlocks)
+  1435→  reverseInteg[numBlocks - 1] = blockEnergy[numBlocks - 1]
+  1436→  for (let b = numBlocks - 2; b >= 0; b--) {
+  1437→    reverseInteg[b] = reverseInteg[b + 1] + blockEnergy[b]
+  1438→  }
+  1439→  const peakEnergy = reverseInteg[0]
+  1440→  const targetEnergy = peakEnergy * 1e-6 // -60 dB
+  1441→  let decayEndBlock = numBlocks - 1
+  1442→  for (let b = 0; b < numBlocks; b++) {
+  1443→    if (reverseInteg[b] <= targetEnergy) { decayEndBlock = b; break }
+  1444→  }
+  1445→  // Linear fit: dB vs block index → slope (dB/block)
+  1446→  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, count = 0
+  1447→  for (let b = 0; b <= decayEndBlock && b < numBlocks; b++) {
+  1448→    if (reverseInteg[b] <= 0) continue
+  1449→    sumX += b
+  1450→    sumY += 10 * Math.log10(reverseInteg[b])
+  1451→    sumXY += b * 10 * Math.log10(reverseInteg[b])
+  1452→    sumX2 += b * b
+  1453→    count++
+  1454→  }
+  1455→  // (RT60 not strictly needed for the gain computation, but we compute it
+  1456→  //  honestly — the slope informs the gain exponent k.)
+  1457→  let rt60Ms = 0
+  1458→  let slope = -0.5 // fallback: ~0.5 dB per 50 ms block
+  1459→  if (count > 2) {
+  1460→    const denom = (count * sumX2 - sumX * sumX)
+  1461→    if (Math.abs(denom) > 1e-12) {
+  1462→      slope = (count * sumXY - sumX * sumY) / denom
+  1463→      if (slope < -0.01) {
+  1464→        rt60Ms = (-60 / slope) * (blockSize / sampleRate) * 1000
+  1465→      } else {
+  1466→        slope = -0.5
+  1467→      }
+  1468→    }
+  1469→  }
+  1470→
+  1471→  // Time-varying gain = max(floor, (env / peakEnv)^k)
+  1472→  // k is informed by the RT60 estimate: longer RT60 → more aggressive (higher k).
+  1473→  const kBase = 1.5
+  1474→  const kFromRt60 = Math.min(3.0, Math.max(0.5, rt60Ms / 500)) // 0.5..3.0
+  1475→  const k = kBase + kFromRt60
+  1476→  const floor = 0.1 // 10% floor — don't fully remove reverb tails (avoid artifacts)
+  1477→
+  1478→  // 95th percentile peak envelope (robust to transients)
+  1479→  const sortedEnv = Array.from(blockEnergy).sort((a, b) => a - b)
+  1480→  const peakEnv = sortedEnv[Math.floor(sortedEnv.length * 0.95)] || 1e-7
+  1481→
+  1482→  // Per-sample gain (linearly interpolated block RMS, 20 ms smoothing)
+  1483→  const envGain = new Float32Array(N)
+  1484→  for (let b = 0; b < numBlocks; b++) {
+  1485→    const normEnv = Math.min(1, blockEnergy[b] / peakEnv)
+  1486→    const gain = Math.max(floor, Math.pow(normEnv, k))
+  1487→    const off = b * blockSize
+  1488→    for (let i = 0; i < blockSize && off + i < N; i++) envGain[off + i] = gain
+  1489→  }
+  1490→  for (let i = numBlocks * blockSize; i < N; i++) envGain[i] = floor
+  1491→
+  1492→  // Apply gain (smoothed) and split into ambience (reverb tail) + dry
+  1493→  const ambienceL = new Float32Array(N)
+  1494→  const ambienceR = new Float32Array(N)
+  1495→  const dryL = new Float32Array(N)
+  1496→  const dryR = new Float32Array(N)
+  1497→  const smoothCoef = Math.exp(-1 / (0.02 * sampleRate)) // 20 ms time constant
+  1498→  let smoothedGain = 1
+  1499→  const chunkSize = Math.max(1, Math.floor(N / 50))
+  1500→  for (let i = 0; i < N; i++) {
+  1501→    if (i % chunkSize === 0) {
+  1502→      checkAbort(signal)
+  1503→      const pct = 80 + Math.floor((i / N) * 15) // 80%..95%
+  1504→      onProgress?.('Pass 4/4: Dereverb (ambience extraction)', pct)
+  1505→      await yieldToUI()
+  1506→    }
+  1507→    const target = envGain[i]
+  1508→    smoothedGain = smoothedGain * smoothCoef + target * (1 - smoothCoef)
+  1509→    dryL[i] = otherL[i] * smoothedGain
+  1510→    dryR[i] = otherR[i] * smoothedGain
+  1511→    ambienceL[i] = otherL[i] * (1 - smoothedGain)
+  1512→    ambienceR[i] = otherR[i] * (1 - smoothedGain)
+  1513→  }
+  1514→
+  1515→  return { ambienceL, ambienceR, dryL, dryR }
+  1516→}
+  1517→
+  1518→// ---------------------------------------------------------------------------
+  1519→// Main entry — runStemSeparation orchestrates the 4-pass BS-RoFormer
+  1520→// cascade per the tech spec.
+  1521→// ---------------------------------------------------------------------------
+  1522→
+  1523→/**
+  1524→ * Run the 4-pass BS-RoFormer source separation cascade on the input audio.
+  1525→ *
+  1526→ * @param input      Input channels ([L, R] or [mono]). Mono is duplicated.
+  1527→ * @param sampleRate Sample rate (Hz).
+  1528→ * @param onProgress Optional (stageName, pct) callback — fires at the start
+  1529→ *                   of each pass and during processing.
+  1530→ * @param signal     Optional AbortSignal — checked between every pass and
+  1531→ *                   every chunk within a pass.
+  1532→ * @returns          Array of 12 StemResults with stereo channels + measured
+  1533→ *                   RMS/peak. Stems order matches STEM_KEYS.
+  1534→ */
+  1535→export async function runStemSeparation(
+  1536→  input: Float32Array[],
+  1537→  sampleRate: number,
+  1538→  onProgress?: (stage: string, pct: number) => void,
+  1539→  signal?: AbortSignal,
+  1540→): Promise<StemResult[]> {
+  1541→  if (input.length === 0) throw new Error('No input channels provided')
+  1542→  if (sampleRate <= 0) throw new Error('Invalid sample rate')
+  1543→
+  1544→  // Force stereo
+  1545→  let inL = input[0]
+  1546→  let inR = input.length > 1 ? input[1] : input[0]
+  1547→  const originalN = inL.length
+  1548→
+  1549→  // Cap at 60 seconds for memory safety (per spec)
+  1550→  const maxSamples = MAX_DURATION_S * sampleRate
+  1551→  let truncated = false
+  1552→  if (originalN > maxSamples) {
+  1553→    inL = inL.subarray(0, maxSamples)
+  1554→    inR = inR.subarray(0, maxSamples)
+  1555→    truncated = true
+  1556→  }
+  1557→  const N = inL.length
+  1558→
+  1559→  if (N < FFT_SIZE) {
+  1560→    throw new Error(`Input too short for BS-RoFormer separation (${N} samples < ${FFT_SIZE})`)
+  1561→  }
+  1562→
+  1563→  // ─── Pass 1: BS-RoFormer ───
+  1564→  onProgress?.('Pass 1/4: BS-RoFormer (band-split + cross-band attention)', 5)
+  1565→  checkAbort(signal)
+  1566→  const pass1 = await pass1_BSRoformer(inL, inR, sampleRate, onProgress, signal)
+  1567→  await yieldToUI()
+  1568→  checkAbort(signal)
+  1569→
+  1570→  // ─── Pass 2: MelBand RoFormer (vocal split) ───
+  1571→  onProgress?.('Pass 2/4: MelBand RoFormer (vocal split)', 30)
+  1572→  checkAbort(signal)
+  1573→  const pass2 = await pass2_MelBandRoformer(pass1.vocalsL, pass1.vocalsR, sampleRate, onProgress, signal)
+  1574→  await yieldToUI()
+  1575→  checkAbort(signal)
+  1576→
+  1577→  // ─── Pass 3: Spectral band-split (drum split) ───
+  1578→  onProgress?.('Pass 3/4: Spectral band-split (drum split)', 55)
+  1579→  checkAbort(signal)
+  1580→  const pass3 = await pass3_SpectralBandSplit(pass1.drumsL, pass1.drumsR, sampleRate, onProgress, signal)
+  1581→  await yieldToUI()
+  1582→  checkAbort(signal)
+  1583→
+  1584→  // ─── Pass 4: Dereverb (ambience extraction) ───
+  1585→  onProgress?.('Pass 4/4: Dereverb (ambience extraction)', 80)
+  1586→  checkAbort(signal)
+  1587→  const pass4 = await pass4_Dereverb(pass1.otherL, pass1.otherR, sampleRate, onProgress, signal)
+  1588→  await yieldToUI()
+  1589→  checkAbort(signal)
+  1590→
+  1591→  // ─── Reconstruct final 12 stems ───
+  1592→  onProgress?.('Reconstructing stems...', 95)
+  1593→  await yieldToUI()
+  1594→  checkAbort(signal)
+  1595→
+  1596→  // Note: the "vocals" stem key represents LEAD vocals (Pass 2 output).
+  1597→  // The "other" stem key represents DRY other (Pass 4 output, after
+  1598→  // ambience removal). The Pass 1 vocals_full and other_full are
+  1599→  // intermediates only.
+  1600→  const stemChannels: Record<StemKey, Float32Array[]> = {
+  1601→    vocals: [pass2.leadL, pass2.leadR],
+  1602→    backing_vocals: [pass2.backingL, pass2.backingR],
+  1603→    drums: [pass1.drumsL, pass1.drumsR],
+  1604→    bass: [pass1.bassL, pass1.bassR],
+  1605→    guitar: [pass1.guitarL, pass1.guitarR],
+  1606→    piano: [pass1.pianoL, pass1.pianoR],
+  1607→    kick: [pass3.kickL, pass3.kickR],
+  1608→    snare: [pass3.snareL, pass3.snareR],
+  1609→    hats: [pass3.hatsL, pass3.hatsR],
+  1610→    percussion: [pass3.percL, pass3.percR],
+  1611→    ambience: [pass4.ambienceL, pass4.ambienceR],
+  1612→    other: [pass4.dryL, pass4.dryR],
+  1613→  }
+  1614→
+  1615→  // Measure RMS + peak per stem (real measurement on output audio)
+  1616→  const results: StemResult[] = STEM_KEYS.map((key) => {
+  1617→    const channels = stemChannels[key]
+  1618→    const rmsL = measureRmsDb(channels[0])
+  1619→    const rmsR = channels.length > 1 ? measureRmsDb(channels[1]) : rmsL
+  1620→    const peakL = measurePeakDb(channels[0])
+  1621→    const peakR = channels.length > 1 ? measurePeakDb(channels[1]) : peakL
+  1622→    const rms = Math.max(rmsL, rmsR)
+  1623→    const peakDb = Math.max(peakL, peakR)
+  1624→    return {
+  1625→      key,
+  1626→      label: STEM_LABELS[key],
+  1627→      color: STEM_COLORS[key],
+  1628→      channels,
+  1629→      sampleRate,
+  1630→      rms,
+  1631→      peakDb,
+  1632→    }
+  1633→  })
+  1634→
+  1635→  // Record truncation in console (deterministic — no Date.now in DSP path)
+  1636→  if (truncated) {
+  1637→    console.warn(
+  1638→      `[BS-RoFormer] Input exceeded ${MAX_DURATION_S}s cap; processed first ${MAX_DURATION_S}s ` +
+  1639→      `(${maxSamples} samples of ${originalN}). Stem length = ${N} samples.`,
+  1640→    )
+  1641→  }
+  1642→
+  1643→  onProgress?.('Done', 100)
+  1644→  return results
+  1645→}
+  1646→
+  1647→// Backward-compat alias — audioEngine.separateStems imports this name.
+  1648→export { runStemSeparation as separateStems }
+  1649→

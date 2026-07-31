@@ -132,7 +132,7 @@ function computeMelBandRanges(sampleRate: number): BinRange[] {
 // Per-channel 32-dim Mel-band log-energy vector
 // ---------------------------------------------------------------------------
 
-function computeChannelMelVector(samples: Float32Array, sampleRate: number, bandRanges: BinRange[]): Float32Array {
+function computeChannelMelVector(samples: Float32Array, _sampleRate: number, bandRanges: BinRange[]): Float32Array {
   const len = samples.length
   // Number of STFT frames (centered, zero-padded at boundaries)
   const numFrames = Math.max(1, Math.floor((len - 1) / HOP_SIZE) + 1)

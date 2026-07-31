@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, memo } from 'react'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import { useSessionStore } from '@/lib/rain/store'
 import { LUFS_SCALE } from '@/lib/rain/constants'
@@ -72,7 +72,7 @@ const REFERENCE_TARGETS = [
 // Component
 // ---------------------------------------------------------------------------
 
-export function LufsHistoryGraph({ height = 120 }: LufsHistoryGraphProps) {
+export const LufsHistoryGraph = memo(function LufsHistoryGraph({ height = 120 }: LufsHistoryGraphProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const rafRef = useRef<number | null>(null)
   const lufsDataRef = useRef<LufsDataPoint[]>([])
@@ -317,4 +317,4 @@ export function LufsHistoryGraph({ height = 120 }: LufsHistoryGraphProps) {
       />
     </div>
   )
-}
+})

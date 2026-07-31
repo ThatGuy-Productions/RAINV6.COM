@@ -175,6 +175,7 @@ export function UploadZone() {
           <button
             onClick={() => { inputRef.current?.click() }}
             className="text-xs px-2.5 py-1.5 rounded-md border border-rain-border hover:border-rain-accent/50 transition-colors"
+            aria-label="Replace audio file"
           >
             Replace
           </button>
@@ -220,6 +221,7 @@ export function UploadZone() {
       }`}
       role="button"
       tabIndex={0}
+      aria-label="Upload audio file"
       onKeyDown={(e) => { if (e.key === 'Enter') inputRef.current?.click() }}
     >
       <input

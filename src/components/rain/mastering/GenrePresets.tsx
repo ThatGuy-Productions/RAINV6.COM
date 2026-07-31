@@ -1,10 +1,10 @@
 'use client'
 
 import { useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { RotateCcw } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
-import { MACROS, DEFAULT_MACROS, GENRES } from '@/lib/rain/constants'
+import { MACROS, DEFAULT_MACROS } from '@/lib/rain/constants'
 import { notifyInfo } from '@/lib/rain/notifications'
 import type { MacroKey, MacroValues } from '@/lib/rain/types'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -162,7 +162,6 @@ function isAutoActive(currentMacros: MacroValues): boolean {
 
 export function GenrePresets() {
   const macros = useSessionStore((s) => s.macros)
-  const genre = useSessionStore((s) => s.genre)
   const setMacros = useSessionStore((s) => s.setMacros)
   const setGenre = useSessionStore((s) => s.setGenre)
   const setMacroSource = useSessionStore((s) => s.setMacroSource)

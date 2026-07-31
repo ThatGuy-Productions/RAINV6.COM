@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
+import { withErrorHandler, logApiRequest } from '@/lib/rain/api-utils'
+import { sanitizeMetadataField } from '@/lib/rain/sanitize'
 import { trackEvent } from '@/lib/rain/server-analytics'
 
 export const runtime = 'nodejs'
@@ -24,7 +26,8 @@ export const runtime = 'nodejs'
  *
  * Body: { name?: string, fileName?: string, anonId?: string }
  */
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandler(async (req: NextRequest) => {
+  const start = Date.now()
   const user = await getSessionUser(req).catch(() => null)
 
   let body: { name?: unknown; fileName?: unknown; anonId?: unknown }
@@ -45,6 +48,10 @@ export async function POST(req: NextRequest) {
       ? body.anonId.slice(0, 128)
       : null
 
+  // Phase 5 — sanitize user-submitted session name
+  const sanitizedName = sanitizeMetadataField(name)
+  const cleanName = sanitizedName.rejected ? 'Untitled' : sanitizedName.sanitized.slice(0, 200)
+
   // Anonymous path: fire the Event so the funnel captures this session,
   // but don't create a Session row (it requires a userId FK).
   if (!user) {
@@ -52,8 +59,9 @@ export async function POST(req: NextRequest) {
       userId: null,
       anonId,
       type: 'session_created',
-      metadata: { name, anonymous: true },
+      metadata: { name: cleanName, anonymous: true },
     })
+    logApiRequest('POST', '/api/rain/session', 200, Date.now() - start)
     return NextResponse.json({ sessionId: null, anonymous: true }, { status: 200 })
   }
 
@@ -61,7 +69,7 @@ export async function POST(req: NextRequest) {
     const session = await db.session.create({
       data: {
         userId: user.id,
-        name,
+        name: cleanName,
         status: 'draft',
       },
     })
@@ -73,11 +81,13 @@ export async function POST(req: NextRequest) {
       metadata: { sessionId: session.id },
     })
 
+    logApiRequest('POST', '/api/rain/session', 201, Date.now() - start)
     return NextResponse.json({ sessionId: session.id, anonymous: false }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/session] create failed:', err)
     // Never block the mastering workflow on an analytics write — the client
     // can proceed without a sessionId; the render endpoint tolerates that.
+    logApiRequest('POST', '/api/rain/session', 200, Date.now() - start)
     return NextResponse.json({ sessionId: null }, { status: 200 })
   }
-}
+})

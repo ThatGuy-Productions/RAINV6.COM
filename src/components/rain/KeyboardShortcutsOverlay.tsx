@@ -1,12 +1,10 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Play,
   Square,
-  RotateCcw,
-  Repeat,
   Wand2,
   SlidersHorizontal,
   ArrowLeftRight,

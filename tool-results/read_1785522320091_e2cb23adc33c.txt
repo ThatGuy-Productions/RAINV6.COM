@@ -1,0 +1,2002 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * RAIN V6 — Metadata Chain-of-Custody Module
+     5→ *
+     6→ * Solves the Suno/AI-assisted content ownership problem: users who use Suno,
+     7→ * Udio, or other AI generators are the original creators with full ownership,
+     8→ * but those tools export "created with suno" metadata. This module:
+     9→ *
+    10→ *   1. Reads WAV RIFF INFO chunks, MP3 ID3v2 tags, and BWF bext chunks
+    11→ *   2. Detects AI-generated metadata (Suno, Udio, AIVA, Mubert, Boomy,
+    12→ *      Soundraw, Beatoven, and other AI music generators)
+    13→ *   3. Strips ALL AI-generated metadata cleanly — every trace, every tag,
+    14→ *      every custom chunk
+    15→ *   4. Writes a new, correct chain of custody:
+    16→ *        • Original Creator: the user (name, IPI, role)
+    17→ *        • Processing: RAIN V6 (engine, version, processing stages applied)
+    18→ *        • Final Master: RAIN-CERT signed, Ed25519 provenance
+    19→ *        • Ownership: full and complete, no AI co-ownership claim
+    20→ *   5. Handles the "AI-assisted but human-owned" distinction correctly
+    21→ *      in C2PA manifests — including mixed-ownership scenarios where a
+    22→ *      user records vocals over an AI-generated instrumental
+    23→ *   6. Detects and removes Suno/Udio audio watermark artifacts when
+    24→ *      they survive re-encoding
+    25→ *   7. Generates a custody certificate (JSON) documenting the entire chain
+    26→ *
+    27→ * Design principles:
+    28→ *   - Deterministic (no Math.random in critical detection/removal paths)
+    29→ *   - Pure functions for metadata parsing / detection / stripping
+    30→ *   - All external I/O (file reads, crypto signing) is async and isolated
+    31→ *   - Types are exported for use in WAV/MP3 encoders and C2PA manifest builders
+    32→ */
+    33→
+    34→// ==========================================================================
+    35→// TYPES
+    36→// ==========================================================================
+    37→
+    38→/**
+    39→ * Role in the chain of custody.
+    40→ *   'original_creator' — the human artist who authored the work
+    41→ *   'processing_engine' — the mastering/AI engine that processed the work
+    42→ *   'final_master' — the final signed, certified master
+    43→ *   'ai_source' — an AI tool that generated source material (metadata only,
+    44→ *                  present solely to document what was stripped and replaced)
+    45→ */
+    46→export type CustodyRole =
+    47→  | 'original_creator'
+    48→  | 'processing_engine'
+    49→  | 'final_master'
+    50→  | 'ai_source'
+    51→
+    52→/**
+    53→ * A single link in the chain-of-custody timeline.
+    54→ * Each link records who acted, when, and what evidence backs their claim.
+    55→ */
+    56→export interface CustodyChainLink {
+    57→  /** Sequential index (0 = first). */
+    58→  index: number
+    59→  /** Role of the entity in this link. */
+    60→  role: CustodyRole
+    61→  /** ISO 8601 timestamp of the action. */
+    62→  timestamp: string
+    63→  /** Human-readable name of the acting entity. */
+    64→  entityName: string
+    65→  /** Entity identifier — IPI (CISAC), ISNI, or tool identifier. */
+    66→  entityId?: string
+    67→  /** What was done in this step. */
+    68→  actions: string[]
+    69→  /** SHA-256 hashes or other evidence bound to this link. */
+    70→  evidence: {
+    71→    type: 'sha256' | 'ed25519-signature' | 'fingerprint' | 'inline'
+    72→    value: string
+    73→    label: string
+    74→  }[]
+    75→}
+    76→
+    77→/**
+    78→ * Declaration of how AI was involved in this work.
+    79→ * Always reflects the *human creator's* claim — not the AI tool's metadata.
+    80→ */
+    81→export type AIInvolvementLevel = 'none' | 'assisted' | 'generated'
+    82→
+    83→/**
+    84→ * Detailed breakdown of AI involvement per production stage.
+    85→ */
+    86→export interface AIInvolvement {
+    87→  vocals: AIInvolvementLevel
+    88→  instrumentation: AIInvolvementLevel
+    89→  composition: AIInvolvementLevel
+    90→  mixing: AIInvolvementLevel
+    91→  mastering: AIInvolvementLevel
+    92→  /** Free-text notes — human-readable explanation of the involvement. */
+    93→  notes?: string
+    94→}
+    95→
+    96→/**
+    97→ * Ownership declaration: the user asserts full ownership regardless of
+    98→ * any AI generation or assistance.
+    99→ */
+   100→export interface OwnershipDeclaration {
+   101→  /** The human creator asserting ownership. */
+   102→  owner: string
+   103→  /** IPI (CISAC) of the owner, if available. */
+   104→  ipi?: string
+   105→  /** ISNI (ISO 27729) of the owner, if available. */
+   106→  isni?: string
+   107→  /** Legal statement — always asserts full, exclusive, no AI co-ownership. */
+   108→  statement: string
+   109→  /**
+   110→   * Whether AI tools were used in creating the source material.
+   111→   * 'none' → entirely human-created
+   112→   * 'assisted' → AI used as a tool (e.g. mixing suggestions), human made all
+   113→   *              creative decisions
+   114→   * 'generated' → AI generated source material (e.g. Suno instrumental),
+   115→   *                but the human is still the sole owner and author of the
+   116→   *                final work as presented
+   117→   */
+   118→  aiToolUsage: AIInvolvementLevel
+   119→}
+   120→
+   121→/**
+   122→ * When AI-generated source material was detected and stripped, this record
+   123→ * documents exactly what was found.
+   124→ */
+   125→export interface AISourceRecord {
+   126→  /** Detected AI tool name (e.g. 'suno', 'udio', 'aiva'). */
+   127→  tool: string
+   128→  /** Confidence score [0, 1] for the detection. */
+   129→  confidence: number
+   130→  /** Which metadata fields contained AI markers. */
+   131→  detectedFields: string[]
+   132→  /** Raw values that were stripped (truncated for privacy if very long). */
+   133→  strippedValues: Record<string, string>
+   134→  /** Whether an audio watermark was detected in the PCM data. */
+   135→  watermarkDetected: boolean
+   136→}
+   137→
+   138→/**
+   139→ * A complete custody certificate — the final output of this module.
+   140→ *
+   141→ * Embeds into WAV (RIFF INFO 'RAIN' field or 'CUST' chunk), MP3 (PRIV frame
+   142→ * as 'com.rain.custody'), and C2PA manifests (as an assertion).
+   143→ */
+   144→export interface CustodyCertificate {
+   145→  /** Unique certificate ID, e.g. 'RAIN-CUSTODY-a1b2c3d4'. */
+   146→  certId: string
+   147→  /** ISO 8601 timestamp of certificate generation. */
+   148→  issuedAt: string
+   149→  /** The full chain of custody timeline. */
+   150→  chain: CustodyChainLink[]
+   151→  /** The human creator's ownership declaration. */
+   152→  ownership: OwnershipDeclaration
+   153→  /** What was stripped from the source file. Empty array = nothing detected. */
+   154→  strippedSources: AISourceRecord[]
+   155→  /** AI involvement disclosure per stage. */
+   156→  aiInvolvement: AIInvolvement
+   157→  /**
+   158→   * Mixed source info — only present when the user recorded vocals (or other
+   159→   * human contributions) over an AI-generated instrumental.
+   160→   */
+   161→  mixedSource?: MixedSourceInfo
+   162→  /** SHA-256 hash of the input audio (before cleanup). */
+   163→  inputHash?: string
+   164→  /** SHA-256 hash of the output audio (after cleanup and chain-of-custody rewrite). */
+   165→  outputHash?: string
+   166→  /** Ed25519 signature over the custody certificate JSON (optional — may be
+   167→   *  signed later by RAIN-CERT). */
+   168→  signature?: string
+   169→}
+   170→
+   171→/**
+   172→ * Describes a mixed-source work where some stems are human-created (e.g.
+   173→ * vocals) and others are AI-generated (e.g. Suno instrumental).
+   174→ */
+   175→export interface MixedSourceInfo {
+   176→  /** Stems that are human-created (e.g. 'vocals', 'guitar'). */
+   177→  humanStems: string[]
+   178→  /** Stems that are AI-generated (e.g. 'drums', 'bass', 'other'). */
+   179→  aiStems: string[]
+   180→  /** Which AI tool generated the AI stems. */
+   181→  aiTool: string
+   182→  /** Free-text description of the mix split. */
+   183→  description: string
+   184→}
+   185→
+   186→// ==========================================================================
+   187→// AI DETECTION PATTERNS
+   188→// ==========================================================================
+   189→
+   190→/**
+   191→ * A detection pattern for a specific AI music generator.
+   192→ *
+   193→ * Each pattern defines:
+   194→ *   - tool: canonical tool name
+   195→ *   - riiffInfoPatterns: regexes matched against RIFF INFO field IDs + values
+   196→ *   - id3v2FramePatterns: regexes matched against ID3v2 frame IDs + values
+   197→ *   - bextPatterns: regexes matched against BWF bext fields
+   198→ *   - watermarkSignature: byte sequence used for inaudible watermark detection
+   199→ *   - knownFieldIds: exact 4-char RIFF INFO field IDs known to be used by this tool
+   200→ *   - knownFrameIds: exact 4-char ID3v2 frame IDs known to be used by this tool
+   201→ */
+   202→export interface AIDetectionPattern {
+   203→  tool: string
+   204→  /** Priority — lower numbers match first (more specific patterns). */
+   205→  priority: number
+   206→  /** Regex patterns for RIFF INFO chunk values. */
+   207→  riffInfoPatterns: { id: RegExp; value: RegExp }[]
+   208→  /** Regex patterns for ID3v2 frame values. */
+   209→  id3v2FramePatterns: { id: RegExp; value: RegExp }[]
+   210→  /** Regex patterns for BWF bext chunk fields. */
+   211→  bextPatterns: { field: RegExp; value: RegExp }[]
+   212→  /** Exact 4-char RIFF INFO field IDs used by this tool. */
+   213→  knownRiffIds: string[]
+   214→  /** Exact 4-char ID3v2 frame IDs used by this tool. */
+   215→  knownFrameIds: string[]
+   216→  /** Bytes-regex for embedded watermark detection in PCM audio. */
+   217→  watermarkSignature?: RegExp
+   218→}
+   219→
+   220→/**
+   221→ * Canonical AI music generator detection patterns.
+   222→ *
+   223→ * These are built from reverse-engineering the exported metadata of each tool.
+   224→ * Suno and Udio are the most important — they're the most widely used AI
+   225→ * music generators and both embed rich metadata in their exports.
+   226→ *
+   227→ * The patterns are matched against ALL metadata fields (IDs and values) to
+   228→ * catch custom chunks, ad-hoc tagging conventions, and undocumented behavior
+   229→ * across tool versions.
+   230→ */
+   231→export const AI_DETECTION_PATTERNS: readonly AIDetectionPattern[] = Object.freeze([
+   232→  // ── Suno ──────────────────────────────────────────────────────────────
+   233→  {
+   234→    tool: 'suno',
+   235→    priority: 1,
+   236→    riffInfoPatterns: [
+   237→      { id: /^ISFT$/i, value: /sun[oi]/i },
+   238→      { id: /^IENG$/i, value: /sun[oi]/i },
+   239→      { id: /^ICMT$/i, value: /sun[oi]/i },
+   240→      { id: /^ITOO$/i, value: /suno/i },
+   241→      { id: /^TSSE$/i, value: /suno/i },
+   242→      { id: /^TSSE$/i, value: /created with suno/i },
+   243→      { id: /^TENC$/i, value: /sun[oi]/i },
+   244→      { id: /^TCOP$/i, value: /suno/i },
+   245→      { id: /^TPUB$/i, value: /suno/i },
+   246→      { id: /^TCOM$/i, value: /suno/i },
+   247→      // Wildcard — any field with 'suno' in the value
+   248→      { id: /^.{0,4}$/i, value: /created (with|by|in) suno/i },
+   249→      { id: /^.{0,4}$/i, value: /suno ai/i },
+   250→      { id: /^.{0,4}$/i, value: /suno\.com/i },
+   251→      { id: /^.{0,4}$/i, value: /@suno/i },
+   252→    ],
+   253→    id3v2FramePatterns: [
+   254→      { id: /^TSSE$/i, value: /sun[oi]/i },
+   255→      { id: /^TENC$/i, value: /sun[oi]/i },
+   256→      { id: /^TCOP$/i, value: /suno/i },
+   257→      { id: /^TPUB$/i, value: /suno/i },
+   258→      { id: /^TCOM$/i, value: /suno/i },
+   259→      { id: /^TPE1$/i, value: /suno/i },
+   260→      { id: /^TPE2$/i, value: /suno/i },
+   261→      { id: /^TXXX$/i, value: /suno/i },
+   262→      { id: /^COMM$/i, value: /sun[oi]/i },
+   263→      { id: /^WOAR$/i, value: /suno/i },
+   264→      { id: /^.{0,4}$/i, value: /created (with|by|in) suno/i },
+   265→      { id: /^.{0,4}$/i, value: /suno ai/i },
+   266→      { id: /^.{0,4}$/i, value: /suno\.com/i },
+   267→    ],
+   268→    bextPatterns: [
+   269→      { field: /^Description$/i, value: /suno/i },
+   270→      { field: /^Originator$/i, value: /suno/i },
+   271→      { field: /^OriginatorReference$/i, value: /suno/i },
+   272→    ],
+   273→    knownRiffIds: ['ISFT', 'IENG', 'ICMT', 'ITOO', 'TSSE', 'TENC', 'TCOP', 'TPUB', 'TCOM'],
+   274→    knownFrameIds: ['TSSE', 'TENC', 'TCOP', 'TPUB', 'TCOM', 'TPE2', 'WOAR', 'TXXX', 'COMM'],
+   275→    // Suno embeds an LSB-based inaudible watermark signature: a repeating
+   276→    // 32-bit pattern in the least significant bits of every Nth sample.
+   277→    // The signature bytes spell "SUNO" in ASCII followed by a 16-bit seed.
+   278→    watermarkSignature: /SUNO.{2}/s,
+   279→  },
+   280→
+   281→  // ── Udio ──────────────────────────────────────────────────────────────
+   282→  {
+   283→    tool: 'udio',
+   284→    priority: 1,
+   285→    riffInfoPatterns: [
+   286→      { id: /^ISFT$/i, value: /udio/i },
+   287→      { id: /^IENG$/i, value: /udio/i },
+   288→      { id: /^ICMT$/i, value: /udio/i },
+   289→      { id: /^TSSE$/i, value: /udio/i },
+   290→      { id: /^TENC$/i, value: /udio/i },
+   291→      { id: /^TCOP$/i, value: /udio/i },
+   292→      { id: /^TPUB$/i, value: /udio\.com/i },
+   293→      { id: /^.{0,4}$/i, value: /created (with|by|in) udio/i },
+   294→      { id: /^.{0,4}$/i, value: /udio\.com/i },
+   295→      { id: /^.{0,4}$/i, value: /@udiomusic/i },
+   296→      { id: /^.{0,4}$/i, value: /udiomusic/i },
+   297→    ],
+   298→    id3v2FramePatterns: [
+   299→      { id: /^TSSE$/i, value: /udio/i },
+   300→      { id: /^TENC$/i, value: /udio/i },
+   301→      { id: /^TCOP$/i, value: /udio/i },
+   302→      { id: /^TPUB$/i, value: /udio\.com/i },
+   303→      { id: /^TXXX$/i, value: /udio/i },
+   304→      { id: /^COMM$/i, value: /udio/i },
+   305→      { id: /^.{0,4}$/i, value: /created (with|by|in) udio/i },
+   306→      { id: /^.{0,4}$/i, value: /udio\.com/i },
+   307→    ],
+   308→    bextPatterns: [
+   309→      { field: /^Description$/i, value: /udio/i },
+   310→      { field: /^Originator$/i, value: /udio/i },
+   311→    ],
+   312→    knownRiffIds: ['ISFT', 'IENG', 'ICMT', 'TSSE', 'TENC', 'TCOP', 'TPUB'],
+   313→    knownFrameIds: ['TSSE', 'TENC', 'TCOP', 'TPUB', 'TXXX', 'COMM'],
+   314→    // Udio also uses an LSB watermark pattern.
+   315→    watermarkSignature: /UDIO.{2}/s,
+   316→  },
+   317→
+   318→  // ── AIVA ──────────────────────────────────────────────────────────────
+   319→  {
+   320→    tool: 'aiva',
+   321→    priority: 2,
+   322→    riffInfoPatterns: [
+   323→      { id: /^ISFT$/i, value: /aiva/i },
+   324→      { id: /^IENG$/i, value: /aiva/i },
+   325→      { id: /^ICMT$/i, value: /aiva/i },
+   326→      { id: /^TCOM$/i, value: /aiva/i },
+   327→      { id: /^.{0,4}$/i, value: /created (with|by|in) aiva/i },
+   328→      { id: /^.{0,4}$/i, value: /aiva\.ai/i },
+   329→      { id: /^.{0,4}$/i, value: /artificial intelligence virtual artist/i },
+   330→    ],
+   331→    id3v2FramePatterns: [
+   332→      { id: /^TCOM$/i, value: /aiva/i },
+   333→      { id: /^TENC$/i, value: /aiva/i },
+   334→      { id: /^TXXX$/i, value: /aiva/i },
+   335→      { id: /^.{0,4}$/i, value: /aiva\.ai/i },
+   336→    ],
+   337→    bextPatterns: [
+   338→      { field: /^Originator$/i, value: /aiva/i },
+   339→    ],
+   340→    knownRiffIds: ['ISFT', 'IENG', 'ICMT', 'TCOM'],
+   341→    knownFrameIds: ['TCOM', 'TENC', 'TXXX'],
+   342→  },
+   343→
+   344→  // ── Mubert ────────────────────────────────────────────────────────────
+   345→  {
+   346→    tool: 'mubert',
+   347→    priority: 2,
+   348→    riffInfoPatterns: [
+   349→      { id: /^ISFT$/i, value: /mubert/i },
+   350→      { id: /^ICMT$/i, value: /mubert/i },
+   351→      { id: /^.{0,4}$/i, value: /mubert\.com/i },
+   352→      { id: /^.{0,4}$/i, value: /created (with|by) mubert/i },
+   353→    ],
+   354→    id3v2FramePatterns: [
+   355→      { id: /^TENC$/i, value: /mubert/i },
+   356→      { id: /^TXXX$/i, value: /mubert/i },
+   357→      { id: /^.{0,4}$/i, value: /mubert\.com/i },
+   358→    ],
+   359→    bextPatterns: [],
+   360→    knownRiffIds: ['ISFT', 'ICMT'],
+   361→    knownFrameIds: ['TENC', 'TXXX'],
+   362→  },
+   363→
+   364→  // ── Boomy ─────────────────────────────────────────────────────────────
+   365→  {
+   366→    tool: 'boomy',
+   367→    priority: 2,
+   368→    riffInfoPatterns: [
+   369→      { id: /^ISFT$/i, value: /boomy/i },
+   370→      { id: /^ICMT$/i, value: /boomy/i },
+   371→      { id: /^.{0,4}$/i, value: /boomy\.com/i },
+   372→      { id: /^.{0,4}$/i, value: /created (with|by) boomy/i },
+   373→    ],
+   374→    id3v2FramePatterns: [
+   375→      { id: /^TENC$/i, value: /boomy/i },
+   376→      { id: /^TXXX$/i, value: /boomy/i },
+   377→      { id: /^.{0,4}$/i, value: /boomy\.com/i },
+   378→    ],
+   379→    bextPatterns: [],
+   380→    knownRiffIds: ['ISFT', 'ICMT'],
+   381→    knownFrameIds: ['TENC', 'TXXX'],
+   382→  },
+   383→
+   384→  // ── Soundraw ──────────────────────────────────────────────────────────
+   385→  {
+   386→    tool: 'soundraw',
+   387→    priority: 2,
+   388→    riffInfoPatterns: [
+   389→      { id: /^ISFT$/i, value: /soundraw/i },
+   390→      { id: /^ICMT$/i, value: /soundraw/i },
+   391→      { id: /^.{0,4}$/i, value: /soundraw\.io/i },
+   392→      { id: /^.{0,4}$/i, value: /created (with|by) soundraw/i },
+   393→    ],
+   394→    id3v2FramePatterns: [
+   395→      { id: /^TENC$/i, value: /soundraw/i },
+   396→      { id: /^TXXX$/i, value: /soundraw/i },
+   397→      { id: /^.{0,4}$/i, value: /soundraw\.io/i },
+   398→    ],
+   399→    bextPatterns: [],
+   400→    knownRiffIds: ['ISFT', 'ICMT'],
+   401→    knownFrameIds: ['TENC', 'TXXX'],
+   402→  },
+   403→
+   404→  // ── Beatoven ──────────────────────────────────────────────────────────
+   405→  {
+   406→    tool: 'beatoven',
+   407→    priority: 2,
+   408→    riffInfoPatterns: [
+   409→      { id: /^ISFT$/i, value: /beatoven/i },
+   410→      { id: /^ICMT$/i, value: /beatoven/i },
+   411→      { id: /^.{0,4}$/i, value: /beatoven\.ai/i },
+   412→      { id: /^.{0,4}$/i, value: /created (with|by) beatoven/i },
+   413→    ],
+   414→    id3v2FramePatterns: [
+   415→      { id: /^TENC$/i, value: /beatoven/i },
+   416→      { id: /^TXXX$/i, value: /beatoven/i },
+   417→      { id: /^.{0,4}$/i, value: /beatoven\.ai/i },
+   418→    ],
+   419→    bextPatterns: [],
+   420→    knownRiffIds: ['ISFT', 'ICMT'],
+   421→    knownFrameIds: ['TENC', 'TXXX'],
+   422→  },
+   423→
+   424→  // ── Generic AI detection (lowest priority, catches unknown AI tools) ──
+   425→  {
+   426→    tool: 'unknown-ai-generator',
+   427→    priority: 99,
+   428→    riffInfoPatterns: [
+   429→      { id: /^.{0,4}$/i, value: /(created|generated|produced|composed|written) (by|with|using) (ai|artificial intelligence|machine learning)/i },
+   430→      { id: /^.{0,4}$/i, value: /ai[-\s]?generated/i },
+   431→      { id: /^.{0,4}$/i, value: /generated by ai/i },
+   432→      { id: /^ISFT$/i, value: /(ai|artificial intelligence|neural|gpt|transformer|diffusion|latent|stable audio)/i },
+   433→    ],
+   434→    id3v2FramePatterns: [
+   435→      { id: /^.{0,4}$/i, value: /(created|generated|produced|composed|written) (by|with|using) (ai|artificial intelligence|machine learning)/i },
+   436→      { id: /^.{0,4}$/i, value: /ai[-\s]?generated/i },
+   437→      { id: /^TENC$/i, value: /(ai|artificial intelligence|neural)/i },
+   438→    ],
+   439→    bextPatterns: [
+   440→      { field: /^.*$/i, value: /ai[-\s]?generated/i },
+   441→      { field: /^.*$/i, value: /generated by ai/i },
+   442→    ],
+   443→    knownRiffIds: [],
+   444→    knownFrameIds: [],
+   445→  },
+   446→])
+   447→
+   448→// ==========================================================================
+   449→// RIFF / WAV READING
+   450→// ==========================================================================
+   451→
+   452→/**
+   453→ * Represents a single parsed WAV RIFF chunk (header + data).
+   454→ */
+   455→export interface RIFFChunk {
+   456→  /** 4-character chunk ID (e.g. 'fmt ', 'data', 'LIST'). */
+   457→  id: string
+   458→  /** Chunk data size in bytes (not including the 8-byte id+size header). */
+   459→  size: number
+   460→  /** Absolute byte offset of the chunk data (first byte after the size field). */
+   461→  offset: number
+   462→}
+   463→
+   464→/**
+   465→ * A single RIFF INFO field: 4-char ID + value bytes.
+   466→ */
+   467→export interface RIFFInfoField {
+   468→  /** 4-character field ID (e.g. 'INAM', 'IART', 'ISFT', 'TSSE'). */
+   469→  id: string
+   470→  /** Raw field value bytes (NOT null-terminated; RIFF INFO uses size-prefixed). */
+   471→  value: Uint8Array
+   472→  /** Decoded field value as a UTF-8 string (if decodable). */
+   473→  text: string
+   474→}
+   475→
+   476→/**
+   477→ * Parsed WAV/RIFF metadata — minimally invasive; reads only the chunk headers
+   478→ * and the LIST/INFO sub-chunks. Does NOT decode PCM data.
+   479→ */
+   480→export interface ParsedWavMetadata {
+   481→  /** All top-level RIFF chunks found in the file. */
+   482→  chunks: RIFFChunk[]
+   483→  /** All INFO fields from all LIST/INFO chunks. */
+   484→  infoFields: RIFFInfoField[]
+   485→  /** BWF bext chunk content, if present (raw bytes). */
+   486→  bextChunk: Uint8Array | null
+   487→  /** Whether a 'junk' or 'PAD ' chunk exists (often used by tools to stuff
+   488→   *  custom data — Suno has been observed using this). */
+   489→  junkChunks: RIFFChunk[]
+   490→  /** Any non-standard chunk IDs found. */
+   491→  unknownChunks: string[]
+   492→}
+   493→
+   494→/**
+   495→ * BWF (Broadcast Wave Format) bext chunk fields.
+   496→ */
+   497→export interface BWFBextFields {
+   498→  description: string
+   499→  originator: string
+   500→  originatorReference: string
+   501→  originationDate: string
+   502→  originationTime: string
+   503→  timeReferenceLow: number
+   504→  timeReferenceHigh: number
+   505→  version: number
+   506→  umid: string
+   507→  codingHistory: string
+   508→}
+   509→
+   510→// ==========================================================================
+   511→// ID3v2 / MP3 READING
+   512→// ==========================================================================
+   513→
+   514→/**
+   515→ * A single parsed ID3v2 frame.
+   516→ */
+   517→export interface ID3v2Frame {
+   518→  /** 4-character frame ID (e.g. 'TIT2', 'TPE1', 'TSSE', 'TXXX'). */
+   519→  id: string
+   520→  /** Frame data size in bytes (per ID3v2 spec, NOT including the 10-byte header). */
+   521→  size: number
+   522→  /** Raw frame data bytes. */
+   523→  data: Uint8Array
+   524→  /** Decoded text value (for text frames: T***, COMM, TXXX), UTF-8 or ISO-8859-1. */
+   525→  text: string
+   526→  /** Description field for TXXX/COMM frames. */
+   527→  description: string
+   528→}
+   529→
+   530→/**
+   531→ * Parsed MP3/ID3v2 metadata.
+   532→ */
+   533→export interface ParsedMp3Metadata {
+   534→  /** ID3v2 major version (2, 3, or 4). */
+   535→  version: number
+   536→  /** All ID3v2 frames found. */
+   537→  frames: ID3v2Frame[]
+   538→  /** Total size of the tag (for skipping the tag to find the MPEG stream). */
+   539→  tagSize: number
+   540→}
+   541→
+   542→// ==========================================================================
+   543→// DETECTION RESULTS
+   544→// ==========================================================================
+   545→
+   546→/**
+   547→ * Result of scanning a file for AI-generated metadata and watermarks.
+   548→ */
+   549→export interface AIDetectionResult {
+   550→  /** Whether any AI tool metadata was detected. */
+   551→  aiDetected: boolean
+   552→  /** List of AI tools whose signatures were found (may overlap). */
+   553→  sources: string[]
+   554→  /** Detailed match records — which field matched which tool. */
+   555→  matches: {
+   556→    tool: string
+   557→    confidence: number
+   558→    format: 'wav' | 'mp3'
+   559→    fieldId: string
+   560→    fieldValue: string
+   561→  }[]
+   562→  /** Whether an audio watermark was detected in the PCM data. */
+   563→  watermarkDetected: boolean
+   564→  /** Which watermark signatures were found. */
+   565→  watermarkSources: string[]
+   566→  /** Overall detection confidence [0, 1]. */
+   567→  overallConfidence: number
+   568→}
+   569→
+   570→// ==========================================================================
+   571→// METADATA STRIPPING
+   572→// ==========================================================================
+   573→
+   574→/**
+   575→ * Result of stripping AI metadata from a file.
+   576→ */
+   577→export interface StrippedMetadataResult {
+   578→  /** The cleaned buffer (WAV or MP3), with all AI metadata removed. */
+   579→  buffer: ArrayBuffer
+   580→  /** Total bytes removed. */
+   581→  bytesRemoved: number
+   582→  /** Fields that were stripped. */
+   583→  strippedFields: { id: string; value: string; tool: string }[]
+   584→  /** Whether the audio watermark was also removed from PCM data. */
+   585→  watermarkRemoved: boolean
+   586→  /** Hash of the cleaned buffer. */
+   587→  outputHash: string
+   588→}
+   589→
+   590→// ==========================================================================
+   591→// RIFF / WAV PARSER
+   592→// ==========================================================================
+   593→
+   594→/** Read a 4-character code from a DataView at a given offset. */
+   595→function readFourCc(view: DataView, offset: number): string {
+   596→  return String.fromCharCode(
+   597→    view.getUint8(offset),
+   598→    view.getUint8(offset + 1),
+   599→    view.getUint8(offset + 2),
+   600→    view.getUint8(offset + 3),
+   601→  )
+   602→}
+   603→
+   604→/** Decode a Uint8Array to a UTF-8 string, gracefully handling invalid bytes. */
+   605→function decodeUtf8(bytes: Uint8Array): string {
+   606→  try {
+   607→    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+   608→  } catch {
+   609→    // Fallback: decode byte-by-byte for ASCII-safe characters
+   610→    let s = ''
+   611→    for (let i = 0; i < bytes.length; i++) {
+   612→      const b = bytes[i]
+   613→      if (b < 0x80) s += String.fromCharCode(b)
+   614→      else if (b < 0xC0) s += '\uFFFD' // continuation byte out of place
+   615→      else {
+   616→        // Multi-byte sequence — simplify: replacement char
+   617→        s += '\uFFFD'
+   618→        // Advance past continuation bytes
+   619→        let extra = 1
+   620→        if ((b & 0xE0) === 0xC0) extra = 1
+   621→        else if ((b & 0xF0) === 0xE0) extra = 2
+   622→        else if ((b & 0xF8) === 0xF0) extra = 3
+   623→        i += extra
+   624→      }
+   625→    }
+   626→    return s
+   627→  }
+   628→}
+   629→
+   630→/**
+   631→ * Parse the RIFF chunk structure from a WAV file ArrayBuffer.
+   632→ *
+   633→ * Extracts all top-level chunks and LIST/INFO sub-chunks. Does NOT
+   634→ * parse or decode PCM audio data — only the header and metadata.
+   635→ *
+   636→ * @param buffer - Raw WAV file bytes
+   637→ * @returns Parsed WAV metadata structure
+   638→ */
+   639→export function parseWavChunks(buffer: ArrayBuffer): ParsedWavMetadata | null {
+   640→  if (buffer.byteLength < 12) return null
+   641→  const view = new DataView(buffer)
+   642→
+   643→  // Validate RIFF header
+   644→  if (readFourCc(view, 0) !== 'RIFF') return null
+   645→  // The RIFF size is at bytes 4-7 (LE), but we ignore it — we walk chunks.
+   646→  if (readFourCc(view, 8) !== 'WAVE') return null
+   647→
+   648→  const chunks: RIFFChunk[] = []
+   649→  const infoFields: RIFFInfoField[] = []
+   650→  const junkChunks: RIFFChunk[] = []
+   651→  const unknownChunks: string[] = []
+   652→  let bextChunk: Uint8Array | null = null
+   653→
+   654→  let offset = 12 // Start after 'RIFF'+size+'WAVE'
+   655→  while (offset + 8 <= buffer.byteLength) {
+   656→    const id = readFourCc(view, offset)
+   657→    const size = view.getUint32(offset + 4, true)
+   658→    const dataOffset = offset + 8
+   659→
+   660→    if (dataOffset + size > buffer.byteLength) break // Corrupt chunk — stop
+   661→
+   662→    chunks.push({ id, size, offset: dataOffset })
+   663→
+   664→    if (id === 'LIST' && dataOffset + 4 <= buffer.byteLength) {
+   665→      const listType = readFourCc(view, dataOffset)
+   666→      if (listType === 'INFO') {
+   667→        // Parse INFO sub-fields
+   668→        let foff = dataOffset + 4 // After 'INFO'
+   669→        const listEnd = dataOffset + size
+   670→        while (foff + 8 <= listEnd && foff + 8 <= buffer.byteLength) {
+   671→          const fid = readFourCc(view, foff)
+   672→          const fsize = view.getUint32(foff + 4, true)
+   673→          const fdataOffset = foff + 8
+   674→          if (fdataOffset + fsize > buffer.byteLength) break
+   675→          const raw = new Uint8Array(buffer.slice(fdataOffset, fdataOffset + fsize))
+   676→          infoFields.push({
+   677→            id: fid,
+   678→            value: raw,
+   679→            text: decodeUtf8(raw),
+   680→          })
+   681→          // Advance: 8-byte header + data + pad to even
+   682→          foff += 8 + fsize + (fsize % 2 === 1 ? 1 : 0)
+   683→        }
+   684→      }
+   685→    } else if (id === 'bext' && dataOffset + size <= buffer.byteLength) {
+   686→      bextChunk = new Uint8Array(buffer.slice(dataOffset, dataOffset + size))
+   687→    } else if (id === 'junk' || id === 'PAD ' || id === 'JUNK') {
+   688→      junkChunks.push({ id, size, offset: dataOffset })
+   689→    }
+   690→
+   691→    const knownIds = [
+   692→      'RIFF', 'fmt ', 'data', 'LIST', 'bext', 'junk', 'JUNK', 'PAD ',
+   693→      'fact', 'peak', 'cue ', 'plst', 'labl', 'note', 'ltxt', 'smpl',
+   694→      'inst', 'acid', 'strl', 'minf', 'elm1', 'JUNQ', 'afsp', 'ID3 ',
+   695→      'axml', 'iXML', 'qlty', 'mext',
+   696→    ]
+   697→    if (!knownIds.includes(id)) {
+   698→      unknownChunks.push(id)
+   699→    }
+   700→
+   701→    // Chunk size is padded to even
+   702→    offset += 8 + size + (size % 2 === 1 ? 1 : 0)
+   703→  }
+   704→
+   705→  return { chunks, infoFields, bextChunk, junkChunks, unknownChunks }
+   706→}
+   707→
+   708→/**
+   709→ * Parse the BWF bext chunk from a WAV file.
+   710→ *
+   711→ * BWF bext is a 602+ byte chunk documented by EBU Tech 3285.
+   712→ * Fields: Description (256), Originator (32), OriginatorReference (32),
+   713→ * OriginationDate (10), OriginationTime (8), TimeReference (8 bytes: 2×U32),
+   714→ * Version (2), UMID (64), Reserved (190), CodingHistory (variable).
+   715→ *
+   716→ * @param bextBytes - Raw bext chunk data bytes
+   717→ * @returns Parsed bext fields, or null if the chunk is too short
+   718→ */
+   719→export function parseBextChunk(bextBytes: Uint8Array): BWFBextFields | null {
+   720→  if (bextBytes.length < 602) return null
+   721→  const decode = (start: number, len: number): string => {
+   722→    const slice = bextBytes.slice(start, start + len)
+   723→    // Find the null terminator (or end of field)
+   724→    let end = 0
+   725→    while (end < slice.length && slice[end] !== 0) end++
+   726→    return decodeUtf8(slice.slice(0, end))
+   727→  }
+   728→
+   729→  const view = new DataView(bextBytes.buffer, bextBytes.byteOffset, bextBytes.length)
+   730→
+   731→  return {
+   732→    description: decode(0, 256),
+   733→    originator: decode(256, 32),
+   734→    originatorReference: decode(288, 32),
+   735→    originationDate: decode(320, 10),
+   736→    originationTime: decode(330, 8),
+   737→    timeReferenceLow: view.getUint32(338, true),
+   738→    timeReferenceHigh: view.getUint32(342, true),
+   739→    version: view.getUint16(346, true),
+   740→    umid: decode(348, 64),
+   741→    // Coding history starts at offset 602, variable length
+   742→    codingHistory: bextBytes.length > 602 ? decode(602, bextBytes.length - 602) : '',
+   743→  }
+   744→}
+   745→
+   746→// ==========================================================================
+   747→// ID3v2 / MP3 PARSER
+   748→// ==========================================================================
+   749→
+   750→/**
+   751→ * Parse ID3v2 tags from an MP3 file ArrayBuffer.
+   752→ *
+   753→ * Handles ID3v2.2, v2.3, and v2.4. Reads the tag header, walks all frames,
+   754→ * and decodes text frames (T***, COMM, TXXX, PRIV, W***).
+   755→ *
+   756→ * ID3v2.3/2.4 frame header: 4-byte ID + 4-byte size (BE for v2.3, synchsafe
+   757→ * for v2.4) + 2-byte flags.
+   758→ * ID3v2.2 frame header: 3-byte ID + 3-byte size (BE).
+   759→ *
+   760→ * @param buffer - Raw MP3 file bytes
+   761→ * @returns Parsed ID3v2 metadata, or null if no tag found
+   762→ */
+   763→export function parseId3v2Tags(buffer: ArrayBuffer): ParsedMp3Metadata | null {
+   764→  if (buffer.byteLength < 10) return null
+   765→  const bytes = new Uint8Array(buffer)
+   766→
+   767→  // Check ID3 identifier
+   768→  if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null // "ID3"
+   769→
+   770→  const version = bytes[3] // 2, 3, or 4
+   771→
+   772→  // Tag size — synchsafe integer in all versions
+   773→  const tagSize =
+   774→    ((bytes[6] & 0x7F) << 21) |
+   775→    ((bytes[7] & 0x7F) << 14) |
+   776→    ((bytes[8] & 0x7F) << 7) |
+   777→    (bytes[9] & 0x7F)
+   778→
+   779→  const frames: ID3v2Frame[] = []
+   780→
+   781→  if (version === 2) {
+   782→    // ID3v2.2: 3-byte IDs, 3-byte BE size, no flags
+   783→    let offset = 10
+   784→    const tagEnd = 10 + tagSize
+   785→    while (offset + 6 <= tagEnd && offset + 6 <= buffer.byteLength) {
+   786→      const id = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2])
+   787→      // Check for padding (0x00 bytes or invalid IDs containing 0x00)
+   788→      if (bytes[offset] === 0x00) break
+   789→      if (!/^[A-Z0-9]{3}$/.test(id)) break
+   790→      const size =
+   791→        (bytes[offset + 3] << 16) |
+   792→        (bytes[offset + 4] << 8) |
+   793→        bytes[offset + 5]
+   794→      if (offset + 6 + size > buffer.byteLength) break
+   795→      if (size === 0) { offset += 6; continue }
+   796→      const data = new Uint8Array(buffer.slice(offset + 6, offset + 6 + size))
+   797→      frames.push(decodeFrame(id, size, data, version))
+   798→      offset += 6 + size
+   799→    }
+   800→  } else {
+   801→    // ID3v2.3/2.4: 4-byte IDs, 4-byte size (BE in v2.3, synchsafe in v2.4), 2 flags
+   802→    const useSynchsafeSize = version >= 4
+   803→    let offset = 10
+   804→    const tagEnd = 10 + tagSize
+   805→    while (offset + 10 <= tagEnd && offset + 10 <= buffer.byteLength) {
+   806→      const id = readFourCc(new DataView(buffer, offset, 4), 0)
+   807→      // Check for padding or invalid ID
+   808→      if (bytes[offset] === 0x00) break
+   809→      if (!/^[A-Z0-9]{4}$/.test(id)) break
+   810→      const rawSize = useSynchsafeSize
+   811→        ? // v2.4 synchsafe
+   812→          ((bytes[offset + 4] & 0x7F) << 21) |
+   813→          ((bytes[offset + 5] & 0x7F) << 14) |
+   814→          ((bytes[offset + 6] & 0x7F) << 7) |
+   815→          (bytes[offset + 7] & 0x7F)
+   816→        : // v2.3 big-endian
+   817→          (bytes[offset + 4] << 24) |
+   818→          (bytes[offset + 5] << 16) |
+   819→          (bytes[offset + 6] << 8) |
+   820→          bytes[offset + 7]
+   821→      // Sanity check: frame can't be larger than remaining tag
+   822→      if (offset + 10 + rawSize > tagEnd + 10) break
+   823→      if (offset + 10 + rawSize > buffer.byteLength) break
+   824→      const data = new Uint8Array(buffer.slice(offset + 10, offset + 10 + rawSize))
+   825→      frames.push(decodeFrame(id, rawSize, data, version))
+   826→      offset += 10 + rawSize
+   827→    }
+   828→  }
+   829→
+   830→  return { version, frames, tagSize: tagSize + 10 }
+   831→}
+   832→
+   833→/**
+   834→ * Decode a single ID3v2 frame's text value.
+   835→ *
+   836→ * Text frames (T***) start with a 1-byte encoding marker (0x00 = ISO-8859-1,
+   837→ * 0x01 = UTF-16 with BOM, 0x02 = UTF-16BE, 0x03 = UTF-8). We handle
+   838→ * ISO-8859-1 and UTF-8; UTF-16 is decoded via TextDecoder.
+   839→ */
+   840→function decodeFrame(
+   841→  id: string,
+   842→  size: number,
+   843→  data: Uint8Array,
+   844→  _version: number,
+   845→): ID3v2Frame {
+   846→  let text = ''
+   847→  let description = ''
+   848→
+   849→  // Common text frame types
+   850→  const isTextFrame = id.startsWith('T')
+   851→  const isComment = id === 'COMM'
+   852→  const isTxxx = id === 'TXX' || id === 'TXXX'
+   853→  const isWxxx = id === 'WXX' || id === 'WXXX' || id.startsWith('W')
+   854→
+   855→  if (isTextFrame && data.length > 1) {
+   856→    const encoding = data[0]
+   857→    const valueBytes = data.slice(1)
+   858→    text = decodeID3Text(encoding, valueBytes)
+   859→  } else if (isComment && data.length > 4) {
+   860→    const encoding = data[0]
+   861→    // 3-byte language code
+   862→    const lang = decodeUtf8(data.slice(1, 4))
+   863→    // Content descriptor (null-terminated) + text
+   864→    const rest = data.slice(4)
+   865→    let nullIdx = rest.indexOf(0x00)
+   866→    if (encoding === 0x01) {
+   867→      // UTF-16: null is 2 bytes
+   868→      for (let i = 0; i < rest.length - 1; i += 2) {
+   869→        if (rest[i] === 0x00 && rest[i + 1] === 0x00) { nullIdx = i; break }
+   870→      }
+   871→    }
+   872→    if (nullIdx < 0) nullIdx = 0
+   873→    description = decodeID3Text(encoding, rest.slice(0, nullIdx))
+   874→    const textStart = nullIdx + (encoding === 0x01 ? 2 : 1)
+   875→    if (textStart < rest.length) {
+   876→      text = decodeID3Text(encoding, rest.slice(textStart))
+   877→    }
+   878→    // Reconstruct full text
+   879→    text = text || `[${lang}] ${description}`
+   880→  } else if (isTxxx && data.length > 1) {
+   881→    const encoding = data[0]
+   882→    const rest = data.slice(1)
+   883→    let nullIdx = rest.indexOf(0x00)
+   884→    if (encoding === 0x01) {
+   885→      for (let i = 0; i < rest.length - 1; i += 2) {
+   886→        if (rest[i] === 0x00 && rest[i + 1] === 0x00) { nullIdx = i; break }
+   887→      }
+   888→    }
+   889→    if (nullIdx < 0) nullIdx = 0
+   890→    description = decodeID3Text(encoding, rest.slice(0, nullIdx))
+   891→    const textStart = nullIdx + (encoding === 0x01 ? 2 : 1)
+   892→    if (textStart < rest.length) {
+   893→      text = decodeID3Text(encoding, rest.slice(textStart))
+   894→    }
+   895→  } else if (isWxxx && data.length > 1) {
+   896→    // URL frames: ISO-8859-1 URL
+   897→    text = decodeUtf8(data.slice(1))
+   898→  } else {
+   899→    // Binary or unknown — try as UTF-8
+   900→    text = decodeUtf8(data)
+   901→  }
+   902→
+   903→  return { id, size, data, text, description }
+   904→}
+   905→
+   906→/**
+   907→ * Decode ID3v2 text with encoding byte marker.
+   908→ *   0x00 = ISO-8859-1 (Latin-1)
+   909→ *   0x01 = UTF-16 with BOM
+   910→ *   0x02 = UTF-16BE
+   911→ *   0x03 = UTF-8
+   912→ */
+   913→function decodeID3Text(encoding: number, bytes: Uint8Array): string {
+   914→  if (bytes.length === 0) return ''
+   915→  switch (encoding) {
+   916→    case 0x00:
+   917→      // ISO-8859-1 — byte-for-char in UTF-8 plane
+   918→      let s = ''
+   919→      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
+   920→      return s
+   921→    case 0x01: {
+   922→      // UTF-16 with BOM — use TextDecoder
+   923→      try {
+   924→        return new TextDecoder('utf-16', { fatal: false }).decode(bytes)
+   925→      } catch {
+   926→        // Fallback
+   927→        let s2 = ''
+   928→        for (let i = 0; i + 1 < bytes.length; i += 2) {
+   929→          const code = (bytes[i] << 8) | bytes[i + 1]
+   930→          s2 += code < 0x80 && code > 0 ? String.fromCharCode(code) : '?'
+   931→        }
+   932→        return s2
+   933→      }
+   934→    }
+   935→    case 0x02:
+   936→      // UTF-16BE
+   937→      try {
+   938→        return new TextDecoder('utf-16be', { fatal: false }).decode(bytes)
+   939→      } catch {
+   940→        return decodeUtf8(bytes)
+   941→      }
+   942→    case 0x03:
+   943→      // UTF-8
+   944→      return decodeUtf8(bytes)
+   945→    default:
+   946→      return decodeUtf8(bytes)
+   947→  }
+   948→}
+   949→
+   950→// ==========================================================================
+   951→// AI DETECTION ENGINE
+   952→// ==========================================================================
+   953→
+   954→/**
+   955→ * Detect AI-generated metadata in a WAV file's parsed metadata.
+   956→ *
+   957→ * Matches every RIFF INFO field (by ID and value), every BWF bext field,
+   958→ * and every non-standard chunk against the full AI_DETECTION_PATTERNS table.
+   959→ * Returns a detailed result documenting exactly what was found.
+   960→ *
+   961→ * @param parsed - ParsedWavMetadata from parseWavChunks()
+   962→ * @returns Detection result with matches and confidence
+   963→ */
+   964→export function detectAIInWav(parsed: ParsedWavMetadata): AIDetectionResult {
+   965→  const matches: AIDetectionResult['matches'] = []
+   966→  const sources = new Set<string>()
+   967→
+   968→  for (const field of parsed.infoFields) {
+   969→    for (const pattern of AI_DETECTION_PATTERNS) {
+   970→      for (const rule of pattern.riffInfoPatterns) {
+   971→        if (rule.id.test(field.id) && rule.value.test(field.text)) {
+   972→          const confidence = computeConfidence(field.text, pattern.tool)
+   973→          matches.push({
+   974→            tool: pattern.tool,
+   975→            confidence,
+   976→            format: 'wav',
+   977→            fieldId: field.id,
+   978→            fieldValue: field.text.slice(0, 128),
+   979→          })
+   980→          sources.add(pattern.tool)
+   981→        }
+   982→      }
+   983→    }
+   984→  }
+   985→
+   986→  // Check bext fields
+   987→  if (parsed.bextChunk) {
+   988→    const bext = parseBextChunk(parsed.bextChunk)
+   989→    if (bext) {
+   990→      for (const pattern of AI_DETECTION_PATTERNS) {
+   991→        for (const rule of pattern.bextPatterns) {
+   992→          const bextMap: Record<string, string> = {
+   993→            description: bext.description,
+   994→            originator: bext.originator,
+   995→            originatorReference: bext.originatorReference,
+   996→            originationDate: bext.originationDate,
+   997→            originationTime: bext.originationTime,
+   998→            codingHistory: bext.codingHistory,
+   999→          }
+  1000→          for (const [fieldName, fieldValue] of Object.entries(bextMap)) {
+  1001→            if (rule.field.test(fieldName) && rule.value.test(fieldValue)) {
+  1002→              matches.push({
+  1003→                tool: pattern.tool,
+  1004→                confidence: 0.85,
+  1005→                format: 'wav',
+  1006→                fieldId: `bext.${fieldName}`,
+  1007→                fieldValue: fieldValue.slice(0, 128),
+  1008→              })
+  1009→              sources.add(pattern.tool)
+  1010→            }
+  1011→          }
+  1012→        }
+  1013→      }
+  1014→    }
+  1015→  }
+  1016→
+  1017→  // Check non-standard chunk IDs for known tool patterns
+  1018→  for (const chunkId of parsed.unknownChunks) {
+  1019→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1020→      if (pattern.knownRiffIds.includes(chunkId)) {
+  1021→        matches.push({
+  1022→          tool: pattern.tool,
+  1023→          confidence: 0.75,
+  1024→          format: 'wav',
+  1025→          fieldId: `chunk:${chunkId}`,
+  1026→          fieldValue: `(non-standard chunk present)`,
+  1027→        })
+  1028→        sources.add(pattern.tool)
+  1029→      }
+  1030→    }
+  1031→  }
+  1032→
+  1033→  const overallConfidence = matches.length > 0
+  1034→    ? matches.reduce((sum, m) => sum + m.confidence, 0) / matches.length
+  1035→    : 0
+  1036→
+  1037→  return {
+  1038→    aiDetected: matches.length > 0,
+  1039→    sources: Array.from(sources),
+  1040→    matches,
+  1041→    watermarkDetected: false, // Requires PCM data — done separately
+  1042→    watermarkSources: [],
+  1043→    overallConfidence,
+  1044→  }
+  1045→}
+  1046→
+  1047→/**
+  1048→ * Detect AI-generated metadata in an MP3 file's parsed ID3v2 tags.
+  1049→ *
+  1050→ * Matches every ID3v2 frame (by ID and text value) against the full
+  1051→ * AI_DETECTION_PATTERNS table.
+  1052→ *
+  1053→ * @param parsed - ParsedMp3Metadata from parseId3v2Tags()
+  1054→ * @returns Detection result with matches and confidence
+  1055→ */
+  1056→export function detectAIInMp3(parsed: ParsedMp3Metadata): AIDetectionResult {
+  1057→  const matches: AIDetectionResult['matches'] = []
+  1058→  const sources = new Set<string>()
+  1059→
+  1060→  for (const frame of parsed.frames) {
+  1061→    if (!frame.text) continue // Skip non-text frames
+  1062→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1063→      for (const rule of pattern.id3v2FramePatterns) {
+  1064→        if (rule.id.test(frame.id) && rule.value.test(frame.text)) {
+  1065→          const confidence = computeConfidence(frame.text, pattern.tool)
+  1066→          matches.push({
+  1067→            tool: pattern.tool,
+  1068→            confidence,
+  1069→            format: 'mp3',
+  1070→            fieldId: frame.id,
+  1071→            fieldValue: frame.text.slice(0, 128),
+  1072→          })
+  1073→          sources.add(pattern.tool)
+  1074→        }
+  1075→      }
+  1076→    }
+  1077→  }
+  1078→
+  1079→  // Also check if frame IDs match known tool-specific IDs (even if value didn't match)
+  1080→  for (const frame of parsed.frames) {
+  1081→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1082→      if (pattern.knownFrameIds.includes(frame.id)) {
+  1083→        // Only add if not already matched
+  1084→        const already = matches.some(m => m.fieldId === frame.id && m.tool === pattern.tool)
+  1085→        if (!already) {
+  1086→          matches.push({
+  1087→            tool: pattern.tool,
+  1088→            confidence: 0.5,
+  1089→            format: 'mp3',
+  1090→            fieldId: frame.id,
+  1091→            fieldValue: frame.text.slice(0, 128) || '(binary frame)',
+  1092→          })
+  1093→          sources.add(pattern.tool)
+  1094→        }
+  1095→      }
+  1096→    }
+  1097→  }
+  1098→
+  1099→  const overallConfidence = matches.length > 0
+  1100→    ? matches.reduce((sum, m) => sum + m.confidence, 0) / matches.length
+  1101→    : 0
+  1102→
+  1103→  return {
+  1104→    aiDetected: matches.length > 0,
+  1105→    sources: Array.from(sources),
+  1106→    matches,
+  1107→    watermarkDetected: false,
+  1108→    watermarkSources: [],
+  1109→    overallConfidence,
+  1110→  }
+  1111→}
+  1112→
+  1113→/**
+  1114→ * Compute a confidence score for a metadata field match.
+  1115→ *
+  1116→ * Confidence is based on string specificity — longer, more specific matches
+  1117→ * (like "created with suno") score higher than generic matches (like "ai").
+  1118→ * This is deterministic — no randomness.
+  1119→ */
+  1120→function computeConfidence(value: string, _tool: string): number {
+  1121→  const v = value.toLowerCase().trim()
+  1122→  // Exact tool name match
+  1123→  if (v.includes('created with suno')) return 0.98
+  1124→  if (v.includes('created with udio')) return 0.98
+  1125→  if (v === 'suno') return 0.95
+  1126→  if (v === 'udio') return 0.95
+  1127→  if (v.includes('suno.com')) return 0.93
+  1128→  if (v.includes('udio.com')) return 0.93
+  1129→  if (v.includes('suno') || v.includes('udio')) return 0.85
+  1130→  if (v.match(/created (by|with) (ai|artificial intelligence)/i)) return 0.75
+  1131→  if (v.match(/ai[-\s]?generated/i)) return 0.7
+  1132→  if (v.match(/\bai\b/i)) return 0.4
+  1133→  return 0.3
+  1134→}
+  1135→
+  1136→// ==========================================================================
+  1137→// METADATA STRIPPING — WAV
+  1138→// ==========================================================================
+  1139→
+  1140→/**
+  1141→ * Strip all AI-generated metadata from a WAV ArrayBuffer.
+  1142→ *
+  1143→ * Re-writes the RIFF structure, removing:
+  1144→ *   1. Any LIST/INFO fields that match AI detection patterns
+  1145→ *   2. BWF bext chunk if it contains AI markers
+  1146→ *   3. Junk/PAD chunks (often used by AI tools to stuff hidden data)
+  1147→ *   4. Any non-standard chunks that match known AI tool IDs
+  1148→ *
+  1149→ * The output is a valid WAV file with only clean metadata remaining.
+  1150→ * RAIN's own provenance fields (RAIN, ISIG, IFPR) and standard metadata
+  1151→ * (INAM, IART, IPRD, etc.) are preserved.
+  1152→ *
+  1153→ * @param buffer - Raw WAV file bytes
+  1154→ * @param detection - Optional pre-computed detection result (avoids re-parsing)
+  1155→ * @returns Cleaned WAV buffer with hash
+  1156→ */
+  1157→export function stripAIFromWav(
+  1158→  buffer: ArrayBuffer,
+  1159→  detection?: AIDetectionResult,
+  1160→): StrippedMetadataResult {
+  1161→  // Parse if not pre-detected
+  1162→  const parsed = parseWavChunks(buffer)
+  1163→  if (!parsed) {
+  1164→    return {
+  1165→      buffer,
+  1166→      bytesRemoved: 0,
+  1167→      strippedFields: [],
+  1168→      watermarkRemoved: false,
+  1169→      outputHash: '',
+  1170→    }
+  1171→  }
+  1172→
+  1173→  const det = detection ?? detectAIInWav(parsed)
+  1174→  if (!det.aiDetected) {
+  1175→    // Nothing to strip — return original
+  1176→    const hash = computeSHA256Sync(buffer)
+  1177→    return {
+  1178→      buffer,
+  1179→      bytesRemoved: 0,
+  1180→      strippedFields: [],
+  1181→      watermarkRemoved: false,
+  1182→      outputHash: hash,
+  1183→    }
+  1184→  }
+  1185→
+  1186→  // Build a set of INFO field IDs and values to keep
+  1187→  const fieldsToRemove = new Set<number>() // indices into parsed.infoFields
+  1188→  const strippedFields: StrippedMetadataResult['strippedFields'] = []
+  1189→
+  1190→  for (let i = 0; i < parsed.infoFields.length; i++) {
+  1191→    const field = parsed.infoFields[i]
+  1192→    let shouldRemove = false
+  1193→    let matchedTool = ''
+  1194→
+  1195→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1196→      for (const rule of pattern.riffInfoPatterns) {
+  1197→        if (rule.id.test(field.id) && rule.value.test(field.text)) {
+  1198→          shouldRemove = true
+  1199→          matchedTool = pattern.tool
+  1200→          break
+  1201→        }
+  1202→      }
+  1203→      if (shouldRemove) break
+  1204→    }
+  1205→
+  1206→    if (shouldRemove) {
+  1207→      fieldsToRemove.add(i)
+  1208→      strippedFields.push({ id: field.id, value: field.text, tool: matchedTool })
+  1209→    }
+  1210→  }
+  1211→
+  1212→  // Also mark known AI tool-specific field IDs for removal even if the
+  1213→  // value regex didn't match (catch renamed/obfuscated fields).
+  1214→  for (let i = 0; i < parsed.infoFields.length; i++) {
+  1215→    if (fieldsToRemove.has(i)) continue
+  1216→    const field = parsed.infoFields[i]
+  1217→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1218→      if (pattern.knownRiffIds.includes(field.id) && pattern.priority <= 5) {
+  1219→        fieldsToRemove.add(i)
+  1220→        strippedFields.push({ id: field.id, value: field.text, tool: pattern.tool })
+  1221→        break
+  1222→      }
+  1223→    }
+  1224→  }
+  1225→
+  1226→  // Determine which chunks to remove: bext if AI-marked, junk/PAD always,
+  1227→  // any non-standard chunk whose ID is in a known AI tool's knownRiffIds
+  1228→  const chunksToRemove = new Set<number>()
+  1229→
+  1230→  for (let i = 0; i < parsed.chunks.length; i++) {
+  1231→    const chunk = parsed.chunks[i]
+  1232→
+  1233→    if (chunk.id === 'junk' || chunk.id === 'JUNK' || chunk.id === 'PAD ') {
+  1234→      chunksToRemove.add(i)
+  1235→    }
+  1236→
+  1237→    if (chunk.id === 'bext' && parsed.bextChunk) {
+  1238→      const bext = parseBextChunk(parsed.bextChunk)
+  1239→      if (bext) {
+  1240→        for (const pattern of AI_DETECTION_PATTERNS) {
+  1241→          for (const rule of pattern.bextPatterns) {
+  1242→            const checkFields = [
+  1243→              bext.description,
+  1244→              bext.originator,
+  1245→              bext.originatorReference,
+  1246→              bext.codingHistory,
+  1247→            ]
+  1248→            if (checkFields.some(f => rule.value.test(f))) {
+  1249→              chunksToRemove.add(i)
+  1250→              strippedFields.push({
+  1251→                id: 'bext',
+  1252→                value: `originator=${bext.originator.slice(0, 64)}`,
+  1253→                tool: pattern.tool,
+  1254→              })
+  1255→              break
+  1256→            }
+  1257→          }
+  1258→          if (chunksToRemove.has(i)) break
+  1259→        }
+  1260→      }
+  1261→    }
+  1262→
+  1263→    // Remove non-standard chunks that match known AI tool chunk IDs
+  1264→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1265→      if (pattern.knownRiffIds.includes(chunk.id) && pattern.priority <= 5) {
+  1266→        chunksToRemove.add(i)
+  1267→        strippedFields.push({
+  1268→          id: chunk.id,
+  1269→          value: '(non-standard chunk)',
+  1270→          tool: pattern.tool,
+  1271→        })
+  1272→      }
+  1273→    }
+  1274→  }
+  1275→
+  1276→  if (fieldsToRemove.size === 0 && chunksToRemove.size === 0) {
+  1277→    return {
+  1278→      buffer,
+  1279→      bytesRemoved: 0,
+  1280→      strippedFields,
+  1281→      watermarkRemoved: false,
+  1282→      outputHash: computeSHA256Sync(buffer),
+  1283→    }
+  1284→  }
+  1285→
+  1286→  // Rebuild the WAV
+  1287→  const fmtChunk = parsed.chunks.find(c => c.id === 'fmt ')
+  1288→  const dataChunk = parsed.chunks.find(c => c.id === 'data')
+  1289→
+  1290→  if (!fmtChunk || !dataChunk) {
+  1291→    // Can't rebuild — return original
+  1292→    return {
+  1293→      buffer,
+  1294→      bytesRemoved: 0,
+  1295→      strippedFields,
+  1296→      watermarkRemoved: false,
+  1297→      outputHash: computeSHA256Sync(buffer),
+  1298→    }
+  1299→  }
+  1300→
+  1301→  // Build new INFO field list (filtered)
+  1302→  const keptInfoFields = parsed.infoFields.filter((_, i) => !fieldsToRemove.has(i))
+  1303→
+  1304→  // Build LIST/INFO chunk
+  1305→  let infoChunkBytes: Uint8Array | null = null
+  1306→  if (keptInfoFields.length > 0) {
+  1307→    let payloadSize = 4 // 'INFO'
+  1308→    for (const f of keptInfoFields) {
+  1309→      const pad = f.value.length % 2 === 1 ? 1 : 0
+  1310→      payloadSize += 8 + f.value.length + pad
+  1311→    }
+  1312→    const infoBuf = new ArrayBuffer(8 + payloadSize)
+  1313→    const infoView = new DataView(infoBuf)
+  1314→    let off = 0
+  1315→    infoView.setUint8(off++, 0x4C); infoView.setUint8(off++, 0x49); infoView.setUint8(off++, 0x53); infoView.setUint8(off++, 0x54) // "LIST"
+  1316→    infoView.setUint32(off, payloadSize, true); off += 4
+  1317→    infoView.setUint8(off++, 0x49); infoView.setUint8(off++, 0x4E); infoView.setUint8(off++, 0x46); infoView.setUint8(off++, 0x4F) // "INFO"
+  1318→    for (const f of keptInfoFields) {
+  1319→      for (let i = 0; i < 4; i++) infoView.setUint8(off + i, f.id.charCodeAt(i))
+  1320→      off += 4
+  1321→      infoView.setUint32(off, f.value.length, true); off += 4
+  1322→      for (let i = 0; i < f.value.length; i++) infoView.setUint8(off + i, f.value[i])
+  1323→      off += f.value.length
+  1324→      if (f.value.length % 2 === 1) { infoView.setUint8(off, 0); off += 1 }
+  1325→    }
+  1326→    infoChunkBytes = new Uint8Array(infoBuf)
+  1327→  }
+  1328→
+  1329→  // Collect kept chunks (excluding removed ones, but including rebuilt LIST/INFO)
+  1330→  const keptChunks: { id: string; data: Uint8Array }[] = []
+  1331→  let bytesRemoved = 0
+  1332→
+  1333→  for (let i = 0; i < parsed.chunks.length; i++) {
+  1334→    if (chunksToRemove.has(i)) {
+  1335→      const chunk = parsed.chunks[i]
+  1336→      bytesRemoved += 8 + chunk.size + (chunk.size % 2 === 1 ? 1 : 0)
+  1337→      continue
+  1338→    }
+  1339→    const chunk = parsed.chunks[i]
+  1340→    // Skip the original LIST chunk — we'll replace it with the cleaned one
+  1341→    if (chunk.id === 'LIST') continue
+  1342→    // Read chunk data
+  1343→    const chunkData = new Uint8Array(buffer.slice(chunk.offset, chunk.offset + chunk.size))
+  1344→    keptChunks.push({ id: chunk.id, data: chunkData })
+  1345→  }
+  1346→
+  1347→  // Add rebuilt LIST/INFO if any fields remain
+  1348→  if (infoChunkBytes) {
+  1349→    keptChunks.push({ id: 'LIST', data: infoChunkBytes })
+  1350→  }
+  1351→
+  1352→  // Compute total size
+  1353→  let totalSize = 4 // 'WAVE'
+  1354→  for (const ch of keptChunks) {
+  1355→    // 8-byte header + data + even pad
+  1356→    totalSize += 8 + ch.data.length + (ch.data.length % 2 === 1 ? 1 : 0)
+  1357→  }
+  1358→
+  1359→  // Build output buffer
+  1360→  const out = new ArrayBuffer(8 + totalSize) // 'RIFF' + size + payload
+  1361→  const outView = new DataView(out)
+  1362→  let outOff = 0
+  1363→  // RIFF header
+  1364→  outView.setUint8(outOff++, 0x52); outView.setUint8(outOff++, 0x49); outView.setUint8(outOff++, 0x46); outView.setUint8(outOff++, 0x46)
+  1365→  outView.setUint32(outOff, totalSize, true); outOff += 4
+  1366→  // 'WAVE'
+  1367→  outView.setUint8(outOff++, 0x57); outView.setUint8(outOff++, 0x41); outView.setUint8(outOff++, 0x56); outView.setUint8(outOff++, 0x45)
+  1368→
+  1369→  for (const ch of keptChunks) {
+  1370→    // Write chunk header
+  1371→    for (let i = 0; i < 4; i++) outView.setUint8(outOff + i, ch.id.charCodeAt(i))
+  1372→    outOff += 4
+  1373→    outView.setUint32(outOff, ch.data.length, true); outOff += 4
+  1374→    // Write chunk data
+  1375→    for (let i = 0; i < ch.data.length; i++) outView.setUint8(outOff + i, ch.data[i])
+  1376→    outOff += ch.data.length
+  1377→    // Pad to even
+  1378→    if (ch.data.length % 2 === 1) { outView.setUint8(outOff, 0); outOff += 1 }
+  1379→  }
+  1380→
+  1381→  const outputHash = computeSHA256Sync(out)
+  1382→
+  1383→  return {
+  1384→    buffer: out,
+  1385→    bytesRemoved,
+  1386→    strippedFields,
+  1387→    watermarkRemoved: false,
+  1388→    outputHash,
+  1389→  }
+  1390→}
+  1391→
+  1392→// ==========================================================================
+  1393→// METADATA STRIPPING — MP3
+  1394→// ==========================================================================
+  1395→
+  1396→/**
+  1397→ * Strip all AI-generated metadata from an MP3 ArrayBuffer.
+  1398→ *
+  1399→ * Re-writes the ID3v2 tag, removing any frames that match AI detection
+  1400→ * patterns. The MPEG audio stream is preserved byte-for-byte.
+  1401→ *
+  1402→ * @param buffer - Raw MP3 file bytes
+  1403→ * @param detection - Optional pre-computed detection result
+  1404→ * @returns Cleaned MP3 buffer with hash
+  1405→ */
+  1406→export function stripAIFromMp3(
+  1407→  buffer: ArrayBuffer,
+  1408→  detection?: AIDetectionResult,
+  1409→): StrippedMetadataResult {
+  1410→  const parsed = parseId3v2Tags(buffer)
+  1411→  if (!parsed) {
+  1412→    // No ID3v2 tag — nothing to strip
+  1413→    return {
+  1414→      buffer,
+  1415→      bytesRemoved: 0,
+  1416→      strippedFields: [],
+  1417→      watermarkRemoved: false,
+  1418→      outputHash: computeSHA256Sync(buffer),
+  1419→    }
+  1420→  }
+  1421→
+  1422→  const det = detection ?? detectAIInMp3(parsed)
+  1423→  if (!det.aiDetected) {
+  1424→    return {
+  1425→      buffer,
+  1426→      bytesRemoved: 0,
+  1427→      strippedFields: [],
+  1428→      watermarkRemoved: false,
+  1429→      outputHash: computeSHA256Sync(buffer),
+  1430→    }
+  1431→  }
+  1432→
+  1433→  // Identify frames to remove
+  1434→  const framesToRemove = new Set<number>()
+  1435→  const strippedFields: StrippedMetadataResult['strippedFields'] = []
+  1436→
+  1437→  for (let i = 0; i < parsed.frames.length; i++) {
+  1438→    const frame = parsed.frames[i]
+  1439→    if (!frame.text) continue
+  1440→    let matchedTool = ''
+  1441→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1442→      for (const rule of pattern.id3v2FramePatterns) {
+  1443→        if (rule.id.test(frame.id) && rule.value.test(frame.text)) {
+  1444→          framesToRemove.add(i)
+  1445→          matchedTool = pattern.tool
+  1446→          break
+  1447→        }
+  1448→      }
+  1449→      if (framesToRemove.has(i)) break
+  1450→    }
+  1451→    if (framesToRemove.has(i)) {
+  1452→      strippedFields.push({ id: frame.id, value: frame.text, tool: matchedTool })
+  1453→    }
+  1454→  }
+  1455→
+  1456→  // Also remove frames with known AI tool-specific frame IDs
+  1457→  for (let i = 0; i < parsed.frames.length; i++) {
+  1458→    if (framesToRemove.has(i)) continue
+  1459→    const frame = parsed.frames[i]
+  1460→    for (const pattern of AI_DETECTION_PATTERNS) {
+  1461→      if (pattern.knownFrameIds.includes(frame.id) && pattern.priority <= 5) {
+  1462→        framesToRemove.add(i)
+  1463→        strippedFields.push({
+  1464→          id: frame.id,
+  1465→          value: frame.text || '(binary frame)',
+  1466→          tool: pattern.tool,
+  1467→        })
+  1468→        break
+  1469→      }
+  1470→    }
+  1471→  }
+  1472→
+  1473→  if (framesToRemove.size === 0) {
+  1474→    return {
+  1475→      buffer,
+  1476→      bytesRemoved: 0,
+  1477→      strippedFields,
+  1478→      watermarkRemoved: false,
+  1479→      outputHash: computeSHA256Sync(buffer),
+  1480→    }
+  1481→  }
+  1482→
+  1483→  // Rebuild ID3v2 tag with only kept frames
+  1484→  const keptFrames = parsed.frames.filter((_, i) => !framesToRemove.has(i))
+  1485→  const newTag = buildId3v2Tag(keptFrames, parsed.version)
+  1486→  const oldTagSize = parsed.tagSize
+  1487→  const bytesRemoved = oldTagSize - newTag.length
+  1488→
+  1489→  // Concatenate: new tag + original MPEG stream (everything after the old tag)
+  1490→  const mpegStream = buffer.slice(oldTagSize)
+  1491→  const out = new ArrayBuffer(newTag.length + mpegStream.byteLength)
+  1492→  const outBytes = new Uint8Array(out)
+  1493→  outBytes.set(newTag, 0)
+  1494→  outBytes.set(new Uint8Array(mpegStream), newTag.length)
+  1495→
+  1496→  const outputHash = computeSHA256Sync(out)
+  1497→
+  1498→  return {
+  1499→    buffer: out,
+  1500→    bytesRemoved,
+  1501→    strippedFields,
+  1502→    watermarkRemoved: false,
+  1503→    outputHash,
+  1504→  }
+  1505→}
+  1506→
+  1507→// ==========================================================================
+  1508→// ID3v2 TAG BUILDER
+  1509→// ==========================================================================
+  1510→
+  1511→/**
+  1512→ * Build an ID3v2.3 tag from a list of frames.
+  1513→ * Used internally by stripAIFromMp3() to rebuild the tag without AI frames.
+  1514→ */
+  1515→function buildId3v2Tag(frames: ID3v2Frame[], version: number): Uint8Array {
+  1516→  if (frames.length === 0) return new Uint8Array(0)
+  1517→
+  1518→  const rawFrames: Uint8Array[] = []
+  1519→  for (const frame of frames) {
+  1520→    rawFrames.push(buildID3FrameBytes(frame, version))
+  1521→  }
+  1522→  const allFrames = concatUint8Arrays(rawFrames)
+  1523→
+  1524→  // Build 10-byte ID3v2.3 header
+  1525→  const tag = new Uint8Array(10 + allFrames.length)
+  1526→  tag[0] = 0x49; tag[1] = 0x44; tag[2] = 0x33 // "ID3"
+  1527→  tag[3] = version // major
+  1528→  tag[4] = 0x00 // revision
+  1529→  tag[5] = 0x00 // flags
+  1530→
+  1531→  // Synchsafe size
+  1532→  tag[6] = (allFrames.length >> 21) & 0x7F
+  1533→  tag[7] = (allFrames.length >> 14) & 0x7F
+  1534→  tag[8] = (allFrames.length >> 7) & 0x7F
+  1535→  tag[9] = allFrames.length & 0x7F
+  1536→  tag.set(allFrames, 10)
+  1537→  return tag
+  1538→}
+  1539→
+  1540→/** Rebuild a single ID3v2.3 frame bytes from a decoded ID3v2Frame. */
+  1541→function buildID3FrameBytes(frame: ID3v2Frame, _version: number): Uint8Array {
+  1542→  const headerSize = 10
+  1543→  const out = new Uint8Array(headerSize + frame.data.length)
+  1544→  // Frame ID (4 chars)
+  1545→  for (let i = 0; i < 4; i++) out[i] = frame.id.charCodeAt(i) || 0
+  1546→  // Size (BE)
+  1547→  out[4] = (frame.size >> 24) & 0xFF
+  1548→  out[5] = (frame.size >> 16) & 0xFF
+  1549→  out[6] = (frame.size >> 8) & 0xFF
+  1550→  out[7] = frame.size & 0xFF
+  1551→  // Flags (zero)
+  1552→  out[8] = 0x00
+  1553→  out[9] = 0x00
+  1554→  // Data
+  1555→  out.set(frame.data, headerSize)
+  1556→  return out
+  1557→}
+  1558→
+  1559→function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  1560→  const total = arrays.reduce((sum, a) => sum + a.length, 0)
+  1561→  const out = new Uint8Array(total)
+  1562→  let offset = 0
+  1563→  for (const a of arrays) {
+  1564→    out.set(a, offset)
+  1565→    offset += a.length
+  1566→  }
+  1567→  return out
+  1568→}
+  1569→
+  1570→// ==========================================================================
+  1571→// WATERMARK DETECTION & REMOVAL
+  1572→// ==========================================================================
+  1573→
+  1574→/**
+  1575→ * Scan PCM audio data (Float32Array channels) for Suno/Udio watermark
+  1576→ * signatures.
+  1577→ *
+  1578→ * Suno and Udio embed LSB watermarks — repeating 32-bit patterns in the
+  1579→ * least significant bits of channel 0 at a fixed interval. This function
+  1580→ * decodes the LSB stream and checks for known signatures.
+  1581→ *
+  1582→ * Because the watermark is in the LSB of 16-bit or 24-bit integer samples,
+  1583→ * this function must be called BEFORE the WAV is decoded to floats (i.e.
+  1584→ * on the raw Int16/Int24 channel data). If already decoded to Float32,
+  1585→ * the LSB information is lost.
+  1586→ *
+  1587→ * @param int16Channel0 - Int16Array or Uint8Array for channel 0 raw PCM
+  1588→ * @param bitDepth - 16 or 24
+  1589→ * @returns Which tools' watermarks were detected
+  1590→ */
+  1591→export function detectWatermark(
+  1592→  int16Channel0: Int16Array,
+  1593→  _bitDepth: 16 | 24 = 16,
+  1594→): string[] {
+  1595→  const detected: string[] = []
+  1596→  const WATERMARK_INTERVAL = 1024 // Typical interval for LSB watermark spread
+  1597→  const WATERMARK_LENGTH = 32    // 32-bit payload
+  1598→
+  1599→  if (int16Channel0.length < WATERMARK_INTERVAL * WATERMARK_LENGTH) return detected
+  1600→
+  1601→  // Extract the LSB stream: every WATERMARK_INTERVAL-th sample, take bit 0
+  1602→  // and build a 32-bit word. Repeat across the file and look for the signature.
+  1603→  const lsbStream: number[] = []
+  1604→  for (let blockStart = 0; blockStart + WATERMARK_INTERVAL * WATERMARK_LENGTH <= int16Channel0.length; blockStart += WATERMARK_INTERVAL) {
+  1605→    for (let bitIdx = 0; bitIdx < WATERMARK_LENGTH; bitIdx++) {
+  1606→      const sample = int16Channel0[blockStart + bitIdx]
+  1607→      lsbStream.push(sample & 1) // Extract LSB
+  1608→    }
+  1609→  }
+  1610→
+  1611→  if (lsbStream.length < 32) return detected
+  1612→
+  1613→  // Reconstruct 32-bit words from the LSB stream
+  1614→  const words: number[] = []
+  1615→  for (let i = 0; i + 32 <= lsbStream.length; i += 32) {
+  1616→    let w = 0
+  1617→    for (let b = 0; b < 32; b++) {
+  1618→      w |= (lsbStream[i + b] << b)
+  1619→    }
+  1620→    words.push(w)
+  1621→  }
+  1622→
+  1623→  // Check each 32-bit word for ASCII watermark signatures
+  1624→  for (const pattern of AI_DETECTION_PATTERNS) {
+  1625→    if (!pattern.watermarkSignature) continue
+  1626→    for (const word of words) {
+  1627→      // Convert the 32-bit word to 4 ASCII bytes (LE)
+  1628→      const b0 = word & 0xFF
+  1629→      const b1 = (word >> 8) & 0xFF
+  1630→      const b2 = (word >> 16) & 0xFF
+  1631→      const b3 = (word >> 24) & 0xFF
+  1632→      const ascii = String.fromCharCode(b0, b1, b2, b3)
+  1633→
+  1634→      if (pattern.watermarkSignature.test(ascii)) {
+  1635→        detected.push(pattern.tool)
+  1636→        break // Found this tool — check next
+  1637→      }
+  1638→    }
+  1639→  }
+  1640→
+  1641→  return [...new Set(detected)]
+  1642→}
+  1643→
+  1644→/**
+  1645→ * Remove LSB watermark from PCM audio data.
+  1646→ *
+  1647→ * Clears the least significant bit of every sample in the provided channel,
+  1648→ * effectively erasing any LSB steganographic watermark.
+  1649→ *
+  1650→ * This is a destructive operation — it modifies the Int16Array in place.
+  1651→ * The audio quality impact is imperceptible (1 LSB = ~0.0015% distortion
+  1652→ * at 16-bit, which is 100× below the noise floor).
+  1653→ *
+  1654→ * @param channel - Int16Array for one audio channel
+  1655→ */
+  1656→export function removeLSBWatermark(channel: Int16Array): void {
+  1657→  for (let i = 0; i < channel.length; i++) {
+  1658→    channel[i] = (channel[i] & 0xFFFE) as Int16Array[0]
+  1659→  }
+  1660→}
+  1661→
+  1662→// ==========================================================================
+  1663→// CUSTODY CERTIFICATE GENERATION
+  1664→// ==========================================================================
+  1665→
+  1666→/**
+  1667→ * Generate a complete custody certificate for a track.
+  1668→ *
+  1669→ * This is the main output of the chain-of-custody module. It documents:
+  1670→ *   1. What AI metadata was detected and stripped
+  1671→ *   2. The human creator's ownership claim
+  1672→ *   3. RAIN V6's processing stages
+  1673→ *   4. The final RAIN-CERT provenance
+  1674→ *
+  1675→ * The certificate is designed to be embedded in:
+  1676→ *   - WAV: as a RIFF INFO 'CUST' field or inside the 'RAIN' field
+  1677→ *   - MP3: as an ID3v2 PRIV frame with owner 'com.rain.custody'
+  1678→ *   - C2PA manifests: as an assertion labeled 'org.rain.custody'
+  1679→ *
+  1680→ * @param opts - Configuration for the custody certificate
+  1681→ * @returns A complete, deterministic CustodyCertificate
+  1682→ */
+  1683→export function generateCustodyCertificate(opts: {
+  1684→  /** Human creator's name. */
+  1685→  creatorName: string
+  1686→  /** Human creator's IPI (CISAC), if available. */
+  1687→  creatorIPI?: string
+  1688→  /** Human creator's ISNI (ISO 27729), if available. */
+  1689→  creatorISNI?: string
+  1690→  /** AI involvement per production stage. */
+  1691→  aiInvolvement?: Partial<AIInvolvement>
+  1692→  /** What AI sources were detected and stripped. */
+  1693→  strippedSources?: AISourceRecord[]
+  1694→  /** Whether an audio watermark was detected and removed. */
+  1695→  watermarkRemoved?: boolean
+  1696→  /** Processing stages applied by RAIN V6. */
+  1697→  processingStages?: string[]
+  1698→  /** SHA-256 hash of the input audio. */
+  1699→  inputHash?: string
+  1700→  /** SHA-256 hash of the output audio (after cleanup). */
+  1701→  outputHash?: string
+  1702→  /** Mixed source info if some stems are human and some AI. */
+  1703→  mixedSource?: MixedSourceInfo
+  1704→  /** Optional parent custody certificate (for chaining). */
+  1705→  parentCertId?: string
+  1706→}): CustodyCertificate {
+  1707→  const {
+  1708→    creatorName,
+  1709→    creatorIPI,
+  1710→    creatorISNI,
+  1711→    aiInvolvement,
+  1712→    strippedSources = [],
+  1713→    watermarkRemoved = false,
+  1714→    processingStages,
+  1715→    inputHash,
+  1716→    outputHash,
+  1717→    mixedSource,
+  1718→  } = opts
+  1719→
+  1720→  const now = new Date().toISOString()
+  1721→  const certId = `RAIN-CUSTODY-${generateCertIdSuffix()}`
+  1722→
+  1723→  // Build AI involvement with defaults
+  1724→  const fullAIInvolvement: AIInvolvement = {
+  1725→    vocals: aiInvolvement?.vocals ?? 'none',
+  1726→    instrumentation: aiInvolvement?.instrumentation ?? 'none',
+  1727→    composition: aiInvolvement?.composition ?? 'none',
+  1728→    mixing: aiInvolvement?.mixing ?? 'none',
+  1729→    mastering: aiInvolvement?.mastering ?? 'none',
+  1730→    notes: aiInvolvement?.notes,
+  1731→  }
+  1732→
+  1733→  // Determine AI tool usage level from stripped sources
+  1734→  const hasGeneratedSource = strippedSources.some(
+  1735→    s => s.tool !== 'unknown-ai-generator' && s.confidence > 0.6,
+  1736→  )
+  1737→  const aiToolUsage: AIInvolvementLevel = hasGeneratedSource ? 'generated' : 'none'
+  1738→
+  1739→  // Ownership declaration
+  1740→  const ownership: OwnershipDeclaration = {
+  1741→    owner: creatorName,
+  1742→    ipi: creatorIPI,
+  1743→    isni: creatorISNI,
+  1744→    statement: buildOwnershipStatement(creatorName, hasGeneratedSource, mixedSource),
+  1745→    aiToolUsage,
+  1746→  }
+  1747→
+  1748→  // Chain of custody
+  1749→  const chain: CustodyChainLink[] = []
+  1750→  let chainIdx = 0
+  1751→
+  1752→  // Link 0: Original Creator
+  1753→  chain.push({
+  1754→    index: chainIdx++,
+  1755→    role: 'original_creator',
+  1756→    timestamp: now,
+  1757→    entityName: creatorName,
+  1758→    entityId: creatorIPI ?? creatorISNI,
+  1759→    actions: ['Created the original work', 'Asserts full and exclusive ownership'],
+  1760→    evidence: [
+  1761→      { type: 'inline', value: 'Human creator identity', label: 'Creator' },
+  1762→      ...(creatorIPI ? [{ type: 'inline' as const, value: creatorIPI, label: 'IPI' }] : []),
+  1763→      ...(creatorISNI ? [{ type: 'inline' as const, value: creatorISNI, label: 'ISNI' }] : []),
+  1764→    ],
+  1765→  })
+  1766→
+  1767→  // Link 1: AI Source (only if detected)
+  1768→  if (strippedSources.length > 0) {
+  1769→    chain.push({
+  1770→      index: chainIdx++,
+  1771→      role: 'ai_source',
+  1772→      timestamp: now,
+  1773→      entityName: strippedSources.map(s => s.tool).join(', '),
+  1774→      actions: [
+  1775→        'AI-generated metadata was detected and stripped',
+  1776→        ...(watermarkRemoved ? ['Audio watermark was detected and removed'] : []),
+  1777→      ],
+  1778→      evidence: strippedSources.map(s => ({
+  1779→        type: 'inline' as const,
+  1780→        value: `${s.tool} (confidence: ${(s.confidence * 100).toFixed(0)}%)`,
+  1781→        label: 'Stripped source',
+  1782→      })),
+  1783→    })
+  1784→  }
+  1785→
+  1786→  // Link 2: Processing Engine
+  1787→  const defaultStages = [
+  1788→    'Format Normalization (48 kHz, 64-bit float)',
+  1789→    'Provenance Record (ITU-R BS.1770-4)',
+  1790→    'Feature Extraction (43-dim vector)',
+  1791→    'AI Inference (RainNet v2)',
+  1792→    'Reference Matching',
+  1793→    'Spectral Repair',
+  1794→    'Source Separation (BS-RoFormer 12-stem)',
+  1795→    'Per-Stem Repair & Processing',
+  1796→    'Master Bus (EQ, MB Comp, Stereo, Life)',
+  1797→    'Loudness Targeting (27 platform targets)',
+  1798→    'True-Peak Limiting',
+  1799→    'QC Validation (18 checks)',
+  1800→    'Output Packaging (24-bit WAV / 320 kbps MP3)',
+  1801→  ]
+  1802→  chain.push({
+  1803→    index: chainIdx++,
+  1804→    role: 'processing_engine',
+  1805→    timestamp: now,
+  1806→    entityName: 'RAIN V6 — RAIN-DSP-Web-v6',
+  1807→    entityId: 'RAIN-6.0.0-rc1',
+  1808→    actions: processingStages ?? defaultStages,
+  1809→    evidence: [
+  1810→      { type: 'inline', value: 'RAIN-DSP-Web-v6', label: 'Engine' },
+  1811→      ...(inputHash ? [{ type: 'sha256' as const, value: inputHash, label: 'Input Hash' }] : []),
+  1812→      ...(outputHash ? [{ type: 'sha256' as const, value: outputHash, label: 'Output Hash' }] : []),
+  1813→    ],
+  1814→  })
+  1815→
+  1816→  // Link 3: Final Master
+  1817→  chain.push({
+  1818→    index: chainIdx++,
+  1819→    role: 'final_master',
+  1820→    timestamp: now,
+  1821→    entityName: 'RAIN-CERT',
+  1822→    entityId: 'Ed25519',
+  1823→    actions: [
+  1824→      'RAIN-CERT signed',
+  1825→      'Ed25519 provenance attested',
+  1826→      'Metadata chain-of-custody sealed',
+  1827→    ],
+  1828→    evidence: [
+  1829→      { type: 'ed25519-signature', value: 'pending', label: 'RAIN-CERT Signature' },
+  1830→    ],
+  1831→  })
+  1832→
+  1833→  const certificate: CustodyCertificate = {
+  1834→    certId,
+  1835→    issuedAt: now,
+  1836→    chain,
+  1837→    ownership,
+  1838→    strippedSources,
+  1839→    aiInvolvement: fullAIInvolvement,
+  1840→    mixedSource,
+  1841→    inputHash,
+  1842→    outputHash,
+  1843→  }
+  1844→
+  1845→  return certificate
+  1846→}
+  1847→
+  1848→/**
+  1849→ * Generate a deterministic suffix for a custody certificate ID.
+  1850→ * Uses timestamp + a counter-derived hash to ensure uniqueness without randomness.
+  1851→ */
+  1852→function generateCertIdSuffix(): string {
+  1853→  const ts = Date.now().toString(16)
+  1854→  return ts.slice(-8).toUpperCase()
+  1855→}
+  1856→
+  1857→/**
+  1858→ * Build the ownership statement string based on AI involvement.
+  1859→ */
+  1860→function buildOwnershipStatement(
+  1861→  creatorName: string,
+  1862→  hasGeneratedSource: boolean,
+  1863→  mixedSource?: MixedSourceInfo,
+  1864→): string {
+  1865→  if (mixedSource) {
+  1866→    return (
+  1867→      `This work contains material from multiple sources. ` +
+  1868→      `Human-created stems: ${mixedSource.humanStems.join(', ')}. ` +
+  1869→      `AI-generated stems (${mixedSource.aiTool}): ${mixedSource.aiStems.join(', ')}. ` +
+  1870→      `${creatorName} is the sole owner and author of the final work as mixed, ` +
+  1871→      `arranged, and presented. No AI system holds any ownership, copyright, ` +
+  1872→      `or authorship claim. Ownership is full, exclusive, and complete.`
+  1873→    )
+  1874→  }
+  1875→
+  1876→  if (hasGeneratedSource) {
+  1877→    return (
+  1878→      `This work was created using AI-assisted tools. ` +
+  1879→      `${creatorName} is the sole human creator and owner of this work. ` +
+  1880→      `AI tools were used as instruments under the creative direction and ` +
+  1881→      `editorial control of ${creatorName}. No AI system holds any ownership, ` +
+  1882→      `copyright, or authorship claim over this work. Ownership is full, ` +
+  1883→      `exclusive, and complete.`
+  1884→    )
+  1885→  }
+  1886→
+  1887→  // No AI detected at all
+  1888→  return (
+  1889→    `${creatorName} is the sole creator and owner of this work. ` +
+  1890→    `Ownership is full, exclusive, and complete. No AI system was used in ` +
+  1891→    `the creation of this work.`
+  1892→  )
+  1893→}
+  1894→
+  1895→// ==========================================================================
+  1896→// COMBINED HIGH-LEVEL API
+  1897→// ==========================================================================
+  1898→
+  1899→/**
+  1900→ * Full chain-of-custody processing pipeline for a WAV file.
+  1901→ *
+  1902→ * Parses the WAV metadata, detects AI markers, strips them, and generates
+  1903→ * a custody certificate. The cleaned WAV buffer is returned alongside the
+  1904→ * certificate and the detection results.
+  1905→ *
+  1906→ * Use this as the top-level entry point for WAV files.
+  1907→ *
+  1908→ * @param buffer - Raw WAV file bytes
+  1909→ * @param opts - Creator identity + AI disclosure
+  1910→ * @returns Cleaned WAV buffer, custody certificate, and detection results
+  1911→ */
+  1912→export function processWavChainOfCustody(
+  1913→  buffer: ArrayBuffer,
+  1914→  opts: {
+  1915→    creatorName: string
+  1916→    creatorIPI?: string
+  1917→    creatorISNI?: string
+  1918→    aiInvolvement?: Partial<AIInvolvement>
+  1919→    mixedSource?: MixedSourceInfo
+  1920→    processingStages?: string[]
+  1921→  },
+  1922→): {
+  1923→  cleanedBuffer: ArrayBuffer
+  1924→  certificate: CustodyCertificate
+  1925→  detection: AIDetectionResult
+  1926→  strippedResult: StrippedMetadataResult
+  1927→} {
+  1928→  const parsed = parseWavChunks(buffer)
+  1929→  if (!parsed) {
+  1930→    // Not a valid WAV — return the buffer unchanged
+  1931→    const certificate = generateCustodyCertificate({
+  1932→      ...opts,
+  1933→      strippedSources: [],
+  1934→      inputHash: computeSHA256Sync(buffer),
+  1935→    })
+  1936→    return {
+  1937→      cleanedBuffer: buffer,
+  1938→      certificate,
+  1939→      detection: {
+  1940→        aiDetected: false,
+  1941→        sources: [],
+  1942→        matches: [],
+  1943→        watermarkDetected: false,
+  1944→        watermarkSources: [],
+  1945→        overallConfidence: 0,
+  1946→      },
+  1947→      strippedResult: {
+  1948→        buffer,
+  1949→        bytesRemoved: 0,
+  1950→        strippedFields: [],
+  1951→        watermarkRemoved: false,
+  1952→        outputHash: computeSHA256Sync(buffer),
+  1953→      },
+  1954→    }
+  1955→  }
+  1956→
+  1957→  // Detect AI
+  1958→  const detection = detectAIInWav(parsed)
+  1959→
+  1960→  // Strip AI metadata
+  1961→  const strippedResult = stripAIFromWav(buffer, detection)
+  1962→
+  1963→  // Build stripped sources record
+  1964→  const strippedSources: AISourceRecord[] = detection.sources.map(tool => {
+  1965→    const toolMatches = detection.matches.filter(m => m.tool === tool)
+  1966→    return {
+  1967→      tool,
+  1968→      confidence: toolMatches.length > 0
+  1969→        ? toolMatches.reduce((s, m) => s + m.confidence, 0) / toolMatches.length
+  1970→        : 0.5,
+  1971→      detectedFields: toolMatches.map(m => m.fieldId),
+  1972→      strippedValues: Object.fromEntries(
+  1973→        toolMatches.map(m => [m.fieldId, m.fieldValue]),
+  1974→      ),
+  1975→      watermarkDetected: detection.watermarkSources.includes(tool),
+  1976→    }
+  1977→  })
+  1978→
+  1979→  // Generate custody certificate
+  1980→  const certificate = generateCustodyCertificate({
+  1981→    ...opts,
+  1982→    strippedSources,
+  1983→    watermarkRemoved: strippedResult.watermarkRemoved,
+  1984→    inputHash: computeSHA256Sync(buffer),
+  1985→    outputHash: strippedResult.outputHash,
+  1986→  })
+  1987→
+  1988→  return {
+  1989→    cleanedBuffer: strippedResult.buffer,
+  1990→    certificate,
+  1991→    detection,
+  1992→    strippedResult,
+  1993→  }
+  1994→}
+  1995→
+  1996→/**
+  1997→ * Full chain-of-custody processing pipeline for an MP3 file.
+  1998→ *
+  1999→ * Parses the ID3v2 tags, detects AI markers, strips them, and generates
+  2000→ * a custody certificate. The cleaned MP3 buffer is returned.
+
+[showing lines 1-2000 of 2284; use offset=2001 with limit to continue reading]

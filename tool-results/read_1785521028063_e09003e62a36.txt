@@ -1,0 +1,830 @@
+     1→'use client'
+     2→
+     3→import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+     4→import {
+     5→  AlertTriangle,
+     6→  CheckCircle2,
+     7→  Download,
+     8→  Image as ImageIcon,
+     9→  Loader2,
+    10→  Music,
+    11→  Package,
+    12→  RefreshCw,
+    13→  Send,
+    14→  Trash2,
+    15→  Upload,
+    16→} from 'lucide-react'
+    17→import { useSessionStore } from '@/lib/rain/store'
+    18→import { DSP_DELIVERY_PARTNERS } from '@/lib/rain/constants'
+    19→import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+    20→import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rain/notifications'
+    21→import { audioEngine } from '@/lib/rain/audio-engine'
+    22→import {
+    23→  buildDdexErnXml,
+    24→  buildDistributionPackage,
+    25→  deleteDeliveryJob,
+    26→  loadDeliveryJobs,
+    27→  persistDeliveryJob,
+    28→  submitToLabelGrid,
+    29→  updateDeliveryJob,
+    30→  validateArtwork,
+    31→  validateDdex,
+    32→  type DeliveryJob,
+    33→  type DeliveryJobStatus,
+    34→} from '@/lib/rain/distribution'
+    35→
+    36→const DISCLOSURE_FIELDS = [
+    37→  { key: 'vocals', label: 'Vocals' },
+    38→  { key: 'instrumentation', label: 'Instrumentation' },
+    39→  { key: 'composition', label: 'Composition' },
+    40→  { key: 'mixing', label: 'Mixing' },
+    41→  { key: 'mastering', label: 'Mastering' },
+    42→] as const
+    43→
+    44→type DisclosureKey = typeof DISCLOSURE_FIELDS[number]['key']
+    45→type DisclosureValue = 'none' | 'assisted' | 'generated'
+    46→
+    47→type BuildStatus = 'idle' | 'packaging' | 'packaged' | 'failed'
+    48→
+    49→interface ArtworkState {
+    50→  file: File
+    51→  dimensions: [number, number]
+    52→  format: 'image/jpeg' | 'image/png'
+    53→  sizeBytes: number
+    54→  previewUrl: string
+    55→}
+    56→
+    57→export function DistributeTab() {
+    58→  const metadata = useSessionStore((s) => s.metadata)
+    59→  const setMetadata = useSessionStore((s) => s.setMetadata)
+    60→  const hasProcessed = useSessionStore((s) => s.hasProcessed)
+    61→  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['spotify', 'apple_music', 'youtube', 'tidal'])
+    62→  const [disclosure, setDisclosure] = useState<Record<DisclosureKey, DisclosureValue>>({
+    63→    vocals: 'assisted',
+    64→    instrumentation: 'none',
+    65→    composition: 'none',
+    66→    mixing: 'none',
+    67→    mastering: 'assisted',
+    68→  })
+    69→  const [buildStatus, setBuildStatus] = useState<BuildStatus>('idle')
+    70→  const [buildError, setBuildError] = useState<string | null>(null)
+    71→  const [artwork, setArtwork] = useState<ArtworkState | null>(null)
+    72→  const [artworkError, setArtworkError] = useState<string | null>(null)
+    73→  const [jobs, setJobs] = useState<DeliveryJob[]>([])
+    74→  const [submittingJobId, setSubmittingJobId] = useState<string | null>(null)
+    75→  const fileInputRef = useRef<HTMLInputElement>(null)
+    76→  const [lastBuildSha, setLastBuildSha] = useState<string | null>(null)
+    77→
+    78→  const refreshJobs = useCallback(async () => {
+    79→    const loaded = await loadDeliveryJobs()
+    80→    setJobs(loaded)
+    81→  }, [])
+    82→
+    83→  useEffect(() => {
+    84→    refreshJobs()
+    85→  }, [refreshJobs])
+    86→
+    87→  const handleGenerateIdentifiers = () => {
+    88→    setMetadata({ isrc: generateIsrc(), upc: generateUpc() })
+    89→  }
+    90→
+    91→  // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected
+    92→  // platforms, and AI disclosure state. Memoised so the preview doesn't
+    93→  // regenerate MessageId / MessageCreatedDateTime on every render.
+    94→  const ddexXml = useMemo(() => {
+    95→    return buildDdexErnXml({
+    96→      title: metadata.title || 'Untitled',
+    97→      artist: metadata.artist || 'Unknown Artist',
+    98→      album: metadata.album,
+    99→      genre: metadata.genre,
+   100→      genreSubgenre: metadata.genreSubgenre,
+   101→      year: metadata.year,
+   102→      isrc: metadata.isrc || 'USXXX2400001',
+   103→      upc: metadata.upc || '000000000000',
+   104→      iswc: metadata.iswc,
+   105→      releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+   106→      originalReleaseDate: metadata.originalReleaseDate,
+   107→      releaseType: metadata.releaseType,
+   108→      label: metadata.label,
+   109→      distributor: metadata.distributor,
+   110→      pLine: metadata.copyrightHolder,
+   111→      cLine: metadata.copyrightYear
+   112→        ? `${metadata.copyrightYear} ${metadata.copyrightHolder ?? metadata.publisher ?? metadata.artist ?? ''}`.trim()
+   113→        : undefined,
+   114→      publisher: metadata.publisher,
+   115→      pro: metadata.pro,
+   116→      masterOwner: metadata.masterOwner,
+   117→      language: metadata.language,
+   118→      explicitLyrics: metadata.explicitLyrics,
+   119→      parentalAdvisory: metadata.parentalAdvisory,
+   120→      territories: metadata.territories,
+   121→      contributors: metadata.contributors,
+   122→      aiDisclosure: metadata.aiDisclosure ?? disclosure,
+   123→      targetDsps: selectedPlatforms,
+   124→      dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
+   125→    })
+   126→  }, [metadata, disclosure, selectedPlatforms])
+   127→
+   128→  const ddexValidation = useMemo(() => validateDdex(ddexXml), [ddexXml])
+   129→
+   130→  const handleArtworkSelected = async (file: File | null) => {
+   131→    if (!file) return
+   132→    setArtworkError(null)
+   133→    const result = await validateArtwork(file)
+   134→    if (!result.ok) {
+   135→      setArtwork(null)
+   136→      setArtworkError(result.error)
+   137→      notifyError('Artwork rejected', result.error)
+   138→      return
+   139→    }
+   140→    const previewUrl = URL.createObjectURL(file)
+   141→    // Revoke the previous preview URL if any.
+   142→    if (artwork) URL.revokeObjectURL(artwork.previewUrl)
+   143→    setArtwork({
+   144→      file,
+   145→      dimensions: result.dimensions,
+   146→      format: result.format,
+   147→      sizeBytes: result.sizeBytes,
+   148→      previewUrl,
+   149→    })
+   150→    notifySuccess(
+   151→      'Artwork validated',
+   152→      `${result.dimensions[0]}×${result.dimensions[1]} ${result.format}`,
+   153→    )
+   154→  }
+   155→
+   156→  // Build the full distribution package: render WAV + MP3, validate DDEX,
+   157→  // compute SHA-256 over every asset, ZIP everything, persist to the
+   158→  // IndexedDB delivery queue, and trigger a download.
+   159→  const handleBuildPackage = async () => {
+   160→    if (!metadata.isrc) {
+   161→      notifyError('ISRC required', 'Generate or enter an ISRC before packaging.')
+   162→      return
+   163→    }
+   164→    if (!hasProcessed) {
+   165→      notifyError(
+   166→        'No master to package',
+   167→        'Run the mastering pipeline first — distribution packages the rendered output, not the raw input.',
+   168→      )
+   169→      return
+   170→    }
+   171→    const processedBuffer = audioEngine.getProcessedBuffer()
+   172→    if (!processedBuffer) {
+   173→      notifyError('No processed buffer', 'Mastering pipeline has no output to package.')
+   174→      return
+   175→    }
+   176→    if (!ddexValidation.ok) {
+   177→      notifyError(
+   178→        'DDEX validation failed',
+   179→        ddexValidation.errors.join('; '),
+   180→      )
+   181→      return
+   182→    }
+   183→    setBuildStatus('packaging')
+   184→    setBuildError(null)
+   185→    try {
+   186→      const result = await buildDistributionPackage(
+   187→        processedBuffer,
+   188→        {
+   189→          title: metadata.title || 'Untitled',
+   190→          artist: metadata.artist || 'Unknown Artist',
+   191→          album: metadata.album,
+   192→          genre: metadata.genre,
+   193→          // TASK B: pass through the new Ditto-standard fields from the
+   194→          // metadata store (single source of truth on the Metadata tab).
+   195→          genreSubgenre: metadata.genreSubgenre,
+   196→          year: metadata.year,
+   197→          isrc: metadata.isrc,
+   198→          upc: metadata.upc,
+   199→          iswc: metadata.iswc,
+   200→          releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+   201→          originalReleaseDate: metadata.originalReleaseDate,
+   202→          releaseType: metadata.releaseType,
+   203→          label: metadata.label,
+   204→          distributor: metadata.distributor,
+   205→          pLine: metadata.copyrightHolder,
+   206→          cLine: metadata.copyrightYear
+   207→            ? `${metadata.copyrightYear} ${metadata.copyrightHolder ?? metadata.publisher ?? metadata.artist ?? ''}`.trim()
+   208→            : undefined,
+   209→          publisher: metadata.publisher,
+   210→          pro: metadata.pro,
+   211→          masterOwner: metadata.masterOwner,
+   212→          language: metadata.language,
+   213→          explicitLyrics: metadata.explicitLyrics,
+   214→          parentalAdvisory: metadata.parentalAdvisory,
+   215→          territories: metadata.territories,
+   216→          contributors: metadata.contributors,
+   217→          durationSeconds: processedBuffer.duration,
+   218→          // Prefer the metadata.aiDisclosure (single source of truth) but fall
+   219→          // back to the local `disclosure` state for backwards compatibility
+   220→          // (older sessions may have local state set from before the metadata
+   221→          // form existed).
+   222→          aiDisclosure: metadata.aiDisclosure ?? disclosure,
+   223→          targetDsps: selectedPlatforms,
+   224→          dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
+   225→        },
+   226→        artwork?.file,
+   227→      )
+   228→
+   229→      // Persist the job to the IndexedDB delivery queue.
+   230→      const now = Date.now()
+   231→      const job: DeliveryJob = {
+   232→        id: result.manifest.releaseId,
+   233→        releaseId: result.manifest.releaseId,
+   234→        status: 'packaged',
+   235→        manifest: result.manifest,
+   236→        packageSha256: result.packageSha256,
+   237→        packageSizeBytes: result.packageBytes.byteLength,
+   238→        createdAt: now,
+   239→        updatedAt: now,
+   240→      }
+   241→      await persistDeliveryJob(job, result.packageBytes)
+   242→      await refreshJobs()
+   243→      setLastBuildSha(result.packageSha256)
+   244→      setBuildStatus('packaged')
+   245→
+   246→      // Trigger a real download of the ZIP.
+   247→      const url = URL.createObjectURL(result.packageBlob)
+   248→      const a = document.createElement('a')
+   249→      a.href = url
+   250→      const safeTitle = (metadata.title || 'rain-release').replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 64) || 'rain-release'
+   251→      a.download = `${safeTitle}_RAIN_DDEX.zip`
+   252→      document.body.appendChild(a)
+   253→      a.click()
+   254→      document.body.removeChild(a)
+   255→      URL.revokeObjectURL(url)
+   256→
+   257→      notifyInfo(
+   258→        'Distribution package built',
+   259→        `ZIP ${formatBytes(result.packageBytes.byteLength)} · SHA-256 ${result.packageSha256.slice(0, 12)}… · queued for delivery`,
+   260→      )
+   261→    } catch (e) {
+   262→      console.error('[RAIN distribute] build error:', e)
+   263→      setBuildStatus('failed')
+   264→      setBuildError(e instanceof Error ? e.message : 'Unknown error')
+   265→      notifyError('Failed to build package', e instanceof Error ? e.message : 'Unknown error')
+   266→    }
+   267→  }
+   268→
+   269→  // P4-DISTRIBUTE-FINALIZE: Submit via the unified pipeline endpoint.
+   270→  // This replaces manual submitToLabelGrid — the endpoint handles
+   271→  // DDEX validation + LabelGrid submission + status confirmation.
+   272→  const handleSubmit = async (job: DeliveryJob) => {
+   273→    if (job.status === 'submitting') return
+   274→    setSubmittingJobId(job.id)
+   275→    try {
+   276→      const ddexXml = buildDdexErnXml({
+   277→        title: metadata.title || 'Untitled',
+   278→        artist: metadata.artist || 'Unknown Artist',
+   279→        album: metadata.album,
+   280→        genre: metadata.genre,
+   281→        genreSubgenre: metadata.genreSubgenre,
+   282→        year: metadata.year,
+   283→        isrc: metadata.isrc || 'USXXX2400001',
+   284→        upc: metadata.upc || '000000000000',
+   285→        iswc: metadata.iswc,
+   286→        releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+   287→        releaseType: metadata.releaseType,
+   288→        label: metadata.label,
+   289→        distributor: metadata.distributor,
+   290→        pLine: metadata.copyrightHolder,
+   291→        cLine: metadata.copyrightYear
+   292→          ? `${metadata.copyrightYear} ${metadata.copyrightHolder ?? metadata.publisher ?? metadata.artist ?? ''}`.trim()
+   293→          : undefined,
+   294→        publisher: metadata.publisher,
+   295→        pro: metadata.pro,
+   296→        masterOwner: metadata.masterOwner,
+   297→        language: metadata.language,
+   298→        explicitLyrics: metadata.explicitLyrics,
+   299→        territories: metadata.territories,
+   300→        contributors: metadata.contributors,
+   301→        aiDisclosure: metadata.aiDisclosure ?? disclosure,
+   302→        targetDsps: selectedPlatforms,
+   303→        dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
+   304→      })
+   305→
+   306→      const resp = await fetch('/api/rain/distribute/finalize', {
+   307→        method: 'POST',
+   308→        headers: { 'Content-Type': 'application/json' },
+   309→        body: JSON.stringify({
+   310→          ddexXml,
+   311→          manifest: job.manifest,
+   312→          packageSha256: job.packageSha256,
+   313→          packageSizeBytes: job.packageSizeBytes,
+   314→          aiDisclosure: metadata.aiDisclosure ?? disclosure,
+   315→          sessionId: useSessionStore.getState().sessionId ?? undefined,
+   316→        }),
+   317→      })
+   318→
+   319→      const body = await resp.json()
+   320→
+   321→      if (!body.ok) {
+   322→        notifyError('Delivery failed', body.error || `HTTP ${resp.status}`)
+   323→        // Update local job status
+   324→        await updateDeliveryJob(job.id, {
+   325→          status: 'failed',
+   326→          error: body.error || `HTTP ${resp.status}`,
+   327→          providerResponse: body.providerResponse,
+   328→        })
+   329→        await refreshJobs()
+   330→        return
+   331→      }
+   332→
+   333→      // Real confirmation from the pipeline endpoint
+   334→      if (body.delivery?.status === 'submitted') {
+   335→        notifySuccess(
+   336→          '✓ Delivered — Pipeline Complete',
+   337→          body.message || 'Your release has been submitted to LabelGrid. Streaming platforms will receive it within 24-72 hours.',
+   338→        )
+   339→        await updateDeliveryJob(job.id, {
+   340→          status: 'delivered',
+   341→          submittedAt: Date.now(),
+   342→          deliveredAt: Date.now(),
+   343→          providerResponse: body.delivery.providerResponse,
+   344→        })
+   345→      } else if (body.delivery?.status === 'pending_credentials') {
+   346→        notifyWarning(
+   347→          'Package Validated — Credentials Required',
+   348→          'The release is packaged and validated. Set LABELGRID_API_KEY in .env and restart the server to enable automatic delivery. The package can be submitted at any time.',
+   349→        )
+   350→        // Keep as packaged — ready for retry when credentials are set
+   351→      } else if (body.delivery?.status === 'failed') {
+   352→        notifyError('Delivery Attempted — Failed', body.delivery.providerError || 'The LabelGrid API returned an error. You can retry.')
+   353→        await updateDeliveryJob(job.id, {
+   354→          status: 'failed',
+   355→          error: body.delivery.providerError,
+   356→          providerResponse: body.delivery.providerResponse,
+   357→        })
+   358→      }
+   359→
+   360→      await refreshJobs()
+   361→    } finally {
+   362→      setSubmittingJobId(null)
+   363→    }
+   364→  }
+   365→
+   366→  const handleRetry = async (job: DeliveryJob) => {
+   367→    await updateDeliveryJob(job.id, { status: 'packaged', error: undefined })
+   368→    await refreshJobs()
+   369→  }
+   370→
+   371→  const handleDelete = async (job: DeliveryJob) => {
+   372→    await deleteDeliveryJob(job.id)
+   373→    await refreshJobs()
+   374→  }
+   375→
+   376→  const togglePlatform = (slug: string) => {
+   377→    setSelectedPlatforms((p) => p.includes(slug) ? p.filter((x) => x !== slug) : [...p, slug])
+   378→  }
+   379→
+   380→  return (
+   381→    <div className="space-y-4">
+   382→      <div className="rain-panel rounded-lg p-4">
+   383→        <div className="flex items-center justify-between mb-3">
+   384→          <div>
+   385→            <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-0.5">
+   386→              DDEX ERN 4.3.2 Distribution Pipeline
+   387→            </div>
+   388→            <div className="text-sm font-semibold">Real package · SHA-256 manifest · delivery queue</div>
+   389→          </div>
+   390→          <div className="flex items-center gap-2">
+   391→            <BuildStatusBadge status={buildStatus} />
+   392→          </div>
+   393→        </div>
+   394→        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+   395→          <DdexInfo label="ERN Version" value="4.3.2" />
+   396→          <DdexInfo label="Schema" value="ern/43" />
+   397→          <DdexInfo label="Disclosure Fields" value="5 (EU AI Act §50)" />
+   398→          <DdexInfo label="Output" value=".zip (ern+manifest+assets)" />
+   399→        </div>
+   400→        {!ddexValidation.ok && (
+   401→          <div className="mt-3 text-[10px] font-mono text-orange-400 bg-orange-400/10 rounded p-2 flex items-start gap-2">
+   402→            <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+   403→            <div>
+   404→              <div className="uppercase tracking-wider mb-1">DDEX validation</div>
+   405→              {ddexValidation.errors.map((err, i) => (
+   406→                <div key={i}>· {err}</div>
+   407→              ))}
+   408→            </div>
+   409→          </div>
+   410→        )}
+   411→      </div>
+   412→
+   413→      <div className="grid lg:grid-cols-2 gap-4">
+   414→        {/* Release metadata */}
+   415→        <div className="rain-panel rounded-lg p-4">
+   416→          <div className="text-sm font-semibold mb-3">Release Metadata</div>
+   417→          <div className="space-y-3">
+   418→            <div className="grid grid-cols-2 gap-2">
+   419→              <Field label="Title" value={metadata.title} onChange={(v) => setMetadata({ title: v })} />
+   420→              <Field label="Artist" value={metadata.artist} onChange={(v) => setMetadata({ artist: v })} />
+   421→              <Field label="Album" value={metadata.album} onChange={(v) => setMetadata({ album: v })} />
+   422→              <Field label="Year" value={metadata.year} onChange={(v) => setMetadata({ year: v })} />
+   423→              <Field label="ISRC" value={metadata.isrc} onChange={(v) => setMetadata({ isrc: v })} placeholder="US-XXX-YY-NNNNN" />
+   424→              <Field label="UPC" value={metadata.upc} onChange={(v) => setMetadata({ upc: v })} placeholder="12-digit UPC" />
+   425→            </div>
+   426→            <button
+   427→              onClick={handleGenerateIdentifiers}
+   428→              className="text-xs px-3 py-1.5 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors"
+   429→            >
+   430→              Generate ISRC + UPC
+   431→            </button>
+   432→          </div>
+   433→        </div>
+   434→
+   435→        {/* AI Disclosure */}
+   436→        <div className="rain-panel rounded-lg p-4">
+   437→          <div className="text-sm font-semibold mb-1">AI Involvement Disclosure</div>
+   438→          <div className="text-[10px] text-muted-foreground mb-3">Required for EU AI Act Article 50 compliance</div>
+   439→          <div className="space-y-2">
+   440→            {DISCLOSURE_FIELDS.map((f) => (
+   441→              <div key={f.key} className="flex items-center justify-between">
+   442→                <span className="text-xs">{f.label}</span>
+   443→                <div className="flex gap-1">
+   444→                  {(['none', 'assisted', 'generated'] as const).map((v) => (
+   445→                    <button
+   446→                      key={v}
+   447→                      onClick={() => setDisclosure((d) => ({ ...d, [f.key]: v }))}
+   448→                      className={`text-[9px] font-mono uppercase tracking-wider px-2 py-1 rounded transition-colors ${
+   449→                        disclosure[f.key] === v
+   450→                          ? v === 'none' ? 'bg-rain-accent text-black'
+   451→                          : v === 'assisted' ? 'bg-orange-400 text-black'
+   452→                          : 'bg-purple-500 text-white'
+   453→                          : 'bg-rain-surface-2 text-muted-foreground hover:text-foreground'
+   454→                      }`}
+   455→                    >
+   456→                      {v}
+   457→                    </button>
+   458→                  ))}
+   459→                </div>
+   460→              </div>
+   461→            ))}
+   462→          </div>
+   463→        </div>
+   464→      </div>
+   465→
+   466→      {/* Artwork upload */}
+   467→      <div className="rain-panel rounded-lg p-4">
+   468→        <div className="flex items-center justify-between mb-3">
+   469→          <div>
+   470→            <div className="text-sm font-semibold">Cover Artwork</div>
+   471→            <div className="text-[10px] text-muted-foreground">JPEG/PNG · square 1:1 · 1400×1400 to 3000×3000 · ≤ 25 MB</div>
+   472→          </div>
+   473→          {artwork && (
+   474→            <button
+   475→              onClick={() => {
+   476→                URL.revokeObjectURL(artwork.previewUrl)
+   477→                setArtwork(null)
+   478→                if (fileInputRef.current) fileInputRef.current.value = ''
+   479→              }}
+   480→              className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-orange-400/50 transition-colors"
+   481→            >
+   482→              Clear
+   483→            </button>
+   484→          )}
+   485→        </div>
+   486→        <input
+   487→          ref={fileInputRef}
+   488→          type="file"
+   489→          accept="image/jpeg,image/png"
+   490→          className="hidden"
+   491→          onChange={(e) => handleArtworkSelected(e.target.files?.[0] ?? null)}
+   492→        />
+   493→        {artwork ? (
+   494→          <div className="flex items-center gap-3">
+   495→            <img
+   496→              src={artwork.previewUrl}
+   497→              alt="Cover art preview"
+   498→              className="w-20 h-20 rounded object-cover border border-rain-border"
+   499→            />
+   500→            <div className="flex-1 text-xs space-y-1">
+   501→              <div className="font-mono text-rain-accent">{artwork.dimensions[0]}×{artwork.dimensions[1]} · {artwork.format}</div>
+   502→              <div className="text-muted-foreground">{formatBytes(artwork.sizeBytes)} · {artwork.file.name}</div>
+   503→              <div className="text-[10px] text-rain-accent/70 flex items-center gap-1">
+   504→                <CheckCircle2 className="w-3 h-3" /> Validated against DSP spec
+   505→              </div>
+   506→            </div>
+   507→          </div>
+   508→        ) : (
+   509→          <button
+   510→            onClick={() => fileInputRef.current?.click()}
+   511→            className="w-full border-2 border-dashed border-rain-border rounded-lg p-6 hover:border-rain-accent/50 transition-colors flex flex-col items-center gap-2 text-muted-foreground"
+   512→          >
+   513→            <Upload className="w-5 h-5" />
+   514→            <div className="text-xs">Click to upload cover art (optional)</div>
+   515→            {artworkError && (
+   516→              <div className="text-[10px] text-orange-400 mt-1 flex items-center gap-1">
+   517→                <AlertTriangle className="w-3 h-3" /> {artworkError}
+   518→              </div>
+   519→            )}
+   520→          </button>
+   521→        )}
+   522→      </div>
+   523→
+   524→      {/* Platform selection */}
+   525→      <div className="rain-panel rounded-lg p-4">
+   526→        <div className="text-sm font-semibold mb-3">Target DSPs ({selectedPlatforms.length} selected)</div>
+   527→        <div className="text-[10px] text-muted-foreground mb-3 italic">
+   528→          Each selected DSP emits a &lt;Deal&gt; block in the ERN XML inside the ZIP.
+   529→        </div>
+   530→        <div className="grid sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-96 overflow-y-auto rain-scrollbar">
+   531→          {DSP_DELIVERY_PARTNERS.map((p) => (
+   532→            <button
+   533→              key={p.slug}
+   534→              onClick={() => togglePlatform(p.slug)}
+   535→              className={`flex items-center gap-2 p-2 rounded-md border transition-colors text-left ${
+   536→                selectedPlatforms.includes(p.slug)
+   537→                  ? 'border-rain-accent bg-rain-accent/10'
+   538→                  : 'border-rain-border bg-rain-surface-2/60 hover:border-rain-accent/50'
+   539→              }`}
+   540→            >
+   541→              <Music className={`w-3 h-3 flex-shrink-0 ${selectedPlatforms.includes(p.slug) ? 'text-rain-accent' : 'text-muted-foreground'}`} />
+   542→              <div className="flex-1 min-w-0">
+   543→                <div className="text-xs font-semibold truncate">{p.label}</div>
+   544→                <div className="text-[9px] font-mono text-muted-foreground truncate">
+   545→                  {p.requiresIsrc ? 'ISRC req.' : 'No ISRC'} · {p.territoryRestrictions.length > 0 ? p.territoryRestrictions.join(', ') : 'Worldwide'}
+   546→                </div>
+   547→              </div>
+   548→              {selectedPlatforms.includes(p.slug) && (
+   549→                <CheckCircle2 className="w-3 h-3 text-rain-accent flex-shrink-0" />
+   550→              )}
+   551→            </button>
+   552→          ))}
+   553→        </div>
+   554→      </div>
+   555→
+   556→      {/* DDEX XML preview */}
+   557→      <div className="rain-panel rounded-lg p-4">
+   558→        <div className="flex items-center justify-between mb-2">
+   559→          <div className="text-sm font-semibold">DDEX ERN 4.3.2 XML Preview</div>
+   560→          <span className="text-[9px] font-mono text-muted-foreground">ern/43/release-notification.xsd</span>
+   561→        </div>
+   562→        <pre className="text-[10px] font-mono bg-rain-surface-2 rounded p-3 overflow-x-auto rain-scrollbar text-muted-foreground max-h-96 overflow-y-auto">
+   563→{ddexXml}
+   564→        </pre>
+   565→      </div>
+   566→
+   567→      <div className="flex flex-wrap justify-end gap-2">
+   568→        <button
+   569→          onClick={handleBuildPackage}
+   570→          disabled={buildStatus === 'packaging' || !metadata.isrc || !hasProcessed}
+   571→          className="flex items-center gap-2 px-5 py-2.5 rounded-md bg-rain-accent text-black font-semibold text-sm hover:scale-[1.02] active:scale-95 transition-transform disabled:opacity-50 disabled:hover:scale-100"
+   572→        >
+   573→          {buildStatus === 'packaging' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
+   574→          {buildStatus === 'packaging' ? 'Building ZIP…' : 'Build Distribution Package'}
+   575→        </button>
+   576→      </div>
+   577→      <div className="text-[10px] text-right text-muted-foreground -mt-2 space-y-0.5">
+   578→        {!metadata.isrc && <div>Generate or enter an ISRC to enable packaging.</div>}
+   579→        {!hasProcessed && <div>Run the mastering pipeline first — the package wraps the rendered master.</div>}
+   580→        {buildStatus === 'packaged' && lastBuildSha && (
+   581→          <div className="text-rain-accent font-mono">Last package SHA-256: {lastBuildSha.slice(0, 24)}…</div>
+   582→        )}
+   583→        {buildStatus === 'failed' && buildError && (
+   584→          <div className="text-orange-400">Build failed: {buildError}</div>
+   585→        )}
+   586→      </div>
+   587→
+   588→      {/* Delivery Queue */}
+   589→      <DeliveryQueue
+   590→        jobs={jobs}
+   591→        submittingJobId={submittingJobId}
+   592→        onSubmit={handleSubmit}
+   593→        onRetry={handleRetry}
+   594→        onDelete={handleDelete}
+   595→        onRefresh={refreshJobs}
+   596→      />
+   597→    </div>
+   598→  )
+   599→}
+   600→
+   601→// ---------------------------------------------------------------------------
+   602→// Delivery queue section
+   603→// ---------------------------------------------------------------------------
+   604→
+   605→function DeliveryQueue({
+   606→  jobs,
+   607→  submittingJobId,
+   608→  onSubmit,
+   609→  onRetry,
+   610→  onDelete,
+   611→  onRefresh,
+   612→}: {
+   613→  jobs: DeliveryJob[]
+   614→  submittingJobId: string | null
+   615→  onSubmit: (job: DeliveryJob) => void
+   616→  onRetry: (job: DeliveryJob) => void
+   617→  onDelete: (job: DeliveryJob) => void
+   618→  onRefresh: () => void
+   619→}) {
+   620→  return (
+   621→    <div className="rain-panel rounded-lg p-4">
+   622→      <div className="flex items-center justify-between mb-3">
+   623→        <div>
+   624→          <div className="text-sm font-semibold">Delivery Queue</div>
+   625→          <div className="text-[10px] text-muted-foreground">
+   626→            Persisted to IndexedDB · {jobs.length} job{jobs.length === 1 ? '' : 's'}
+   627→          </div>
+   628→        </div>
+   629→        <button
+   630→          onClick={onRefresh}
+   631→          className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors flex items-center gap-1"
+   632→        >
+   633→          <RefreshCw className="w-3 h-3" /> Refresh
+   634→        </button>
+   635→      </div>
+   636→
+   637→      {jobs.length === 0 ? (
+   638→        <div className="text-xs text-muted-foreground italic py-6 text-center">
+   639→          No delivery jobs yet. Build a package above to add one to the queue.
+   640→        </div>
+   641→      ) : (
+   642→        <div className="space-y-2">
+   643→          {jobs.map((job) => (
+   644→            <JobRow
+   645→              key={job.id}
+   646→              job={job}
+   647→              isSubmitting={submittingJobId === job.id}
+   648→              onSubmit={() => onSubmit(job)}
+   649→              onRetry={() => onRetry(job)}
+   650→              onDelete={() => onDelete(job)}
+   651→            />
+   652→          ))}
+   653→        </div>
+   654→      )}
+   655→    </div>
+   656→  )
+   657→}
+   658→
+   659→function JobRow({
+   660→  job,
+   661→  isSubmitting,
+   662→  onSubmit,
+   663→  onRetry,
+   664→  onDelete,
+   665→}: {
+   666→  job: DeliveryJob
+   667→  isSubmitting: boolean
+   668→  onSubmit: () => void
+   669→  onRetry: () => void
+   670→  onDelete: () => void
+   671→}) {
+   672→  return (
+   673→    <div className="border border-rain-border rounded-md p-3 bg-rain-surface-2/40">
+   674→      <div className="flex items-start justify-between gap-3">
+   675→        <div className="flex-1 min-w-0">
+   676→          <div className="flex items-center gap-2 mb-1">
+   677→            <StatusPill status={job.status} />
+   678→            <span className="text-xs font-semibold truncate">{job.manifest.title || 'Untitled'}</span>
+   679→            <span className="text-[10px] font-mono text-muted-foreground">{job.manifest.isrc}</span>
+   680→          </div>
+   681→          <div className="text-[10px] font-mono text-muted-foreground space-y-0.5">
+   682→            <div>
+   683→              <span className="text-foreground/70">ZIP:</span> {formatBytes(job.packageSizeBytes)} ·{' '}
+   684→              <span className="text-foreground/70">SHA-256:</span> {job.packageSha256.slice(0, 16)}…
+   685→            </div>
+   686→            <div>
+   687→              <span className="text-foreground/70">Built:</span> {new Date(job.createdAt).toLocaleString()}
+   688→              {job.deliveredAt && (
+   689→                <> · <span className="text-rain-accent">Delivered:</span> {new Date(job.deliveredAt).toLocaleString()}</>
+   690→              )}
+   691→              {job.submittedAt && !job.deliveredAt && (
+   692→                <> · <span className="text-orange-400">Submitted:</span> {new Date(job.submittedAt).toLocaleString()}</>
+   693→              )}
+   694→            </div>
+   695→            <div>
+   696→              <span className="text-foreground/70">Assets:</span>{' '}
+   697→              {job.manifest.assets.length} files ·{' '}
+   698→              <span className="text-foreground/70">UPC:</span> {job.manifest.upc}
+   699→              {job.manifest.artwork && (
+   700→                <> · <span className="text-foreground/70">Cover:</span> {job.manifest.artwork.width}×{job.manifest.artwork.height}</>
+   701→              )}
+   702→            </div>
+   703→            {job.error && (
+   704→              <div className="text-orange-400 mt-1 flex items-start gap-1">
+   705→                <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+   706→                <span className="break-all">{job.error}</span>
+   707→              </div>
+   708→            )}
+   709→            {job.providerResponse && job.status === 'delivered' && (
+   710→              <div className="text-rain-accent mt-1 truncate">
+   711→                Provider: {job.providerResponse.slice(0, 120)}
+   712→                {job.providerResponse.length > 120 ? '…' : ''}
+   713→              </div>
+   714→            )}
+   715→          </div>
+   716→        </div>
+   717→        <div className="flex flex-col gap-1 flex-shrink-0">
+   718→          {job.status === 'packaged' && (
+   719→            <button
+   720→              onClick={onSubmit}
+   721→              disabled={isSubmitting}
+   722→              className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded bg-rain-accent text-black hover:scale-[1.02] active:scale-95 transition-transform disabled:opacity-50 flex items-center gap-1"
+   723→            >
+   724→              {isSubmitting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+   725→              Submit
+   726→            </button>
+   727→          )}
+   728→          {job.status === 'failed' && (
+   729→            <button
+   730→              onClick={onRetry}
+   731→              className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors flex items-center gap-1"
+   732→            >
+   733→              <RefreshCw className="w-3 h-3" /> Retry
+   734→            </button>
+   735→          )}
+   736→          {job.status === 'submitting' && (
+   737→            <button
+   738→              disabled
+   739→              className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 opacity-50 flex items-center gap-1"
+   740→            >
+   741→              <Loader2 className="w-3 h-3 animate-spin" /> Submitting
+   742→            </button>
+   743→          )}
+   744→          <button
+   745→            onClick={onDelete}
+   746→            className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-orange-400/50 transition-colors flex items-center gap-1"
+   747→          >
+   748→            <Trash2 className="w-3 h-3" /> Delete
+   749→          </button>
+   750→        </div>
+   751→      </div>
+   752→    </div>
+   753→  )
+   754→}
+   755→
+   756→// ---------------------------------------------------------------------------
+   757→// Small UI helpers
+   758→// ---------------------------------------------------------------------------
+   759→
+   760→function BuildStatusBadge({ status }: { status: BuildStatus }) {
+   761→  const colors: Record<BuildStatus, string> = {
+   762→    idle: '#64748B',
+   763→    packaging: '#F59E0B',
+   764→    packaged: '#AAFF00',
+   765→    failed: '#F97316',
+   766→  }
+   767→  const labels: Record<BuildStatus, string> = {
+   768→    idle: 'idle',
+   769→    packaging: 'packaging',
+   770→    packaged: 'packaged',
+   771→    failed: 'failed',
+   772→  }
+   773→  return (
+   774→    <span
+   775→      className="text-[9px] font-mono uppercase tracking-wider px-2 py-1 rounded"
+   776→      style={{ color: colors[status], background: `${colors[status]}15` }}
+   777→    >
+   778→      {labels[status]}
+   779→    </span>
+   780→  )
+   781→}
+   782→
+   783→function StatusPill({ status }: { status: DeliveryJobStatus }) {
+   784→  const colors: Record<DeliveryJobStatus, string> = {
+   785→    pending: '#64748B',
+   786→    packaged: '#AAFF00',
+   787→    submitting: '#F59E0B',
+   788→    delivered: '#10B981',
+   789→    failed: '#F97316',
+   790→  }
+   791→  return (
+   792→    <span
+   793→      className="text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded"
+   794→      style={{ color: colors[status], background: `${colors[status]}15` }}
+   795→    >
+   796→      {status}
+   797→    </span>
+   798→  )
+   799→}
+   800→
+   801→function DdexInfo({ label, value }: { label: string; value: string }) {
+   802→  return (
+   803→    <div className="bg-rain-surface-2/60 rounded p-2">
+   804→      <div className="text-muted-foreground mb-0.5">{label}</div>
+   805→      <div className="text-rain-accent">{value}</div>
+   806→    </div>
+   807→  )
+   808→}
+   809→
+   810→function Field({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+   811→  return (
+   812→    <div>
+   813→      <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">{label}</label>
+   814→      <input
+   815→        type="text"
+   816→        value={value}
+   817→        onChange={(e) => onChange(e.target.value)}
+   818→        placeholder={placeholder}
+   819→        className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-2 py-1 text-xs focus:outline-none focus:border-rain-accent/50"
+   820→      />
+   821→    </div>
+   822→  )
+   823→}
+   824→
+   825→function formatBytes(n: number): string {
+   826→  if (n < 1024) return `${n} B`
+   827→  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+   828→  return `${(n / (1024 * 1024)).toFixed(2)} MB`
+   829→}
+   830→

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Upload, Download, Loader2, CheckCircle2, AlertCircle, FileAudio, FileImage, FileText, Settings } from 'lucide-react'
+import { ArrowLeft, Upload, Download, Loader2, CheckCircle2, AlertCircle, FileAudio, Settings } from 'lucide-react'
 import { getTool } from '@/lib/rain/tools-catalog'
 import {
   decodeAudioFile, encodeWav, encodeAiff, encodeMp3,
@@ -66,7 +66,6 @@ export default function ToolPage({ params }: PageProps) {
     setResult(null)
     try {
       let blob: Blob
-      let filename: string
       const baseName = file.name.replace(/\.[^/.]+$/, '')
 
       switch (tool.converter) {
@@ -258,7 +257,6 @@ export default function ToolPage({ params }: PageProps) {
         case 'pdf-split': {
           const bytes = await file.arrayBuffer()
           const pdf = await PDFDocument.load(bytes)
-          const pages = pdf.getPages()
           // Create a single PDF with just the first page for download (full split would be a ZIP)
           const newPdf = await PDFDocument.create()
           const [copiedPage] = await newPdf.copyPages(pdf, [0])
@@ -316,7 +314,7 @@ export default function ToolPage({ params }: PageProps) {
           throw new Error(`Unknown converter: ${tool.converter}`)
       }
 
-      filename = `${baseName}.${tool.outputExt}`
+      const filename = `${baseName}.${tool.outputExt}`
       const url = URL.createObjectURL(blob)
       setResult({ url, filename, size: blob.size })
     } catch (e) {

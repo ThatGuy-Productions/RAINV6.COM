@@ -1,11 +1,11 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { MotionConfig } from 'framer-motion'
 import { LandingNav } from './LandingNav'
 import { ServiceNoticeBanner } from './ServiceNoticeBanner'
 import { PartnerLogos } from './PartnerLogos'
 import { LandingHero } from './LandingHero'
-import { LandingDemo } from './LandingDemo'
 import { LandingBetaVelocity } from './LandingBetaVelocity'
 import { LandingFeatures } from './LandingFeatures'
 import { LandingTestimonials } from './LandingTestimonials'
@@ -15,6 +15,14 @@ import { LandingReviews } from './LandingReviews'
 import { LandingPricing } from './LandingPricing'
 import { LandingFAQ } from './LandingFAQ'
 import { LandingFooter } from './LandingFooter'
+
+// ── Lazy-loaded heavy landing section ─────────────────────────────────────
+// The demo section is heavy (synthetic waveform data, audio playback hook,
+// canvas-based gauge). Defer loading until the user scrolls near it.
+const LandingDemo = dynamic(
+  () => import('./LandingDemo').then((m) => m.LandingDemo),
+  { ssr: false },
+)
 
 interface LandingPageProps {
   onLaunch: () => void

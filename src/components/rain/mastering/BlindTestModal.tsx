@@ -20,7 +20,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Eye, Shuffle, Trophy, X, Check, Equal, HelpCircle, RotateCcw, Play, Pause } from 'lucide-react'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import { useSessionStore } from '@/lib/rain/store'
-import { notifyInfo, notifySuccess } from '@/lib/rain/notifications'
 
 type Vote = 'X' | 'Y' | 'TIE' | 'CANT_TELL' | null
 type Phase = 'listening' | 'voted' | 'reveal'
@@ -250,6 +249,9 @@ export function BlindTestModal({ open, onClose }: BlindTestModalProps) {
                 background: 'linear-gradient(135deg, rgba(18,20,26,0.97) 0%, rgba(25,28,38,0.97) 100%)',
                 boxShadow: '0 25px 50px -12px rgba(0,0,0,0.6), 0 0 0 1px rgba(170,255,0,0.08), inset 0 1px 0 rgba(255,255,255,0.05)',
               }}
+              role="dialog"
+              aria-labelledby="blind-test-title"
+              aria-modal="true"
             >
               {/* Header */}
               <div className="flex items-center justify-between px-6 py-4 border-b border-rain-border bg-rain-surface/30">
@@ -258,7 +260,7 @@ export function BlindTestModal({ open, onClose }: BlindTestModalProps) {
                     <Shuffle className="w-5 h-5 text-rain-accent" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                    <h2 id="blind-test-title" className="text-base font-semibold text-foreground flex items-center gap-2">
                       Blind Test Mode
                       <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rain-accent/15 text-rain-accent border border-rain-accent/30">
                         ROUND {round}
@@ -306,6 +308,7 @@ export function BlindTestModal({ open, onClose }: BlindTestModalProps) {
                         key={label}
                         onClick={() => switchTo(label)}
                         disabled={phase === 'reveal'}
+                        aria-label={`Switch to ${label}`}
                         className={`relative p-6 rounded-xl border-2 transition-all overflow-hidden ${
                           isActive
                             ? 'border-rain-accent bg-rain-accent/10 rain-glow-soft'
@@ -377,6 +380,7 @@ export function BlindTestModal({ open, onClose }: BlindTestModalProps) {
                           key={iv.label}
                           onClick={() => setAutoMs(iv.ms)}
                           disabled={phase !== 'listening'}
+                          aria-label={`Auto-switch interval: ${iv.label}`}
                           className={`px-1.5 py-0.5 rounded ${
                             autoMs === iv.ms
                               ? 'bg-rain-accent/20 text-rain-accent border border-rain-accent/40'

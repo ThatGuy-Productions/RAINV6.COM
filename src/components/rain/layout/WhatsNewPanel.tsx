@@ -12,7 +12,7 @@
  * the bell's notification dot only appears when there's unseen content.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Sparkles, Bug, Wrench, CheckCircle2, GitCommit } from 'lucide-react'
 

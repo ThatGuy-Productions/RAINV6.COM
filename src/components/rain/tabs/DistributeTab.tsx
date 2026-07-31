@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
-  Download,
-  Image as ImageIcon,
   Loader2,
   Music,
   Package,
@@ -25,7 +23,6 @@ import {
   deleteDeliveryJob,
   loadDeliveryJobs,
   persistDeliveryJob,
-  submitToLabelGrid,
   updateDeliveryJob,
   validateArtwork,
   validateDdex,
@@ -58,6 +55,7 @@ export function DistributeTab() {
   const metadata = useSessionStore((s) => s.metadata)
   const setMetadata = useSessionStore((s) => s.setMetadata)
   const hasProcessed = useSessionStore((s) => s.hasProcessed)
+  const sessionId = useSessionStore((s) => s.sessionId)
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['spotify', 'apple_music', 'youtube', 'tidal'])
   const [disclosure, setDisclosure] = useState<Record<DisclosureKey, DisclosureValue>>({
     vocals: 'assisted',
@@ -85,7 +83,7 @@ export function DistributeTab() {
   }, [refreshJobs])
 
   const handleGenerateIdentifiers = () => {
-    setMetadata({ isrc: generateIsrc(), upc: generateUpc() })
+    setMetadata({ isrc: generateIsrc(sessionId || 'default'), upc: generateUpc(sessionId || 'default') })
   }
 
   // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected

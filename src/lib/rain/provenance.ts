@@ -153,7 +153,7 @@ function bufToHex(buf: ArrayBuffer): string {
 // Fingerprint (Chromaprint-style simplified hash)
 // ---------------------------------------------------------------------------
 
-export async function computeFingerprint(channels: Float32Array[], sampleRate: number): Promise<string> {
+export async function computeFingerprint(channels: Float32Array[], _sampleRate: number): Promise<string> {
   // Simplified Chromaprint-style: hash of sub-band energy frames
   const frames = 32
   const bands = 8
@@ -161,7 +161,7 @@ export async function computeFingerprint(channels: Float32Array[], sampleRate: n
   const hash: number[] = []
   for (let f = 0; f < frames; f++) {
     const start = f * frameSize
-    let bandEnergies: number[] = []
+    const bandEnergies: number[] = []
     for (let b = 0; b < bands; b++) {
       const lo = Math.floor((b / bands) * (frameSize / 2))
       const hi = Math.floor(((b + 1) / bands) * (frameSize / 2))

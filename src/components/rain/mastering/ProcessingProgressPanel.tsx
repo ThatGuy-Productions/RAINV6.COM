@@ -101,7 +101,6 @@ export function ProcessingProgressPanel() {
   const isProcessing = useSessionStore((s) => s.isProcessing)
   const progress = useSessionStore((s) => s.progress)
   const activeStage = useSessionStore((s) => s.activeStage)
-  const progressLabel = useSessionStore((s) => s.progressLabel)
   const processingStartTime = useSessionStore((s) => s.processingStartTime)
   const fileDuration = useSessionStore((s) => s.fileDuration)
   const cancelProcessing = useSessionStore((s) => s.cancelProcessing)
@@ -123,8 +122,7 @@ export function ProcessingProgressPanel() {
     // Calculate rate of progress
     const now = Date.now()
     const elapsed = now - processingStartTime
-    const progressDelta = progress - lastProgressRef.current
-    
+
     // Estimate based on elapsed time and progress rate
     if (elapsed > 1000 && progress > 5) {
       // Use average rate estimation
