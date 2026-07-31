@@ -110,90 +110,84 @@ export interface BrowserDeliveryResult {
 import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
 
 /**
- * DistroKid Tier & Add-on Pricing (Researched July 2026)
+ * DistroKid Tier & Add-on Pricing (Researched July 2026 from distrokid.com/pricing/)
  *
- * Tier          | Price/yr | Artists | Tracks/yr | Revenue | Features
- * ──────────────┼──────────┼─────────┼────────────┼─────────┼─────────────
- * Musician      | $22.99   | 1       | Unlimited  | 100%    | Basic
- * Musician Plus | $39.99   | 2       | Unlimited  | 100%    | + custom label, daily stats, lyrics
- * Label         | $79.99   | 5-100   | Unlimited  | 100%    | + teams, priority support
+ * ZAR prices scraped directly from the page (geolocated ZA).
+ * All tiers: 100% royalty retention, 150+ stores, unlimited uploads.
  *
- * Add-ons:
- *   Leave a Legacy           $29/single, $49/album (one-time)
- *   Store Maximizer           $7.95/yr per release
- *   YouTube Content ID        $4.95/yr per single + 20% YouTube revenue
- *   Shazam & iPhone Siri     $0.99/yr per release
- *   TikTok & Instagram        $9.99/yr per single, $14.99/yr per album
- *   Discovery Pack            $0.99/yr per single
+ * Tier              | ZAR/yr    | Artists  | Key Differentiator
+ * ──────────────────┼───────────┼──────────┼─────────────────────────────
+ * Musician          | R459.99   | 1        | Fast release essentials
+ * Musician Plus ⭐   | R826.99   | 2        | Custom label name + date
+ * Ultimate 🏆       | R1,649.00 | 1-100    | Advanced analytics + teams
  *
- * RAIN V6 Pricing (DistroKid + 20%):
+ * Add-ons (historical USD — verified via DistroKid support docs):
+ *   Leave a Legacy      $29 single / $49 album (one-time)
+ *   Store Maximizer     $7.95/yr per release
+ *   YouTube Content ID  $4.95/yr single / $14.95/yr album (+20% YT rev)
+ *   Shazam & Siri       $0.99/yr per release
+ *   Discovery Pack      $0.99/yr per release
  *
- * Tier              | RAIN Price | DistroKid Base | Includes
- * ──────────────────┼────────────┼────────────────┼─────────────────────────
- * FREE BETA (now)   | R0.00/mo   | N/A             | Self-service ZIP download
- * Musician (Single) | R69.99/yr  | $22.99/yr       | 1 artist, unlimited, 100%
- * Musician Plus     | R899.99/yr | $39.99/yr       | 2 artists, label name
- * Label Starter     | R1,799/yr  | $79.99/yr       | 5 artists, team access
- * Label Pro         | R2,699/yr  | $79.99 + $100   | 10 artists, priority
- * Label Enterprise  | POA        | POA             | 100 artists, API access
+ * RAIN V6 Pricing = DistroKid + 20% markup:
  *
- * Add-ons (RAIN = DistroKid + 20%):
- *   Leave a Legacy     R699/single, R1,199/album
- *   Store Maximizer    R189/yr per release
- *   YouTube Content ID R119/yr per single (excl. 20% YT rev share)
- *   Shazam & Siri      R24/yr per release
- *   TikTok & Insta     R239/yr single, R359/yr album
- *   Discovery Pack     R24/yr per single
+ * Tier              | RAIN Price  | DK Base    | Includes
+ * ──────────────────┼─────────────┼────────────┼─────────────────────────
+ * FREE BETA (now)   | R0.00       | N/A        | ZIP download only
+ * Musician          | R551.99/yr  | R459.99/yr | 1 artist, unlimited, 100%
+ * Musician Plus ⭐   | R992.39/yr  | R826.99/yr | 2 artists, label name
+ * Ultimate 🏆       | R1,978.80/yr| R1,649/yr  | 5-100 artists, analytics
  */
 export const DISTROKID_TIERS = {
   musician: {
     name: 'Musician',
-    dkPrice: 22.99,
-    rainPrice: 27.59,
+    dkPriceZar: 459.99,
+    rainPriceZar: 551.99, // DK + 20%
     artists: 1,
     tracksPerYear: Infinity,
     revenueShare: 100,
-    features: ['Unlimited uploads', 'All major stores', 'Instant verification', 'Free ISRC/UPC'],
+    features: ['Unlimited uploads', '150+ stores', 'Spotify artist profile', 'Royalty splits', 'Free ISRC/UPC'],
   },
   musicianPlus: {
     name: 'Musician Plus',
-    dkPrice: 39.99,
-    rainPrice: 47.99,
+    dkPriceZar: 826.99,
+    rainPriceZar: 992.39, // DK + 20%
     artists: 2,
     tracksPerYear: Infinity,
     revenueShare: 100,
     features: [
       'Everything in Musician',
       'Custom label name',
-      'Daily sales stats',
-      'Custom release date',
-      'Pre-order',
-      'Lyrics sync',
+      'Custom release date + preorder',
+      'Daily streaming stats',
+      'Synced lyrics in Apple Music',
+      'Custom iTunes pricing',
     ],
   },
-  label: {
-    name: 'Label',
-    dkPrice: 79.99,
-    rainPrice: 95.99,
-    artists: 5,
+  ultimate: {
+    name: 'Ultimate',
+    dkPriceZar: 1649.00,
+    rainPriceZar: 1978.80, // DK + 20%
+    artists: 100,
     tracksPerYear: Infinity,
     revenueShare: 100,
     features: [
       'Everything in Musician Plus',
-      '5-100 artists',
-      'Team accounts',
-      'Priority support',
-      'Bulk upload',
+      '1-100 artists',
+      'Advanced analytics',
+      'Playlist contact search',
+      'Replace song audio',
+      '1,000 GB file sharing',
+      'Spotify & Apple Music monitoring',
+      '21 extra tools',
     ],
   },
 } as const
 
 export const DISTROKID_ADDONS = {
-  leaveALegacy: { name: 'Leave a Legacy', dkSingle: 29, dkAlbum: 49, rainSingle: 699, rainAlbum: 1199, oneTime: true, currency: 'ZAR' },
-  storeMaximizer: { name: 'Store Maximizer', dkPrice: 7.95, rainPrice: 189, perYear: true, perRelease: true, currency: 'ZAR' },
-  youtubeContentId: { name: 'YouTube Content ID', dkPrice: 4.95, rainPrice: 119, perYear: true, perSingle: true, currency: 'ZAR', note: 'Excludes 20% YouTube revenue share' },
+  leaveALegacy: { name: 'Leave a Legacy', dkSingle: 29, dkAlbum: 49, rainSingle: 699, rainAlbum: 1199, oneTime: true, currency: 'ZAR', note: 'One-time payment — track stays live forever even if subscription ends' },
+  storeMaximizer: { name: 'Store Maximizer', dkPrice: 7.95, rainPrice: 189, perYear: true, perRelease: true, currency: 'ZAR', note: 'Adds stores not in the standard 150+ list' },
+  youtubeContentId: { name: 'YouTube Content ID', dkPrice: 4.95, rainPrice: 119, perYear: true, perSingle: true, currency: 'ZAR', note: 'Excludes 20% YouTube Content ID revenue share' },
   shazamSiri: { name: 'Shazam & iPhone Siri', dkPrice: 0.99, rainPrice: 24, perYear: true, perRelease: true, currency: 'ZAR' },
-  tiktokInsta: { name: 'TikTok & Instagram', dkSingle: 9.99, dkAlbum: 14.99, rainSingle: 239, rainAlbum: 359, perYear: true, currency: 'ZAR' },
   discoveryPack: { name: 'Discovery Pack', dkPrice: 0.99, rainPrice: 24, perYear: true, perSingle: true, currency: 'ZAR' },
 } as const
 
