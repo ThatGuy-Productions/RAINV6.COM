@@ -1,501 +1,500 @@
-# RAIN V6 Beta — 用户手册
+# RAIN V6 Beta — User Handbook
 
-**版本:** Beta 候选发布版 3 | **日期:** 2026-07-31 | **语言:** English
-
----
-
-## 欢迎
-
-欢迎使用 RAIN V6 — 一款完全在您的浏览器中运行的专业 AI 音频母带处理引擎。无需上传，无需账户，无需云服务器——您的音频永远不会离开您的设备。
+**Version:** Beta Candidate Release 3 | **Date:** 2026-07-31
 
 ---
 
-## 目录
+## Welcome
 
-1. [使用入门](#1-使用入门)
-2. [母带处理界面](#2-母带处理界面)
-3. [7 个宏控制](#3-7-个宏控制)
-4. [音干处理](#4-音干处理)
-5. [空间音频](#5-空间音频)
-6. [音频修复](#6-音频修复)
-7. [质量控制](#7-质量控制)
-8. [元数据](#8-元数据)
-9. [AI 披露](#9-ai-披露)
-10. [导出选项](#10-导出选项)
-11. [分发](#11-分发)
-12. [来源与验证](#12-来源与验证)
-13. [提示与技巧](#13-提示与技巧)
-14. [故障排除](#14-故障排除)
-15. [词汇表](#15-词汇表)
-16. [支持和社区](#16-支持和社区)
-17. [法律声明](#17-法律声明)
+Welcome to RAIN V6 — a professional AI audio mastering engine that runs entirely in your browser. No uploads, no accounts, no cloud servers — your audio never leaves your device.
 
 ---
 
-## 1. 使用入门
+## Table of Contents
 
-### 系统要求
+1. [Getting Started](#1-getting-started)
+2. [The Mastering Interface](#2-the-mastering-interface)
+3. [7 Macro Controls](#3-7-macro-controls)
+4. [Stem Processing](#4-stem-processing)
+5. [Spatial Audio](#5-spatial-audio)
+6. [Audio Repair](#6-audio-repair)
+7. [Quality Control](#7-quality-control)
+8. [Metadata](#8-metadata)
+9. [AI Disclosure](#9-ai-disclosure)
+10. [Export Options](#10-export-options)
+11. [Distribution](#11-distribution)
+12. [Provenance & Verification](#12-provenance--verification)
+13. [Tips & Tricks](#13-tips--tricks)
+14. [Troubleshooting](#14-troubleshooting)
+15. [Glossary](#15-glossary)
+16. [Support & Community](#16-support--community)
+17. [Legal Notice](#17-legal-notice)
 
-| 组件 | 最低配置 | 推荐配置 |
+---
+
+## 1. Getting Started
+
+### System Requirements
+
+| Component | Minimum | Recommended |
 |---|---|---|
-| 浏览器 | Chrome 115+, Edge 115+, Firefox 120+ | Chrome 120+ |
-| 内存 | 8 GB RAM | 16 GB RAM |
-| 音频格式 | WAV, MP3, FLAC, AIFF, OGG | WAV 24-bit/48 kHz |
-| 时长限制 | 最长 60 分钟 | 最长 10 分钟 |
-| 互联网 | 初始加载需要（ONNX 模型约 66 MB） | 加载后无需互联网连接 |
+| Browser | Chrome 115+, Edge 115+, Firefox 120+ | Chrome 120+ |
+| RAM | 8 GB | 16 GB |
+| Audio formats | WAV, MP3, FLAC, AIFF, OGG | WAV 24-bit/48 kHz |
+| Duration limit | Up to 60 minutes | Up to 10 minutes |
+| Internet | Needed for initial load (ONNX models ~66 MB) | No internet needed after load |
 
-### 第一步：上传音频
+### Step 1: Upload Your Audio
 
-1. 打开 **RAIN V6**（由您的管理员提供的本地 URL，或公测版网址）
-2. 点击"**拖放或选择音频文件**"区域
-3. 选择一个音频文件——支持 WAV、MP3、FLAC、AIFF、OGG
-4. 文件加载后会自动分析 — 波形峰值、RMS 和 LUFS 指标会立即出现
+1. Open **RAIN V6** (local URL from your admin or the public beta URL)
+2. Click the "**Drag & drop or select audio file**" zone
+3. Choose an audio file — WAV, MP3, FLAC, AIFF, OGG supported
+4. The file auto-analyzes on load — waveform peaks, RMS, and LUFS metrics appear immediately
 
-### 第二步：选择流派
+### Step 2: Choose a Genre
 
-1. 从下拉列表中选择您的**流派**——这会影响整个母带处理管道（EQ 曲线、压缩特征、立体声宽度）
-2. 可选：选择一个**参考曲目**（加载第二段音频，用于 A/B 比较，以匹配音色平衡）
+1. Select your **genre** from the dropdown — this influences the entire mastering pipeline (EQ curves, compression characteristics, stereo width)
+2. Optional: load a **reference track** (a second audio file for A/B comparison to match tonal balance)
 
-### 第三步：调整宏控制
+### Step 3: Adjust Macro Controls
 
-使用 7 个宏（下文[第 3 节](#3-7-个宏控制)中详细介绍）来塑造您的整体声音，通过单个推子调整一切——无需调整 31 个频段的 EQ。
+Use the 7 macros (detailed in [Section 3](#3-7-macro-controls) below) to shape your overall sound with a single fader — no need to tweak 31 bands of EQ.
 
-### 第四步：预览或渲染
+### Step 4: Preview or Render
 
-- **预览**：查看您所做的任何更改的效果（实时、低延迟）
-- **渲染**：执行完整的 16 阶段母带处理管道并生成最终的 24-bit WAV + 320 kbps MP3 文件
-
----
-
-## 2. 母带处理界面
-
-母带处理选项卡从上到下包含以下区域：
-
-1. **波形视图** — 交互式缩放/平移，查看整个混音
-2. **频率分析仪** — 实时更新，显示 31 个频段
-3. **响度指示器** — 短时和积分 LUFS + 真峰值 dBTP 表
-4. **宏控制** — 7 个推子（参见第 3 节）
-5. **动作按钮** — 预览 / 渲染 / 重置 / A/B 比较
-
-### A/B 比较
-
-- 加载参考曲目后，"A"按钮将播放您的原始音频，"B"按钮将播放参考曲目
-- 两段音频都会进行响度匹配，因此这是一种**真正的**音色比较
-- 中间的"交换"按钮可交换声道（关于立体声偏好的理智检查）
-
-### 实时与渲染
-
-| 特性 | 预览（实时） | 渲染（离线） |
-|---|---|---|
-| 延迟 | ~5 毫秒 | 10–60 秒（取决于时长） |
-| 精度 | 32 位浮点 | 64 位浮点内部 / 24 位输出 |
-| 阶段 | 子集（快照） | 完整的 16 个阶段 |
-| 导出？ | 否 — 可听但不可保存 | 是 — 完全包含 WAV + MP3 |
+- **Preview**: Hear the effect of any changes you've made (real-time, low latency)
+- **Render**: Run the full 16-stage mastering pipeline and produce final 24-bit WAV + 320 kbps MP3 files
 
 ---
 
-## 3. 7 个宏控制
+## 2. The Mastering Interface
 
-最左侧（最小值）是最少处理；最右侧（默认 0.5）是"RAIN 默认值"；最右侧（1.0）是最大处理。
+The Mastering tab contains, from top to bottom:
 
-| 宏 | 控制内容 | 最佳用途 |
+1. **Waveform View** — Interactive zoom/pan to inspect the full mix
+2. **Frequency Analyzer** — Real-time updating, 31 bands shown
+3. **Loudness Indicators** — Short-term and integrated LUFS + true peak dBTP meters
+4. **Macro Controls** — 7 faders (see Section 3)
+5. **Action Buttons** — Preview / Render / Reset / A/B Compare
+
+### A/B Comparison
+
+- After loading a reference track, the "A" button plays your original audio, "B" the reference
+- Both tracks are loudness-matched, so this is a **genuine** tonal comparison
+- The "Swap" button in the middle swaps channels (sanity check on stereo preferences)
+
+### Live Preview vs Render
+
+| Feature | Preview (Live) | Render (Offline) |
 |---|---|---|
-| **BRIGHTEN** | 高架均衡器 > 4 kHz | 昏暗的录音 — 为人声/镲片增加空气感和存在感 |
-| **GLUE** | 总线压缩比率，启动 10 毫秒 | 使混音"凝聚"——在各个元素之间创造凝聚力 |
-| **WIDTH** | 中/侧差值增益 | 独奏乐器收窄（< 0.5）；EDM/氛围音乐加宽（> 0.6） |
-| **PUNCH** | 压缩启动时间，瞬态整形器 | 收紧或放松鼓组/打击乐 — 低设置 = 打击力更强 |
-| **WARMTH** | 奇次谐波，磁带压缩曲线 | 为数字录音增加模拟"质感" |
-| **SPACE** | 混响发送音量（来自音干分离） | 增加或减少处理后的环境声/房间声 |
-| **REPAIR** | 8 个修复模块的强度 | 对嘈杂的手机录音拉高；对专业录音保持低 |
+| Latency | ~5ms | 10–60s (duration-dependent) |
+| Precision | 32-bit float | 64-bit float internal / 24-bit output |
+| Stages | Subset (snapshot) | All 16 stages |
+| Export? | No — audible but not saveable | Yes — full WAV + MP3 included |
 
-### 宏组合示例：
+---
 
-| 目标 | BRIGHTEN | GLUE | WIDTH | PUNCH | WARMTH | SPACE | REPAIR |
+## 3. 7 Macro Controls
+
+Far left (minimum) is minimal processing; center (default 0.5) is "RAIN defaults"; far right (1.0) is maximum.
+
+| Macro | What It Controls | Best For |
+|---|---|---|
+| **BRIGHTEN** | High-shelf EQ > 4 kHz | Dull recordings — adds air and presence to vocals/cymbals |
+| **GLUE** | Bus compression ratio, 10ms attack | "Gluing" a mix together — creating cohesion across elements |
+| **WIDTH** | Mid/side difference gain | Narrow for solo instruments (<0.5); wider for EDM/ambient (>0.6) |
+| **PUNCH** | Compression attack time, transient shaper | Tightening or loosening drums/percussion — low = more smack |
+| **WARMTH** | Odd-order harmonics, tape compression curve | Adding analog "texture" to digital recordings |
+| **SPACE** | Reverb send level (from stem separation) | Increasing or reducing processed ambience/room sound |
+| **REPAIR** | Intensity of all 8 repair modules | Crank up for noisy phone recordings; keep low for pro studio |
+
+### Macro Combinations: Presets
+
+| Goal | BRIGHTEN | GLUE | WIDTH | PUNCH | WARMTH | SPACE | REPAIR |
 |---|---|---|---|---|---|---|---|
-| 流行人声 | 0.60 | 0.55 | 0.3 | 0.45 | 0.40 | 0.2 | 0.10 |
+| Pop Vocal | 0.60 | 0.55 | 0.3 | 0.45 | 0.40 | 0.2 | 0.10 |
 | Amapiano | 0.45 | 0.50 | 0.85 | 0.30 | 0.70 | 0.4 | 0.05 |
-| 摇滚乐队 | 0.50 | 0.65 | 0.6 | 0.70 | 0.55 | 0.3 | 0.10 |
-| 播客/配音 | 0.40 | 0.60 | 0.0 | 0.35 | 0.30 | 0.0 | 0.40 |
-| 原声吉他 | 0.55 | 0.30 | 0.7 | 0.40 | 0.60 | 0.5 | 0.05 |
+| Rock Band | 0.50 | 0.65 | 0.6 | 0.70 | 0.55 | 0.3 | 0.10 |
+| Podcast/Voiceover | 0.40 | 0.60 | 0.0 | 0.35 | 0.30 | 0.0 | 0.40 |
+| Acoustic Guitar | 0.55 | 0.30 | 0.7 | 0.40 | 0.60 | 0.5 | 0.05 |
 
 ---
 
-## 4. 音干处理
+## 4. Stem Processing
 
-音干选项卡可让您将混音分离为 12 个单独的音干并单独处理每个音干。
+The Stems tab lets you separate your mix into 12 individual stems and process each one independently.
 
-### 音干分离（BS-RoFormer 4 次级联）
+### Stem Separation (BS-RoFormer 4-Pass Cascade)
 
-| 音干组 | 包含内容 |
+| Stem Group | What It Contains |
 |---|---|
-| 主唱 | 主唱声音 |
-| 伴唱 | 和声、伴唱 |
-| 底鼓 | 低音鼓声音 |
-| 军鼓 | 军鼓、拍手声 |
-| 踩镲 | 开镲/闭镲、镲 |
-| 打击乐 | 康加鼓、摇铃、手鼓（非鼓组） |
-| 贝斯 | 贝斯吉他、合成器贝斯、808 |
-| 吉他 | 电吉他、原声吉他 |
-| 钢琴 | 原声钢琴、电钢琴、风琴 |
-| 环境声 | 房间混响、延迟尾部 |
-| 干声其他 | 合成器、弦乐、拍手声——除上述之外的所有内容 |
+| Lead Vocals | Main singing voice |
+| Backing Vocals | Harmonies, backing vocals |
+| Kick Drum | Bass drum hits |
+| Snare Drum | Snare, claps |
+| Hi-hats | Open/closed hi-hats, cymbals |
+| Percussion | Congas, shakers, tambourines (non-kit) |
+| Bass | Bass guitar, synth bass, 808 |
+| Guitar | Electric guitar, acoustic guitar |
+| Piano | Acoustic piano, electric piano, organ |
+| Ambient | Room reverb, delay tails |
+| Dry Other | Synths, strings, claps — everything else |
 
-### 每个音干的控制
+### Per-Stem Controls
 
-- **增益推子**（-24 dB 至 +12 dB） — 增大或减小每个音干
-- **静音/独奏** — 隔离或移除元素
-- **声像** — 在立体声场中左右移动音干
-- **限制** — 为每个音干单独启用/禁用 SAIL v2 限制器
+- **Gain fader** (-24 dB to +12 dB) — boost or cut each stem
+- **Mute/Solo** — isolate or remove elements
+- **Pan** — position stems left/right in the stereo field
+- **Limiting** — enable/disable SAIL v2 limiter per stem
 
-### 使用音干的场景：
+### When to Use Stems:
 
-- **为人声增加存在感** → 主唱增益 +3 dB，其他音干增益 -2 dB
-- **鼓声增强** → 底鼓 +2 dB，军鼓 +1 dB，力度提高 0.6
-- **去除人声**（器乐版） → 主唱和伴唱静音
-- **去除鼓声**（伴奏带） → 底鼓、军鼓、踩镲静音
+- **Boost vocal presence** → Lead Vocals gain +3 dB, others -2 dB
+- **Enhance drums** → Kick +2 dB, Snare +1 dB, PUNCH at 0.6
+- **Remove vocals** (instrumental version) → Mute Lead + Backing Vocals
+- **Remove drums** (backing track) → Mute Kick, Snare, Hi-hats
 
 ---
 
-## 5. 空间音频
+## 5. Spatial Audio
 
-空间选项卡可将您的立体声混音转换为沉浸式空间音频。
+The Spatial tab transforms your stereo mix into immersive spatial audio.
 
-### 可用的空间格式
+### Available Spatial Formats
 
-| 格式 | 声道数 | 最佳用途 |
+| Format | Channels | Best For |
 |---|---|---|
-| 立体声增强 | 2 | 增强立体声宽度——适用于所有播放器 |
-| 双耳（耳机） | 2 | 耳机上的 3D 音频——使用头部相关传输函数 |
-| 5.1 环绕声 | 6 | 家庭影院系统 |
-| 7.1 环绕声 | 8 | 专业影院混音 |
-| 5.1.2 杜比全景声 | 8 | 带高度声道的基本全景声 |
-| 7.1.4 杜比全景声 | 12 | 完整的全景声——4 个头顶声道 |
+| Stereo Enhanced | 2 | Enhanced stereo width — works on all players |
+| Binaural (Headphones) | 2 | 3D audio over headphones — uses HRTF |
+| 5.1 Surround | 6 | Home cinema systems |
+| 7.1 Surround | 8 | Professional cinema mixes |
+| 5.1.2 Dolby Atmos | 8 | Basic Atmos with height channels |
+| 7.1.4 Dolby Atmos | 12 | Full Atmos — 4 overhead channels |
 
-### 空间模式
+### Spatial Modes
 
-- **从立体声混音** — 将 2 声道立体声上混到所选格式（Haas 延迟 + 低通 + 全通去相关）
-- **从音干混音** — 在 3D 空间中手动放置每个音干（需要先进行音干分离）
-- **从 Ambisonics** — 支持一阶 (4ch) 或三阶 (16ch) AmbiX 输入
+- **From Stereo Mix** — Up-mixes 2-channel stereo to selected format (Haas delay + low-pass + all-pass decorrelation)
+- **From Stem Mix** — Manually place each stem in 3D space (requires stem separation first)
+- **From Ambisonics** — Supports first-order (4ch) or third-order (16ch) AmbiX input
 
 ---
 
-## 6. 音频修复
+## 6. Audio Repair
 
-修复选项卡提供 8 个修复模块，用于清理有问题的音频。每个模块都有独立的打开/关闭开关和强度控制。
+The Repair tab provides 8 repair modules for cleaning up problem audio. Each module has independent on/off toggles and intensity controls.
 
-| 模块 | 修复内容 | 何时使用 |
+| Module | What It Fixes | When To Use |
 |---|---|---|
-| **降噪** | 持续的嘶嘶声、风扇噪音、磁带嘶声 | 任何存在稳定背景噪音的录音 |
-| **频谱门限** | 段落之间的低频隆隆声 | 播客、配音——消除"死寂空气" |
-| **去咔嗒声** | 数字咔嗒声、爆音、缓冲区错误 | 损坏的录音、数字传输错误 |
-| **去噼啪声** | 黑胶噼啪声、静电干扰 | 黑胶翻录、旧录音 |
-| **去哼声** | 50/60 Hz 电源哼声及其谐波 | 存在接地回路问题的录音 |
-| **去混响** | 过多的房间混响 | 未处理房间中的录音 |
-| **去削波** | 削波、平坦的峰值（重构样本） | 过载的录音 |
-| **共振抑制** | 刺耳的嗡嗡声、铃音共振 | 有问题的房间声学——找出峰值并抑制 |
+| **De-noise** | Constant hiss, fan noise, tape hiss | Any recording with steady background noise |
+| **Spectral Gate** | Low-frequency rumble between passages | Podcasts, voiceover — eliminates "dead air" |
+| **De-click** | Digital clicks, pops, buffer errors | Damaged recordings, digital transfer errors |
+| **De-crackle** | Vinyl crackle, static interference | Vinyl rips, old recordings |
+| **De-hum** | 50/60 Hz mains hum and its harmonics | Recordings with ground loop issues |
+| **De-reverb** | Excessive room reverb | Recordings in untreated rooms |
+| **De-clip** | Clipping, flat peaks (reconstructs samples) | Overloaded recordings |
+| **Resonance Suppression** | Harsh ringing, bell-like resonances | Problem room acoustics — finds peaks and suppresses |
 
-### 处理顺序
+### Processing Order
 
-修复按以下顺序进行：降噪 → 频谱门限 → 去咔嗒声 → 去噼啪声 → 去哼声 → 去混响 → 去削波 → 共振抑制。
+Repair runs in this order: De-noise → Spectral Gate → De-click → De-crackle → De-hum → De-reverb → De-clip → Resonance Suppression.
 
-将修复放置在主母带处理之前还是之后，取决于您的需求：
-- **输入时修复**（已启用"预处理"） — 在母带处理之前清理——修复阶段在主母带处理之前
-- **输出时修复**（已禁用"预处理"） — 只修复最终输出——修复阶段在母带处理之后
+Whether repair runs before or after the main mastering depends on your needs:
+- **Repair on input** ("Pre-process" enabled) — clean up before mastering — repair stage runs before the main pipeline
+- **Repair on output** ("Pre-process" disabled) — fix only the final output — repair stage runs after mastering
 
 ---
 
-## 7. 质量控制
+## 7. Quality Control
 
-质量控制选项卡会运行 **18 项自动检查**，并报告您的混音的问题项。
+The QC tab runs **18 automated checks** and reports issues with your mix.
 
-### 质量控制门限
+### QC Thresholds
 
-| 检查内容 | 警告阈值 | 失败阈值 |
+| Check | Warn Threshold | Fail Threshold |
 |---|---|---|
-| LUFS（响度） | 超出目标 ±2 LU | 超出目标 ±4 LU |
-| 真峰值 | > -1 dBTP | > 0 dBTP |
-| 响度范围 (LRA) | > 12 LU | > 18 LU |
-| 波峰因数 | < 6 dB 或 > 20 dB | 极端值 |
-| 立体声宽度 | < -30 dB（几乎单声道） | < -50 dB |
-| 立体声相关性 | < 0.5 | < 0.0 |
-| 直流偏移 | > -60 dB | > -40 dB |
-| 相位一致性 | < 0.7 | < 0.4 |
-| 低音单声道 (< 200 Hz) | 不匹配 >40% | > 60% |
-| 次声隆隆声 (< 20 Hz) | 存在 -40 dB 以下 | 存在 -20 dB 以上 |
-| 齿音 (5–8 kHz) | > 12 dB 突出 | > 18 dB 突出 |
-| 高频平衡 (15+ kHz) | 衰减 > 12 dB | 衰减 > 24 dB |
-| 削波 | 检测到任何削波 | 削波 > 5 个样本 |
-| 预回声风险 | 中等风险 | 高风险 |
+| LUFS (Loudness) | > ±2 LU off target | > ±4 LU off target |
+| True Peak | > -1 dBTP | > 0 dBTP |
+| Loudness Range (LRA) | > 12 LU | > 18 LU |
+| Crest Factor | < 6 dB or > 20 dB | Extremes |
+| Stereo Width | < -30 dB (near-mono) | < -50 dB |
+| Stereo Correlation | < 0.5 | < 0.0 |
+| DC Offset | > -60 dB | > -40 dB |
+| Phase Coherence | < 0.7 | < 0.4 |
+| Bass Mono (< 200 Hz) | >40% mismatch | > 60% |
+| Subsonic Rumble (< 20 Hz) | Present below -40 dB | Present above -20 dB |
+| Sibilance (5–8 kHz) | > 12 dB prominence | > 18 dB prominence |
+| HF Balance (15+ kHz) | > 12 dB roll-off | > 24 dB roll-off |
+| Clipping | Any clip detected | > 5 clip samples |
+| Pre-Echo Risk | Moderate risk | High risk |
 
-**通过 > 警告 > 失败：** 一例失败将质量控制状态设置为"失败"。只允许警告 — 三种或更多警告将导致"警告"状态。
+**Pass > Warn > Fail:** One fail sets QC status to "Fail." Only warns are acceptable — three or more warns triggers "Warn" status.
 
 ---
 
-## 8. 元数据
+## 8. Metadata
 
-元数据选项卡片段用于设置嵌入到输出文件（WAV/MP3）和 DDEX 分发包中的元数据。
+The Metadata tab sets metadata embedded into output files (WAV/MP3) and DDEX distribution packages.
 
-### 字段概览
+### Field Overview
 
-| 字段 | 示例 | 备注 |
+| Field | Example | Notes |
 |---|---|---|
-| 曲目标题 | "Summer Rain" | 必填 |
-| 艺人 | "John Doe" | 必填 |
-| 专辑 | "Seasonal Collection" | 可选 |
-| 流派 | "Amapiano" | 必填 — 来自 17 种流派的预填充列表 |
-| 语言 | "祖鲁语" | 可选 — 支持 11 种南非洲语言 + 5 种全球语言 |
-| 词曲作者 | "John Doe" | 可选 |
-| 制作人 | "Jane Smith" | 可选 |
-| 唱片公司 | "独立" | 可选 |
-| BPM | "118" | 可选 — 如果留空则自动检测 |
-| 调性 | "A 小调" | 可选 |
-| ISRC | "ZA-XXX-26-00001" | ⚠️ RAIN 生成的 ISRC 是本地标识符——未在 IFPI 注册 |
-| UPC/EAN | "1234567890123" | ⚠️ RAIN 生成的 UPC 是本地标识符——未在 GS1 注册 |
+| Track Title | "Summer Rain" | Required |
+| Artist | "John Doe" | Required |
+| Album | "Seasonal Collection" | Optional |
+| Genre | "Amapiano" | Required — pre-filled list from 17 genres |
+| Language | "Zulu" | Optional — supports 11 SA languages + 5 global |
+| Songwriter | "John Doe" | Optional |
+| Producer | "Jane Smith" | Optional |
+| Label | "Independent" | Optional |
+| BPM | "118" | Optional — auto-detected if left blank |
+| Key | "A Minor" | Optional |
+| ISRC | "ZA-XXX-26-00001" | ⚠️ RAIN-generated ISRC is a local identifier — not IFPI-registered |
+| UPC/EAN | "1234567890123" | ⚠️ RAIN-generated UPC is a local identifier — not GS1-registered |
 
-### 表演权组织
+### Performing Rights Organizations
 
-RAIN V6 包含以下元数据字段：
-- **SAMRO** — 南部非洲音乐权利组织（南非主要 PRO）
-- **CAPASSO** — 作曲、作者和出版商协会（机械权）
-- **SAMPRA** — 南非音乐表演权利协会（邻接权/母带权）
+RAIN V6 includes metadata fields for:
+- **SAMRO** — Southern African Music Rights Organisation (SA's main PRO)
+- **CAPASSO** — Composers, Authors and Publishers Association (mechanical rights)
+- **SAMPRA** — South African Music Performance Rights Association (neighbouring/master rights)
 
 ---
 
-## 9. AI 披露
+## 9. AI Disclosure
 
-根据 **EU AI 法案第 50 条**（2026 年 8 月 2 日生效），您必须在分发之前声明在创建音频时使用了**多少** AI。这**不是**自动检测的 — 您必须主动设置每个字段。
+Per **EU AI Act Article 50** (effective 2 August 2026), you must declare how **much** AI was involved in creating your audio before distributing it. This is **not** auto-detected — you must actively set each field.
 
-### 每个领域的披露级别
+### Per-Field Disclosure Levels
 
-| 领域 | 选项 | 含义 |
+| Field | Options | Meaning |
 |---|---|---|
-| **人声** | 无 / 辅助 / 生成 | 真实人声 / 旋律修正 + AI 和声 / Suno 生成的人声 |
-| **乐器** | 无 / 辅助 / 生成 | 真实乐器 / AI 混音建议 / AI 生成的编曲 |
-| **作曲** | 无 / 辅助 / 生成 | 人类创作 / AI 和弦建议 / AI 生成的歌曲结构 |
-| **混音** | 无 / 辅助 / 生成 | 手动混音 / AI 混音建议 / AI 混音引擎 |
-| **母带处理** | 无 / 辅助 / 生成 | 手动母带 / AI 宏 + 人工审核 / 全自动 AI 母带 |
+| **Vocals** | None / Assisted / Generated | Real vocals / pitch correction + AI harmonies / Suno-generated vocals |
+| **Instrumentation** | None / Assisted / Generated | Real instruments / AI mix suggestions / AI-generated arrangement |
+| **Composition** | None / Assisted / Generated | Human-written / AI chord suggestions / AI-generated song structure |
+| **Mixing** | None / Assisted / Generated | Manual mix / AI mixing suggestions / AI mixing engine |
+| **Mastering** | None / Assisted / Generated | Manual master / AI macros + human review / Full-auto AI mastering |
 
-### 示例场景：
+### Example Scenarios:
 
-- **"我在 Suno 上生成了节拍，并在上面录制了我的说唱人声"** →
-  人声：无 | 乐器：生成 | 作曲：生成 | 混音：辅助 | 母带处理：辅助
-- **"我在 Logic Pro 中制作了所有内容，只是通过 RAIN 进行了母带处理"** →
-  人声：无 | 乐器：无 | 作曲：无 | 混音：无 | 母带处理：辅助
-- **"Suno 生成了整首歌曲，我通过 RAIN 进行了母带处理"** →
-  所有字段：生成（除了母带处理：辅助）
+- **"I generated a beat on Suno and rapped over it"** →
+  Vocals: None | Instrumentation: Generated | Composition: Generated | Mixing: Assisted | Mastering: Assisted
+- **"I made everything in Logic Pro, just mastered through RAIN"** →
+  Vocals: None | Instrumentation: None | Composition: None | Mixing: None | Mastering: Assisted
+- **"Suno generated the entire song, I mastered through RAIN"** →
+  All fields: Generated (except Mastering: Assisted)
 
-### 为什么这很重要
+### Why This Matters
 
-- EU AI 法案第 50 条要求对任何"与人类创作内容互动"的 AI 生成音频进行**披露**
-- 虚假声明可能会根据管辖范围产生**法律责任**
-- DDEX ERN 4.3.2 在 `<AIInvolvement>` 区块中嵌入了这些披露信息，由流媒体平台接收
+- EU AI Act Article 50 requires **disclosure** of any AI-generated audio that "interacts with human-created content"
+- False declarations may carry **legal liability** depending on jurisdiction
+- DDEX ERN 4.3.2 embeds these disclosures in the `<AIInvolvement>` block, received by streaming platforms
 
 ---
 
-## 10. 导出选项
+## 10. Export Options
 
-### 格式
+### Formats
 
-| 格式 | 比特深度 | 采样率 | 文件大小（3 分钟） | 用途 |
+| Format | Bit Depth | Sample Rate | File Size (3 min) | Use |
 |---|---|---|---|---|
-| WAV | 24-bit | 48 kHz | ~52 MB | 存档大师，分发 |
-| MP3 | 320 kbps | 48 kHz | ~7 MB | 预览，流媒体参考 |
-| FLAC | 24-bit | 48 kHz | ~30 MB | 无损压缩 |
-| AIFF | 24-bit | 48 kHz | ~52 MB | Apple 生态系统 |
-| 杜比全景声 ZIP | 24-bit | 48 kHz | ~100 MB | 空间音频分发 |
+| WAV | 24-bit | 48 kHz | ~52 MB | Archive master, distribution |
+| MP3 | 320 kbps | 48 kHz | ~7 MB | Preview, streaming reference |
+| FLAC | 24-bit | 48 kHz | ~30 MB | Lossless compressed |
+| AIFF | 24-bit | 48 kHz | ~52 MB | Apple ecosystem |
+| Dolby Atmos ZIP | 24-bit | 48 kHz | ~100 MB | Spatial audio distribution |
 
-### 抖动
+### Dithering
 
-RAIN 应用 **TPDF**（三角概率密度函数）抖动，用于 24 位输出。这用宽带噪声取代了量化失真，在感知上是透明的。
+RAIN applies **TPDF** (Triangular Probability Density Function) dithering for the 24-bit output. This replaces quantization distortion with broadband noise that is perceptually transparent.
 
-### 批量导出
+### Batch Export
 
-可以一次性渲染多个母带处理版本（不同的宏预设），以最小的额外工作量为不同的平台生成优化版本。
+Multiple mastering versions (different macro presets) can be rendered in one go, producing optimized versions for different platforms with minimal extra work.
 
 ---
 
-## 11. 分发
+## 11. Distribution
 
-### 直接分发（DistroKid）
+### Direct Distribution (DistroKid)
 
-RAIN 可以通过浏览器自动化的方式，将您的母带处理音频直接上传到 DistroKid 分发平台。
+RAIN can automatically upload your mastered audio to the DistroKid distribution platform through browser automation.
 
-**特点：**
-- 即时分发到 150+ 个流媒体平台（Spotify、Apple Music、TikTok、YouTube Music 等）
-- 通过 DDEX ERN 4.3.2 格式标准化元数据
+**Features:**
+- Instant distribution to 150+ streaming platforms (Spotify, Apple Music, TikTok, YouTube Music, etc.)
+- Standardized metadata via DDEX ERN 4.3.2 format
 
-**要求：**
-- 您的计算机上安装了 **Playwright Chromium** 浏览器
+**Requirements:**
+- **Playwright Chromium** browser installed on your machine
 
-**定价（RAIN V6 = DistroKid + 20%）：**
+**Pricing (RAIN V6 = DistroKid + 20%):**
 
-| 套餐 | DistroKid ZAR/年 | RAIN ZAR/年 | 适用场景 |
+| Tier | DistroKid ZAR/yr | RAIN ZAR/yr | Best For |
 |---|---|---|---|
-| **Musician** | R459.99 | R551.99 | 单个艺人，基础功能 |
-| **Musician Plus** ⭐ | R826.99 | R992.39 | 2 个艺人，自定义厂牌名称 |
-| **Ultimate** 🏆 | R1,649.00 | R1,978.80 | 最高 100 个艺人，高级分析 |
+| **Musician** | R459.99 | R551.99 | Single artist, basic features |
+| **Musician Plus** ⭐ | R826.99 | R992.39 | 2 artists, custom label name |
+| **Ultimate** 🏆 | R1,649.00 | R1,978.80 | Up to 100 artists, advanced analytics |
 
-所有套餐都提供：无限上传，150+ 个平台，保留 100% 版权收益。
+All tiers include: unlimited uploads, 150+ platforms, 100% royalty retention.
 
-**附加选项（RAIN = DistroKid + 20%）：**
-| 附加项 | 价格 | 说明 |
+**Add-ons (RAIN = DistroKid + 20%):**
+| Add-on | Price | Description |
 |---|---|---|
-| Leave a Legacy | R699 单曲 / R1,199 专辑 | 歌曲永久在线（即使订阅到期） |
-| Store Maximizer | R189/年/发行 | 额外的分发平台 |
-| YouTube Content ID | R119/年/单曲 | YouTube 版权检测（另收 20% 费用） |
-| Shazam & Siri | R24/年/发行 | 通过 Shazam 识别 + Siri 集成 |
+| Leave a Legacy | R699 single / R1,199 album | Track stays live forever (even if subscription ends) |
+| Store Maximizer | R189/yr/release | Additional distribution platforms |
+| YouTube Content ID | R119/yr/single | YouTube copyright detection (excl. 20% YouTube revenue share) |
+| Shazam & Siri | R24/yr/release | Shazam identification + Siri integration |
 
-### 手动分发
+### Manual Distribution
 
-如果您不想使用 DistroKid，可以通过 ZIP 包下载母带处理的音频和 DDEX XML，并手动上传到您选择的分发商。
+If you prefer not to use DistroKid, you can download the mastered audio and DDEX XML as a ZIP package and upload it manually to your distributor of choice.
 
-### 分发检查清单
+### Distribution Checklist
 
-- [ ] ISRC 和 UPC 代码由 RAIN 生成（或手动输入已注册的代码）
-- [ ] AI 披露字段设置为正确的级别
-- [ ] 通过质量控制检查（无失败，警告不超过 3 个）
-- [ ] 元数据填写完整（必填字段：曲目标题、艺人、流派）
-- [ ] 封面图（JPEG/PNG，3000×3000 像素）
-
----
-
-## 12. 来源与验证
-
-### RAIN-CERT 证书
-
-每当您通过 RAIN V6 渲染一段音频时，引擎会自动签署一个包含以下内容的来源证书：
-- 输入音频的 SHA-256 哈希值
-- 时间戳
-- 处理日期
-- 使用的处理参数
-- 数字签名（Ed25519）
-
-这为您的作品提供了可验证的链上记录。
-
-### 如何验证
-
-**选项 1 — 在 RAIN 中：**
-1. 打开原始文件和渲染文件
-2. 转到"**来源**"选项卡
-3. 点击"**验证**"——RAIN 将叠加两个文件并确认是否匹配
-
-**选项 2 — 外部验证：**
-- 通过 Ed25519 或 C2PA 清单验证——证书和清单嵌入在输出文件的元数据中
-
-### RAIN-CERT 不是...
-- …替代 ISRC/UPC 注册（ISRC 需要 IFPI 注册，UPC 需要 GS1 注册）
-- …法律版权注册（需要 USCO 或本地机构）
-- …区块链记录（不依赖于加密货币/链）
+- [ ] ISRC and UPC codes generated by RAIN (or manually entered registered codes)
+- [ ] AI disclosure fields set to correct levels
+- [ ] QC check passes (no fails, fewer than 3 warns)
+- [ ] Metadata fields complete (required: Track Title, Artist, Genre)
+- [ ] Cover artwork ready (JPEG/PNG, 3000×3000 pixels)
 
 ---
 
-## 13. 提示与技巧
+## 12. Provenance & Verification
 
-### 最佳音频质量：
+### RAIN-CERT Certificates
 
-- 使用 **WAV 24-bit/48 kHz** 作为输入 — 避免 MP3 输入（母带前已有损）
-- 保持 **峰值电平在 -6 dB 以下** — 在母带处理前留出余量
-- 在母带处理之前**旁通掉混音总线上的任何限制器** — 让 RAIN 处理它
+Every time you render audio through RAIN V6, the engine automatically signs a provenance certificate containing:
+- SHA-256 hash of the input audio
+- Timestamp
+- Processing date
+- Processing parameters used
+- Digital signature (Ed25519)
 
-### 流派设置：
+This provides a verifiable chain-of-custody record for your work.
 
-- **Amapiano** → 自动增加立体声宽度 + 磁带饱和
-- **Gospel** → 自动将人声前置 + 增强中央声道
-- **Podcast** → 禁用 SPACE + 拉高 REPAIR 以消除室内回声
-- **古典** → 禁用 GLUE + 保持 WARMTH 较低 = 保留自然动态
+### How to Verify
 
-### 音干策略：
+**Option 1 — Inside RAIN:**
+1. Open both the original and rendered files
+2. Go to the "**Provenance**" tab
+3. Click "**Verify**" — RAIN will overlay both files and confirm whether they match
 
-- **为在线课程隔离人声** → 独奏主唱 + 所有其他音干静音 → 只导出人声
-- **在没有鼓声的情况下练习吉他** → 底鼓、军鼓、踩镲静音 → 导出无鼓音轨
-- **混音** → 加载两段参考音频 → 查看哪个应该作为哪些音干电平的模型
+**Option 2 — External Verification:**
+- Via Ed25519 or C2PA manifest — the certificate and manifest are embedded in the output file's metadata
+
+### What RAIN-CERT Is Not...
+- …a substitute for ISRC/UPC registration (ISRC requires IFPI registration, UPC requires GS1)
+- …legal copyright registration (requires USCO or local authority)
+- …a blockchain record (no cryptocurrency/chain dependency)
 
 ---
 
-## 14. 故障排除
+## 13. Tips & Tricks
 
-| 问题 | 可能的原因 | 解决方案 |
+### Best Audio Quality:
+
+- Use **WAV 24-bit/48 kHz** as input — avoid MP3 input (already lossy before mastering)
+- Keep **peak levels below -6 dB** — leave headroom before mastering
+- **Bypass any limiter** on your mix bus before mastering — let RAIN handle it
+
+### Genre Settings:
+
+- **Amapiano** → Automatically increases stereo width + tape saturation
+- **Gospel** → Automatically pushes vocals forward + center channel emphasis
+- **Podcast** → Disable SPACE + crank REPAIR for room echo
+- **Classical** → Disable GLUE + keep WARMTH low = preserve natural dynamics
+
+### Stem Strategies:
+
+- **Isolate vocals for online lessons** → Solo Lead Vocals + mute all others → export only vocals
+- **Practice guitar without drums** → Mute Kick, Snare, Hi-hats → export drumless track
+- **Remix** → Load two reference tracks → see which should be the model for which stem levels
+
+---
+
+## 14. Troubleshooting
+
+| Problem | Likely Cause | Solution |
 |---|---|---|
-| 应用程序无法在浏览器中加载 | JavaScript 被阻止或浏览器不受支持 | 检查 JavaScript 是否已激活；使用 Chrome/Edge/Firefox |
-| ONNX 模型加载失败 | 互联网连接丢失，缓存已清除 | 刷新页面。如果问题仍然存在，请使用启发式后备模式 |
-| 渲染需要很长时间 | 文件较大（>20 MB）或计算机速度较慢 | 等待——渲染在后台进行。对于 >5 分钟的曲目，可能需要 60 秒 |
-| 音干分离无法加载 | 需要 GPU 支持才能实现 12 个音干 | 回退到 6 个音干（鼓、贝斯、人声、其他）。无需 GPU。|
-| 导出下载无法启动 | 弹出窗口阻止程序或存储空间不足 | 启用弹出窗口；检查可用的磁盘空间 |
-| 静音或噪音过大的输出 | 损坏的输入文件 | 尝试先转换为 WAV 格式再上传 |
-| 质量控制检查失败 | 输入文件本身存在问题 | 使用修复模块处理，或提高质量控制检查的容错度 |
+| App won't load in browser | JavaScript blocked or browser unsupported | Check JavaScript is enabled; use Chrome/Edge/Firefox |
+| ONNX model fails to load | Internet connection lost, cache cleared | Refresh page. If persistent, heuristic fallback mode works |
+| Render takes very long | Large file (>20 MB) or slow computer | Wait — rendering happens in background. 60s possible for >5 min tracks |
+| Stem separation fails to load | Needs GPU support for 12 stems | Falls back to 6 stems (drums, bass, vocals, other). No GPU needed. |
+| Export download never starts | Pop-up blocker or storage full | Enable pop-ups; check available disk space |
+| Silent or noise-heavy output | Corrupt input file | Try converting to WAV first, then re-upload |
+| QC check fails | Input file itself has issues | Use repair modules, or increase QC tolerance |
 
-### 浏览器兼容性
+### Browser Compatibility
 
-| 浏览器 | 状态 | 说明 |
+| Browser | Status | Notes |
 |---|---|---|
-| Chrome 115+ | ✅ 完全支持 | 推荐使用 |
-| Edge 115+ | ✅ 完全支持 | 与 Chrome 功能完全一致 |
-| Firefox 120+ | ✅ 支持 | 部分功能可能稍慢 |
-| Safari 17+ | ⚠️ 有限支持 | Web Audio API 限制，可能无法支持所有功能 |
-| Brave | ✅ 支持 | 需要启用"指纹保护"模式 |
+| Chrome 115+ | ✅ Fully supported | Recommended |
+| Edge 115+ | ✅ Fully supported | Feature-identical to Chrome |
+| Firefox 120+ | ✅ Supported | Some features slightly slower |
+| Safari 17+ | ⚠️ Limited | Web Audio API restrictions, some features unavailable |
+| Brave | ✅ Supported | May need "fingerprint protection" mode enabled |
 
 ---
 
-## 15. 词汇表
+## 15. Glossary
 
-| 术语 | 含义 |
+| Term | Meaning |
 |---|---|
-| **DSP** | 数字信号处理——用数学方法处理音频 |
-| **LUFS** | 响度单位满量程——感知响度的标准测量方法 |
-| **dBTP** | 分贝真峰值——考虑样本间峰值的绝对最大信号电平 |
-| **LRA** | 响度范围——衡量音轨中响度变化的指标 |
-| **EQ** | 均衡器——音调控制（低频、中低频、中高频、高频） |
-| **Compressor** | 压缩器——减少响亮部分和安静部分之间的差异 |
-| **Limiter** | 限制器——防止音频超过设定电平的"上限"压缩器 |
-| **Multiband Compression** | 多频段压缩——每个频段的压缩设置不同 |
-| **Stereo Width** | 立体声宽度——左声道和右声道之间的差异 |
-| **True Peak** | 真峰值——数字信号的绝对最大幅度（包括样本间峰值） |
-| **DDEX** | 数字数据交换——音乐元数据的标准格式 |
-| **ISRC** | 国际标准录音编码——曲目的唯一标识符 |
-| **UPC/EAN** | 通用产品代码——发行版的唯一标识符 |
-| **C2PA** | 内容来源与真实性联盟——内容真实性的标准 |
-| **POPIA** | 个人信息保护法——南非的数据保护法 |
-| **SAMRO** | 南部非洲音乐权利组织——南非的表演权组织 |
-| **PRO** | 表演权组织——收取和分配版税 |
-| **SAIL v2** | 频谱自适应智能限制器—— RAIN 的专有限制器算法 |
-| **TPDF** | 三角概率密度函数——一种防止量化失真的抖动形式 |
-| **HRTF** | 头部相关传输函数——模拟声音如何到达人耳 |
-| **ADM BWF** | 音频定义模型广播波形格式——杜比全景声的标准 |
+| **DSP** | Digital Signal Processing — processing audio with math |
+| **LUFS** | Loudness Units Full Scale — standard measurement of perceived loudness |
+| **dBTP** | Decibels True Peak — absolute maximum signal level accounting for inter-sample peaks |
+| **LRA** | Loudness Range — measure of loudness variation in a track |
+| **EQ** | Equalization — tone control (low, mid-low, mid-high, high frequencies) |
+| **Compressor** | Reduces the difference between loud and quiet parts |
+| **Limiter** | A "ceiling" compressor that prevents audio from exceeding a set level |
+| **Multiband Compression** | Different compression settings per frequency band |
+| **Stereo Width** | Difference between left and right channels |
+| **True Peak** | Absolute maximum amplitude of a digital signal (includes inter-sample peaks) |
+| **DDEX** | Digital Data Exchange — standard format for music metadata |
+| **ISRC** | International Standard Recording Code — unique identifier for a track |
+| **UPC/EAN** | Universal Product Code — unique identifier for a release |
+| **C2PA** | Coalition for Content Provenance and Authenticity — standard for content authenticity |
+| **POPIA** | Protection of Personal Information Act — South Africa's data protection law |
+| **SAMRO** | Southern African Music Rights Organisation — SA's performing rights organization |
+| **PRO** | Performing Rights Organization — collects and distributes royalties |
+| **SAIL v2** | Spectral Adaptive Intelligent Limiter — RAIN's proprietary limiter algorithm |
+| **TPDF** | Triangular Probability Density Function — a form of dithering that prevents quantization distortion |
+| **HRTF** | Head-Related Transfer Function — simulates how sound reaches the human ear |
+| **ADM BWF** | Audio Definition Model Broadcast Wave Format — standard for Dolby Atmos |
 
 ---
 
-## 16. 支持和社区
+## 16. Support & Community
 
-### 在线帮助：
-- 文档：查看 [README.md](../README.md) 和 [MASTER_DOSSIER.md](../docs/MASTER_DOSSIER.md)
-- 源代码：查看 [GitHub 仓库](https://github.com/ThatGuy-Productions/RAINV6.COM)
-- 审计报告：查看 [docs/audit/](../docs/audit/)
+### Online Help:
+- Documentation: See [README.md](../README.md) and [MASTER_DOSSIER.md](../docs/MASTER_DOSSIER.md)
+- Source code: See [GitHub repository](https://github.com/ThatGuy-Productions/RAINV6.COM)
 
-### 反馈：
-- 使用应用内的**反馈面板**报告问题或建议功能
-- 反馈是完全可选的，不包含任何个人信息
-
----
-
-## 17. 法律声明
-
-RAIN V6 是 **ThatGuy Productions / ARCOVEL Technologies International** 的专有软件。
-
-### 完整的法律文档：
-- [服务条款](../docs/legal/TERMS_OF_SERVICE.md) — 服务使用规则和责任限制
-- [隐私政策](../docs/legal/PRIVACY_POLICY.md) — 数据收集和处理方式
-- [数据处理协议](../docs/legal/DATA_PROCESSING_AGREEMENT.md) — 数据关系的定义
-- [AI 披露合规性](../docs/legal/AI_DISCLOSURE_COMPLIANCE.md) — EU AI 法案合规性
-- [支付条款](../docs/legal/PAYMENT_TERMS.md) — 支付处理和退款政策
-- [责任豁免](../docs/legal/LIABILITY_WAIVER.md) — AI 处理免责声明
-
-### Beta 版重要说明：
-- RAIN V6 处于 **Beta 阶段** — 按"原样"提供，不作任何形式的保证
-- 在 Beta 阶段，**所有功能均免费**（无需付费）
-- 在 Beta 阶段，**不保证服务可用性**
-- **音频处理在您的设备上本地完成** — 音频不会上传到我们的服务器
-- **不收集个人数据** — 不要求注册、登录或提供任何个人信息
+### Feedback:
+- Use the in-app **Feedback panel** to report issues or suggest features
+- Feedback is entirely optional and contains no personal information
 
 ---
 
-*手册版本 1.0-beta · RAIN V6 Beta · © 2026 ThatGuy Productions / ARCOVEL Technologies International*
+## 17. Legal Notice
+
+RAIN V6 is proprietary software by **ThatGuy Productions / ARCOVEL Technologies International**.
+
+### Full Legal Documents:
+- [Terms of Service](../docs/legal/TERMS_OF_SERVICE.md) — Service use rules and liability limits
+- [Privacy Policy](../docs/legal/PRIVACY_POLICY.md) — How data is collected and processed
+- [Data Processing Agreement](../docs/legal/DATA_PROCESSING_AGREEMENT.md) — Data relationship definitions
+- [AI Disclosure Compliance](../docs/legal/AI_DISCLOSURE_COMPLIANCE.md) — EU AI Act compliance
+- [Payment Terms](../docs/legal/PAYMENT_TERMS.md) — Payment processing and refund policy
+- [Liability Waiver](../docs/legal/LIABILITY_WAIVER.md) — AI processing disclaimers
+
+### Important Beta Notice:
+- RAIN V6 is in **Beta** — provided "as is" without warranty of any kind
+- **All features are free** during Beta (no payment required)
+- **Service availability is not guaranteed** during Beta
+- **Audio processing happens locally on your device** — no audio is uploaded to our servers
+- **No personal data is collected** — no registration, login, or personal information required
+
+---
+
+*Handbook version 1.0-beta · RAIN V6 Beta · © 2026 ThatGuy Productions / ARCOVEL Technologies International*

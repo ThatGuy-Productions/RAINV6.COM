@@ -1,610 +1,609 @@
-# RAIN V6 BETA — 主档案
+# RAIN V6 BETA — Master Dossier
 
-**版本:** BETA 候选发布版 3  
-**日期:** 2026-07-31  
-**仓库:** `ThatGuy-Productions/RAINV6.COM`  
-**许可证:** 专有 — © ThatGuy Productions / ARCOVEL Technologies International  
-**管辖地:** 南非 (ZA)
-
----
-
-## 目录
-
-1. [架构概述](#1-架构概述)
-2. [16 阶段母带处理管道](#2-16-阶段母带处理管道)
-3. [管线集成历程](#3-管线集成历程)
-4. [AI 与机器学习系统](#4-ai-与机器学习系统)
-5. [分发管道](#5-分发管道)
-6. [来源与监管链](#6-来源与监管链)
-7. [律动与情感智能](#7-律动与情感智能)
-8. [音干分离](#8-音干分离)
-9. [空间音频 (Dolby Atmos)](#9-空间音频-dolby-atmos)
-10. [音频修复套件](#10-音频修复套件)
-11. [质量控制引擎](#11-质量控制引擎)
-12. [区域配置 (SA-first)](#12-区域配置-sa-first)
-13. [安全架构](#13-安全架构)
-14. [支付基础设施](#14-支付基础设施)
-15. [分析引擎](#15-分析引擎)
-16. [测试覆盖](#16-测试覆盖)
-17. [CI/CD 管道](#17-cicd-管道)
-18. [法律与合规](#18-法律与合规)
-19. [已知限制](#19-已知限制)
-20. [文件清单](#20-文件清单)
+**Version:** BETA Candidate Release 3  
+**Date:** 2026-07-31  
+**Repository:** `ThatGuy-Productions/RAINV6.COM`  
+**License:** Proprietary — © ThatGuy Productions / ARCOVEL Technologies International  
+**Jurisdiction:** South Africa (ZA)
 
 ---
 
-## 1. 架构概述
+## Table of Contents
 
-RAIN V6 的核心是一个**确定性浏览器内 DSP 引擎**——没有服务器端音频处理，没有云上传用于母带处理。音频在设备上通过 Web Audio API + 浮点 DSP 代码以 32 位浮点精度处理。
+1. [Architecture Overview](#1-architecture-overview)
+2. [16-Stage Mastering Pipeline](#2-16-stage-mastering-pipeline)
+3. [Pipeline Integration History](#3-pipeline-integration-history)
+4. [AI & Machine Learning Systems](#4-ai--machine-learning-systems)
+5. [Distribution Pipeline](#5-distribution-pipeline)
+6. [Provenance & Chain of Custody](#6-provenance--chain-of-custody)
+7. [Groove & Emotion Intelligence](#7-groove--emotion-intelligence)
+8. [Stem Separation](#8-stem-separation)
+9. [Spatial Audio (Dolby Atmos)](#9-spatial-audio-dolby-atmos)
+10. [Audio Repair Suite](#10-audio-repair-suite)
+11. [Quality Control Engine](#11-quality-control-engine)
+12. [Regional Configuration (SA-first)](#12-regional-configuration-sa-first)
+13. [Security Architecture](#13-security-architecture)
+14. [Payment Infrastructure](#14-payment-infrastructure)
+15. [Analytics Engine](#15-analytics-engine)
+16. [Test Coverage](#16-test-coverage)
+17. [CI/CD Pipeline](#17-cicd-pipeline)
+18. [Legal & Compliance](#18-legal--compliance)
+19. [Known Limitations](#19-known-limitations)
+20. [File Manifest](#20-file-manifest)
 
-### 双路径设计
+---
+
+## 1. Architecture Overview
+
+RAIN V6's core is a **deterministic in-browser DSP engine** — no server-side audio processing, no cloud uploads for mastering. Audio is processed on-device through Web Audio API + floating-point DSP code at 32-bit float precision.
+
+### Dual-Path Design
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  RAIN V6 — 双路径架构                                                │
+│  RAIN V6 — Dual-Path Architecture                                    │
 │                                                                     │
-│  预览路径                          渲染路径                           │
+│  Preview Path                      Render Path                      │
 │  ┌────────────────┐              ┌────────────────────────────┐     │
-│  │ Web Audio API   │              │ 自定义 DSP (Float32Array)    │     │
-│  │ 原生节点        │              │ 16 阶段管道                  │     │
-│  │ 32 位浮点        │              │ 确定性位对位                   │     │
-│  │ 低延迟 (~5ms)    │              │ OfflineAudioContext           │     │
+│  │ Web Audio API   │              │ Custom DSP (Float32Array)    │     │
+│  │ Native nodes    │              │ 16-stage pipeline           │     │
+│  │ 32-bit float    │              │ Deterministic bit-for-bit    │     │
+│  │ Low latency (~5ms)│             │ OfflineAudioContext          │     │
 │  └────────────────┘              └────────────────────────────┘     │
 │                                                                     │
-│  用于：实时 A/B 比较                用于：母带渲染 + 导出 + 分发                │
+│  For: live A/B comparison          For: mastering render + export   │
+│       + distribution                                                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 技术栈
+### Tech Stack
 
-| 层 | 技术 | 用途 |
+| Layer | Technology | Purpose |
 |---|---|---|
-| **运行时** | Bun 1.2+ | JavaScript/TypeScript 运行时 |
-| **框架** | Next.js 16 (App Router) | Web 应用框架 |
-| **数据库** | SQLite (dev) → PostgreSQL 18 (prod) | 会话和事件持久化 |
-| **ORM** | Prisma 6 | 数据库迁移和查询 |
-| **样式** | Tailwind CSS 4 + shadcn/ui | UI 组件 |
-| **音频** | Web Audio API + 自定义 DSP | 所有音频处理 |
-| **ML** | ONNX Runtime Web | RainNet v2 AI 推理 |
-| **加密** | WebCrypto (Ed25519, SHA-256) | 来源签名 |
-| **包** | PKZIP 2.0 (store-only) | 分发包 |
+| **Runtime** | Bun 1.2+ | JavaScript/TypeScript runtime |
+| **Framework** | Next.js 16 (App Router) | Web application framework |
+| **Database** | SQLite (dev) → PostgreSQL 18 (prod) | Session and event persistence |
+| **ORM** | Prisma 6 | Database migrations and queries |
+| **Styling** | Tailwind CSS 4 + shadcn/ui | UI components |
+| **Audio** | Web Audio API + custom DSP | All audio processing |
+| **ML** | ONNX Runtime Web | RainNet v2 AI inference |
+| **Crypto** | WebCrypto (Ed25519, SHA-256) | Provenance signing |
+| **Package** | PKZIP 2.0 (store-only) | Distribution bundles |
 
-### 关键架构决策
+### Key Architecture Decisions
 
-| 决策 | 理由 |
+| Decision | Rationale |
 |---|---|
-| **无 C++/WASM** — 纯 TypeScript DSP | 零构建工具链，即时部署。确定性 TypeScript 代码在编译时不会失败——没有 Emscripten，没有 wasm-opt，没有链接器问题 |
-| **无 GPU 音干分离** — Band-Split DSP | 免许可（无 BS-RoFormer CC BY-NC 冲突），无需 GPU，可即时使用 |
-| **无服务器端音频** — 100% 浏览器内 | 音频永不离开设备。零带宽成本。POPIA/CCPA 天然合规 |
-| **无用户账户** — 匿名会话 | 免费 Beta 版。无密码，无恢复，无 PII |
-| **确定性渲染** — 无 Math.random | 相同的输入 → 相同的音频输出。可证明、可审计、可重现 |
-| **LabelGrid API → DistroKid 浏览器** | 免费 Beta 版不需要企业 API 密钥 |
+| **No C++/WASM** — pure TypeScript DSP | Zero build toolchain, instant deployment. Deterministic TypeScript code cannot fail to compile — no Emscripten, no wasm-opt, no linker issues |
+| **No GPU stem separation** — Band-Split DSP | License-free (no BS-RoFormer CC BY-NC conflict), no GPU required, works instantly |
+| **No server-side audio** — 100% in-browser | Audio never leaves the device. Zero bandwidth costs. POPIA/CCPA compliant by nature |
+| **No user accounts** — anonymous sessions | Free beta. No passwords, no recovery, no PII |
+| **Deterministic renders** — no Math.random | Same input → same audio output. Provable, auditable, reproducible |
+| **LabelGrid API → DistroKid browser** | No enterprise API key needed for free beta |
 
 ---
 
-## 2. 16 阶段母带处理管道
+## 2. 16-Stage Mastering Pipeline
 
-### 声明的阶段（常量.ts → PIPELINE_STAGES）
+### Declared Stages (constants.ts → PIPELINE_STAGES)
 
-| 序号 | 名称 | 描述 |
+| # | Name | Description |
 |---|---|---|
-| 1 | 格式归一化 | 重采样至 48 kHz，64 位浮点立体声，提取通道数据 |
-| 2 | 信号分析 | ITU-R BS.1770-4: LUFS，真峰值 (4× 多相)，RMS，波峰因数，LRA |
-| 3 | 响度测量 | 母带前 LUFS + 真峰值基线 |
-| 4 | AI 推理 | RainNet v2 ONNX → 46 ProcessingParams（回退到启发式算法） |
-| 5 | 流派配置文件匹配 | 流派特定 EQ 倾斜 + 31 频段 1/3 倍频程参考曲线 |
-| 6 | 频谱修复 | 高通滤波器 + 去齿音双二阶滤波 |
-| 7 | 源分离 | BS-RoFormer 4 次级联 → 12 个音干（音频 ≤60 秒） |
-| 8 | 按音干修复 | 每个音干的高通滤波器/去齿音/直流偏移校正 |
-| 9 | 按音干处理 | SAIL v2 限制 + 增益推子 + 静音/独奏 + 立体声总线求和 |
-| 10 | 主总线 | 8 频段参量 EQ + 多频段压缩 + M/S 宽度 + 律动 + 生命力 |
-| 11 | 响度定位 | 基于 LUFS 的增益补偿至平台目标 |
-| 12 | 真峰值限制 | 闭环 ISP 保护（限制 → 测量 dBTP → 重新限制） |
-| 13 | 质量控制验证 | 最终重新分析 + 如果超过上限则进行矫正重新限制 |
-| 14 | 来源签名 | 传递标记（Ed25519 签名在 MasteringTab 中延迟处理） |
-| 15 | 输出打包 | AudioBuffer 构建，TPDF 抖动，24 位/48 kHz WAV + 320 kbps MP3 |
-| 16 | 分发准备 | 最终 LUFS/TP 门控 → `_distributionReady` 标记 |
+| 1 | Format Normalization | Resample to 48 kHz, 64-bit float stereo, extract channel data |
+| 2 | Signal Analysis | ITU-R BS.1770-4: LUFS, true peak (4× polyphase), RMS, crest factor, LRA |
+| 3 | Loudness Survey | Pre-master LUFS + true peak baseline |
+| 4 | AI Inference | RainNet v2 ONNX → 46 ProcessingParams (fallback to heuristics) |
+| 5 | Genre Profile Match | Genre-specific EQ tilt + 31-band 1/3-octave reference curves |
+| 6 | Spectral Repair | High-pass filter + de-essing biquad cascade |
+| 7 | Source Separation | BS-RoFormer 4-pass cascade → 12 stems (audio ≤60s) |
+| 8 | Per-Stem Repair | HPF/de-ess/DC offset correction per stem |
+| 9 | Per-Stem Processing | SAIL v2 limiting + gain faders + mute/solo + stereo bus summation |
+| 10 | Master Bus | 8-band parametric EQ + multiband compression + M/S width + groove + vitality |
+| 11 | Loudness Targeting | LUFS-based gain compensation to platform target |
+| 12 | True-Peak Limiting | Closed-loop ISP protection (limit → measure dBTP → re-limit) |
+| 13 | QC Validation | Final re-analysis + corrective re-limit if ceiling exceeded |
+| 14 | Provenance Signature | Ed25519 cert + C2PA manifest embedding |
+| 15 | Output Packing | AudioBuffer build, TPDF dither, 24-bit/48 kHz WAV + 320 kbps MP3 |
+| 16 | Distribution Readiness | Final LUFS/TP gate → `_distributionReady` flag |
 
-### 实现状态：**16/16 真实** — 所有阶段都执行可测量的 DSP 工作。
-
-以前的"AUDIT-C4 修复"消除了每个阶段的`sleep()` 占位符（阶段 2-5 过去只是等待 300 毫秒，不做任何工作）。
+### Implementation Status: **16/16 verified** — all stages perform measurable DSP work.
 
 ---
 
-## 3. 管线集成历程
+## 3. Pipeline Integration History
 
-### 2026-07-29 — 初始推送
-- 初始仓库推送至 `ThatGuy-Productions/RAINV6.COM`
-- 已移除运行时目录（db/、upload/、tool-results/）
-- 包名称已从脚手架修复
+### 2026-07-29 — Initial Push
+- Initial repository push to `ThatGuy-Productions/RAINV6.COM`
+- Removed runtime directories (db/, upload/, tool-results/)
+- Package name fixed from scaffolding
 
-### 2026-07-29 — 英雄区改造
-- 对比度层次：近乎黑色 `#08090D` + 12% 透明度网格
-- 卡片景深：透视变换 + 3 层阴影
-- 矩阵雨降低至 25% 透明度（之前为 50%）
-- 紫色作为强调色（之前是大气雾）
+### 2026-07-29 — Hero Section Overhaul
+- Contrast hierarchy: near-black `#08090D` + 12% opacity grid
+- Card depth: perspective transform + 3-layer shadows
+- Matrix rain reduced to 25% opacity (was 50%)
+- Purple as rim accent (was atmospheric fog)
 
-### 2026-07-31 — V7 增强功能
-- **监管链** (76 KB)：8 种 AI 检测模式，WAV/MP3 元数据清理，所有权声明
-- **律动与情感** (55 KB)：BPM 检测，律动分类，效价/唤醒度估计
-- **DDEX 多曲目** (15 KB)：专辑/EP 支持，含每个曲目的 ISRC
-- **来源硬化处理**：FNV-1a 确定性 ISRC/UPC，IFPI/GS1 警告
+### 2026-07-31 — V7 Enhancements
+- **Chain of Custody** (76 KB): 8 AI detection patterns, WAV/MP3 metadata cleaning, custody certificates
+- **Groove & Emotion** (55 KB): BPM detection, groove classification, valence/arousal estimation
+- **DDEX Multi-track** (15 KB): Album/EP support with per-track ISRC
+- **Provenance hardening**: FNV-1a deterministic ISRC/UPC, IFPI/GS1 warnings
 
-### 2026-07-31 — 管线最终确定
-- **分发最终端点**：`POST /api/rain/distribute/finalize` — 无下载后上传
-- **AI 披露面板**：根据 EU AI 法案第 50 条，诚实地按字段进行选择
-- **DistroKid 浏览器自动化**：免费 Beta 版分发路径，无需 API 密钥
-- **DistroKid 定价**：实时三层 + 20% 加价（ZAR）
+### 2026-07-31 — Pipeline Finalization
+- **Distribution finalize endpoint**: `POST /api/rain/distribute/finalize` — no download-then-upload
+- **AI Disclosure Panel**: EU AI Act Article 50 honest per-field selection
+- **DistroKid browser automation**: Free beta distribution path, no API key needed
+- **DistroKid pricing**: Live ZAR tiers + 20% markup
 
 ---
 
-## 4. AI 与机器学习系统
+## 4. AI & Machine Learning Systems
 
 ### RainNet v2 (ONNX)
 
-**文件：** `src/lib/rain/rainnet-inference.ts` (19 KB)
+**File:** `src/lib/rain/rainnet-inference.ts` (19 KB)
 
-**架构：**
+**Architecture:**
 ```
-输入音频 (Float32Array) → Mel 声谱图 (128×128, 汉明窗)
-    → MelSpecEncoder → 变换器 (4 层, 8 头, 256 维)
-    → 解码器 → 46 个 ProcessingParams
+Input Audio (Float32Array) → Mel Spectrogram (128×128, Hamming window)
+    → MelSpecEncoder → Transformer (4 layers, 8 heads, 256-dim)
+    → Decoder → 46 ProcessingParams
 ```
 
-**模型文件：** `public/models/rain_base.onnx` + `.onnx.data` (33 MB)，`public/models/rain_trained.onnx` + `.onnx.data` (33 MB)
+**Model Files:** `public/models/rain_base.onnx` + `.onnx.data` (33 MB), `public/models/rain_trained.onnx` + `.onnx.data` (33 MB)
 
-**回退：** 如果 ONNX 加载失败或音频 < 0.5 秒，则调用 `generateHeuristicParams()` — 无崩溃，无静默损坏。
+**Fallback:** If ONNX loading fails or audio < 0.5s, calls `generateHeuristicParams()` — no crash, no silent corruption.
 
-### 流派启发式算法
+### Genre Heuristics
 
-**文件：** `src/lib/rain/dsp.ts` → `GENRE_OVERRIDES` (17 种流派)
+**File:** `src/lib/rain/dsp.ts` → `GENRE_OVERRIDES` (17 genres)
 
-每种流派设置的是在多频段压缩和宏传递中**保留**的字段：
-- `mb_attack_low/mid/high` — 流派特定的瞬态响应
-- `mb_release_low/high` — 流派特定的动态
-- `mid_gain` — 中央声道强调
-- `stereo_width` — 仅限南非流派（amapiano=1.25, gqom=1.15）
-- `analog_saturation` + `saturation_drive` — 仅限非洲流派
+Each genre specifies fields that are **preserved** through multiband compression and macro-pass:
+- `mb_attack_low/mid/high` — genre-specific transient response
+- `mb_release_low/high` — genre-specific dynamics
+- `mid_gain` — center channel emphasis
+- `stereo_width` — SA genres only (amapiano=1.25, gqom=1.15)
+- `analog_saturation` + `saturation_drive` — African genres only
 
-### 律动 + 情感引擎
+### Groove + Emotion Engine
 
-**文件：** `src/lib/rain/groove-emotion.ts` (55 KB, 18 个函数)
+**File:** `src/lib/rain/groove-emotion.ts` (55 KB, 18 functions)
 
-| 函数 | 检测内容 |
+| Function | What It Detects |
 |---|---|
-| `detectBpm()` | 起始点自相关，50-220 BPM |
-| `classifyGroove()` | 直拍/摇摆/拖拍/半速/双倍速 |
-| `computeGrooveTimeConstants()` | BPM → 音乐性启动/释放（1/64 至 1/8 音符） |
-| `estimateValenceArousal()` | HNR + 频谱质心 + RMS + 瞬态密度 → 效价 × 唤醒度 |
-| `detectSections()` | 主歌/副歌/桥接/回落 |
-| `buildTensionArc()` | 能量导数 → 构建/释放/平台期 |
+| `detectBpm()` | Onset autocorrelation, 50-220 BPM |
+| `classifyGroove()` | Straight/swing/shuffle/half-time/double-time |
+| `computeGrooveTimeConstants()` | BPM → musical attack/release (1/64th to 1/8th note) |
+| `estimateValenceArousal()` | HNR + spectral centroid + RMS + transient density → valence × arousal |
+| `detectSections()` | Verse/chorus/bridge/drop |
+| `buildTensionArc()` | Energy derivative → build/release/plateau |
 
-**集成：** 在阶段 10（主总线）中，多频段压缩的启动/释放时间被从检测到的 BPM 推导出的槽锁定时间常数覆盖。
+**Integration:** In Stage 10 (Master Bus), multiband compression attack/release times are overridden by groove-locked time constants derived from detected BPM.
 
 ---
 
-## 5. 分发管道
+## 5. Distribution Pipeline
 
-### 端点
+### Endpoints
 
-| 端点 | 用途 |
+| Endpoint | Purpose |
 |---|---|
-| `POST /api/rain/distribute` | 传统多部分上传至 LabelGrid |
-| `POST /api/rain/distribute/finalize` | 统一分发最终步骤（Beta 版推荐） |
+| `POST /api/rain/distribute` | Legacy multipart upload to LabelGrid |
+| `POST /api/rain/distribute/finalize` | Unified distribution final step (recommended for Beta) |
 
-### 分发方法（优先级顺序）
+### Distribution Methods (Priority Order)
 
-1. **LabelGrid API** — 如果已设置 `LABELGRID_API_KEY`（企业路径）
-2. **DistroKid 浏览器自动化** — 如果已安装 Playwright（免费 Beta 版路径）
-3. **下载 ZIP** — 回退（手动路径）
+1. **LabelGrid API** — if `LABELGRID_API_KEY` is set (enterprise path)
+2. **DistroKid Browser Automation** — if Playwright is installed (free Beta path)
+3. **Download ZIP** — fallback (manual path)
 
 ### DDEX ERN 4.3.2
 
-**文件：** `src/lib/rain/distribution.ts` → `buildDdexErnXml()` (单曲), `src/lib/rain/distribution-multitrack.ts` → `buildMultiTrackDdexXml()` (专辑/EP)
+**Files:** `src/lib/rain/distribution.ts` → `buildDdexErnXml()` (singles), `src/lib/rain/distribution-multitrack.ts` → `buildMultiTrackDdexXml()` (albums/EPs)
 
-**覆盖范围：** 完整的 ERN 4.3.2 MessageHeader、ResourceList、Release（含 AIInvolvement、ContributorList、TerritoryCode、PLine/CLine）、DealList
+**Coverage:** Complete ERN 4.3.2 MessageHeader, ResourceList, Release (with AIInvolvement, ContributorList, TerritoryCode, PLine/CLine), DealList
 
-**验证：** 基于 DOMParser 的格式检查 + ISRC 格式 + UPC 校验位 + 根命名空间
+**Validation:** DOMParser-based format check + ISRC format + UPC check digit + root namespace
 
-### DistroKid 定价（2026 年 7 月实时 ZAR）
+### DistroKid Pricing (Live ZAR, July 2026)
 
-| 套餐 | DistroKid ZAR/年 | RAIN ZAR/年 (+20%) |
+| Tier | DistroKid ZAR/yr | RAIN ZAR/yr (+20%) |
 |---|---|---|
 | Musician | R459.99 | R551.99 |
 | Musician Plus | R826.99 | R992.39 |
 | Ultimate | R1,649.00 | R1,978.80 |
 
-全部包含：无限制上传，150+ 商店，100% 版税。
+All include: unlimited uploads, 150+ stores, 100% royalty retention.
 
-**附加组件（RAIN = DK + 20%）：** Leave a Legacy、Store Maximizer、YouTube Content ID、Shazam & Siri、Discovery Pack。
+**Add-ons (RAIN = DK + 20%):** Leave a Legacy, Store Maximizer, YouTube Content ID, Shazam & Siri, Discovery Pack.
 
 ---
 
-## 6. 来源与监管链
+## 6. Provenance & Chain of Custody
 
 ### RAIN-CERT (Ed25519)
 
-**文件：** `src/lib/rain/provenance.ts`
+**File:** `src/lib/rain/provenance.ts`
 
-- 通过 `crypto.subtle.generateKey()` 生成 Ed25519 密钥
-- 通过 IndexedDB 持久化密钥（在重启后仍然有效）
-- SHA-256 输入/输出哈希处理（通过 Float32 通道，而非 WAV 字节——因此抖动不会改变签名）
-- 签名通过 `crypto.subtle.sign()` 完成
-- 验证通过 `crypto.subtle.verify()` 完成
-- C2PA 风格的清单，包含操作（已母带处理、已处理 DSP、已分析）和断言
+- Ed25519 key generation via `crypto.subtle.generateKey()`
+- Keys persisted through IndexedDB (survives browser restart)
+- SHA-256 hashing of input/output (over Float32 channels, not WAV bytes — dithering doesn't change signature)
+- Signing via `crypto.subtle.sign()`
+- Verification via `crypto.subtle.verify()`
+- C2PA-style manifest with operations (mastered, dsp-processed, analyzed) and assertions
 
-### 监管链（Suno/Udio 清理）
+### Chain of Custody (Suno/Udio Cleanup)
 
-**文件：** `src/lib/rain/chain-of-custody.ts` (76 KB, 2294 行)
+**File:** `src/lib/rain/chain-of-custody.ts` (76 KB, 2,294 lines)
 
-**检测模式 (8 种工具)：**
-- Suno（优先级 1）：14 种 RIFF 模式 + 11 种 ID3v2 模式 + LSB 水印
-- Udio（优先级 1）：11 种 RIFF 模式 + 7 种 ID3v2 模式
-- AIVA、Mubert、Boomy、Soundraw、Beatoven（优先级 2）
-- 未知 AI（优先级 99 — 通用捕获）
+**Detection patterns (8 tools):**
+- Suno (priority 1): 14 RIFF patterns + 11 ID3v2 patterns + LSB watermark
+- Udio (priority 1): 11 RIFF patterns + 7 ID3v2 patterns
+- AIVA, Mubert, Boomy, Soundraw, Beatoven (priority 2)
+- Unknown AI (priority 99 — generic catch-all)
 
-**流程：**
-1. 解析 WAV RIFF 块 / MP3 ID3v2 标签 / BWF bext 字段
-2. 对照 AI 检测模式进行匹配
-3. 剥离所有 AI 元数据 — 重建干净的块
-4. 检测并移除 Suno/Udio LSB 隐写水印
-5. 生成 CustodyCertificate：原始创作者 → RAIN V6 处理 → 最终母带
-6. 通过 RAIN RIFF 字段 (CUST/RAIN/ISIG/IFPR) 或 ID3v2 PRIV 帧嵌入
+**Flow:**
+1. Parse WAV RIFF chunks / MP3 ID3v2 tags / BWF bext fields
+2. Match against AI detection patterns
+3. Strip all AI metadata — rebuild clean chunks
+4. Detect and remove Suno/Udio LSB steganographic watermarks
+5. Generate CustodyCertificate: Original creator → RAIN V6 processing → Final master
+6. Embed via RAIN RIFF fields (CUST/RAIN/ISIG/IFPR) or ID3v2 PRIV frames
 
-**混合来源：** 当用户录制的人声叠加在 Suno 乐器上时，人声音干和 AI 音干分别在 MixedSourceInfo 中列出。
+**Mixed source:** When user-recorded vocals are layered over Suno instrumentals, vocal stems and AI stems are listed separately in MixedSourceInfo.
 
-### 源数据中的 ISRC/UPC
+### ISRC/UPC in Provenance
 
-不再使用 `Math.random()`。通过来自 `sessionId + counter` 的 FNV-1a 哈希进行确定性生成。明确的警告块："未在 IFPI/GS1 注册 — 仅为本地标识符。"
-
----
-
-## 7. 律动与情感智能
-
-**文件：** `src/lib/rain/groove-emotion.ts` (55 KB)
-
-### 律动检测
-- 通过起始点自相关进行 BPM 检测，50-220 BPM 范围，半速/双倍速消歧
-- 律动分类：直拍 / 摇摆 / 拖拍 / 半速 / 双倍速
-- 基于节拍网格的瞬态增强（4/4 拍：1、3 拍增强底鼓，2、4 拍增强军鼓）
-- 每小节能量映射用于分段检测
-
-### 情感估计
-- 效价（快乐/悲伤）：频谱质心 + 谐波噪声比 + 调性
-- 唤醒度（能量/平静）：RMS 能量 + 瞬态密度 + 频谱通量
-- 象限分类：高唤醒度高/高效价 = 快乐 / 高唤醒度低效价 = 愤怒 / 低唤醒度高效价 = 平静 / 低唤醒度低效价 = 悲伤
-
-### 情感调节
-- 高唤醒度 → 压缩收紧
-- 低效价 → 高频略微降低（暗色调是刻意的）
-- 高唤醒度 + 高效价 → 最大立体声宽度（快乐 + 能量 = 宽）
+No more `Math.random()`. Deterministic generation via FNV-1a hash from `sessionId + counter`. Prominent warning block: "NOT registered with IFPI/GS1 — local identifiers only."
 
 ---
 
-## 8. 音干分离
+## 7. Groove & Emotion Intelligence
 
-**文件：** `src/lib/rain/stems.ts` (66 KB)
+**File:** `src/lib/rain/groove-emotion.ts` (55 KB)
 
-### BS-RoFormer 4 次级联（忠实于 DSP 的重新实现）
+### Groove Detection
+- BPM detection via onset autocorrelation, 50-220 BPM range, half/double-time disambiguation
+- Groove classification: straight / swing / shuffle / half-time / double-time
+- Transient enhancement based on beat grid (4/4: beats 1,3 enhance kick, beats 2,4 enhance snare)
+- Per-bar energy mapping for section detection
 
-| 轮次 | 名称 | 输入 → 输出 |
+### Emotion Estimation
+- Valence (happy/sad): spectral centroid + harmonic-to-noise ratio + tonality
+- Arousal (energy/calm): RMS energy + transient density + spectral flux
+- Quadrant classification: high-arousal high-valence = happy / high-arousal low-valence = angry / low-arousal high-valence = calm / low-arousal low-valence = sad
+
+### Emotion-Tempered Processing
+- High arousal → tighter compression
+- Low valence → slightly reduced high frequencies (darkness is intentional)
+- High arousal + high valence → maximum stereo width (happy + energy = wide)
+
+---
+
+## 8. Stem Separation
+
+**File:** `src/lib/rain/stems.ts` (66 KB)
+
+### BS-RoFormer 4-Pass Cascade (DSP-faithful reimplementation)
+
+| Round | Name | Input → Output |
 |---|---|---|
-| 1 | BS-RoFormer | 立体声 → 人声、鼓、贝斯、吉他、钢琴、其他 |
-| 2 | MelBand RoFormer | 人声 → 主唱、伴唱 |
-| 3 | 频谱频段分割 | 鼓 → 底鼓、军鼓、踩镲、打击乐 |
-| 4 | 去混响 | 其他 → 环境声、干声其他 |
+| 1 | BS-RoFormer | Stereo → vocals, drums, bass, guitar, piano, other |
+| 2 | MelBand RoFormer | Vocals → lead vocals, backing vocals |
+| 3 | Spectral band split | Drums → kick, snare, hi-hat, percussion |
+| 4 | De-reverb | Other → ambient, dry other |
 
-- 1024 点汉宁 STFT，75% 重叠（256 采样跳跃）
-- 32 个对数间隔频段 (30 Hz – 20 kHz)
-- RoPE (旋转位置嵌入，基数=10000)
-- 每源维纳软掩蔽 (|mask|² / Σ|mask|²)
-- 5 秒块处理
-- 60 秒时长上限（内存安全）
+- 1024-point Hann STFT, 75% overlap (256-sample hop)
+- 32 log-spaced frequency bands (30 Hz – 20 kHz)
+- RoPE (Rotary Position Embedding, base=10000)
+- Per-source Wiener soft masking (|mask|² / Σ|mask|²)
+- 5-second chunk processing
+- 60-second duration cap (memory safety)
 
-**输出：** 12 个 StemResult 对象，包含立体声 Float32Array + 测量到的 RMS/峰值 dB。
+**Output:** 12 StemResult objects with stereo Float32Array + measured RMS/peak dB.
 
 ---
 
-## 9. 空间音频 (Dolby Atmos)
+## 9. Spatial Audio (Dolby Atmos)
 
-**文件：** `src/lib/rain/spatial.ts` (71 KB)
+**File:** `src/lib/rain/spatial.ts` (71 KB)
 
-### 7 阶段空间管道
+### 7-Stage Spatial Pipeline
 
-| 阶段 | 名称 | 描述 |
+| Stage | Name | Description |
 |---|---|---|
-| 1 | 立体声增强 | M/S 处理（宽度、中央焦点、<200 Hz 的低音单声道） |
-| 2 | 平台向上混音 | 立体声 → 7.1.4/5.1.2/7.1/5.1，通过 Haas 延迟 + 低通滤波 + 全通去相关 |
-| 3 | HRTF 合成 | 球形头部模型（Woodworth ITD + 对侧阴影 + 耳廓/肩部反射） |
-| 4 | 双耳渲染 | OfflineAudioContext 中的 Web Audio ConvolverNode |
-| 5 | 响度测量 | 双耳输出上的 BS.1770-4 LUFS + 真峰值 |
-| 6 | ADM XML 生成 | ITU-R BS.2076-2（从配置生成的 XML） |
-| 7 | Atmos 包导出 | ZIP 包含 .atmos.wav + audioDefinitionModelBwf.xml + .spatial.json |
+| 1 | Stereo Enhancement | M/S processing (width, center focus, bass mono <200 Hz) |
+| 2 | Platform Up-mix | Stereo → 7.1.4/5.1.2/7.1/5.1 via Haas delay + low-pass + all-pass decorrelation |
+| 3 | HRTF Synthesis | Spherical head model (Woodworth ITD + contralateral shadow + pinna/shoulder reflections) |
+| 4 | Binaural Rendering | Web Audio ConvolverNode in OfflineAudioContext |
+| 5 | Loudness Measurement | BS.1770-4 LUFS + true peak on binaural output |
+| 6 | ADM XML Generation | ITU-R BS.2076-2 (XML generated from config) |
+| 7 | Atmos Package Export | ZIP containing .atmos.wav + audioDefinitionModelBwf.xml + .spatial.json |
 
-**平台格式：** 7.1.4（12 声道）、5.1.2（8 声道）、7.1（8 声道）、5.1（6 声道）
+**Platform formats:** 7.1.4 (12 channels), 5.1.2 (8 channels), 7.1 (8 channels), 5.1 (6 channels)
 
-**输出模式：** 立体声（增强型）、双耳（耳机）、多声道（平台 + 混音）
+**Output modes:** Stereo (enhanced), Binaural (headphones), Multichannel (platform + mix)
 
 ---
 
-## 10. 音频修复套件
+## 10. Audio Repair Suite
 
-**文件：** `src/lib/rain/repair.ts` (54 KB)
+**File:** `src/lib/rain/repair.ts` (54 KB)
 
-8 个具有可测量指标的真实 DSP 模块：
+8 genuine DSP modules with measurable metrics:
 
-| 模块 | 算法 |
+| Module | Algorithm |
 |---|---|
-| 降噪 | 自适应频谱减法（STFT，软拐点，最小统计噪声底限） |
-| 频谱门限 | 每频段动态门限（自适应每 bin 阈值，软过渡） |
-| 去咔嗒声 | 三次样条插值（MAD 瞬态检测 + 自相关周期性） |
-| 去噼啪声 | MAD 噼啪声检测器（高频段检测 + 重叠相加插值） |
-| 去哼声 | 谐波陷波级联（40-70 Hz 自相关基频 + 7 次谐波） |
-| 去混响 | RT60 包络减法（基于包络的 RT60 + 后期混响抑制） |
-| 去削波 | 厄米样条重构（削波区域检测 + 三次厄米 + 低通滤波） |
-| 共振抑制 | 频谱通量峰值抑制（峰值突出度检测 + 窄陷波） |
+| De-noise | Adaptive spectral subtraction (STFT, soft knee, minimum-statistic noise floor) |
+| Spectral gate | Per-band dynamic gating (adaptive per-bin threshold, soft transition) |
+| De-click | Cubic spline interpolation (MAD transient detection + autocorrelation periodicity) |
+| De-crackle | MAD crackle detector (high-band detection + overlap-add interpolation) |
+| De-hum | Harmonic notch cascade (40-70 Hz autocorrelation fundamental + 7 harmonics) |
+| De-reverb | RT60 envelope subtraction (envelope-based RT60 + late-reverb suppression) |
+| De-clip | Hermite spline reconstruction (clipped region detection + cubic Hermite + low-pass) |
+| Resonance suppression | Spectral flux peak suppression (peak prominence detection + narrow notch) |
 
-**架构：** 可重复使用的 FFTContext，STFT/ISTFT 采用 75% 重叠的汉宁窗，协作式取消，在繁重数据块之间让出 UI 线程。
+**Architecture:** Reusable FFTContext, Hann window STFT/ISTFT with 75% overlap, cooperative cancellation yielding to UI thread between heavy chunks.
 
 ---
 
-## 11. 质量控制引擎
+## 11. Quality Control Engine
 
-**文件：** `src/lib/rain/qc.ts`
+**File:** `src/lib/rain/qc.ts`
 
-18 个具有真实信号域计算的自动化质量控制检查点：
+18 automated QC checkpoints with real signal-domain calculations:
 
 1. LUFS (BS.1770-4)
-2. 真峰值 (4× 过采样)
-3. 响度范围 (LRA)
-4. 波峰因数
-5. RMS 电平
-6. 立体声宽度 (M/S)
-7. 立体声相关性
-8. 直流偏移
-9. 相位一致性
-10. 低音单声道 (≤200 Hz)
-11. 次声隆隆声 (<20 Hz)
-12. 齿音 (5-8 kHz)
-13. 高频平衡 (15+ kHz)
-14. 带宽完整性（有损编码器低通检测）
-15. 过零分析
-16. 削波检测
-17. 编解码器预回声风险
-18. 来源验证 + 指纹验证
+2. True Peak (4× oversampled)
+3. Loudness Range (LRA)
+4. Crest Factor
+5. RMS Level
+6. Stereo Width (M/S)
+7. Stereo Correlation
+8. DC Offset
+9. Phase Coherence
+10. Bass Mono (≤200 Hz)
+11. Subsonic Rumble (<20 Hz)
+12. Sibilance (5-8 kHz)
+13. High-Frequency Balance (15+ kHz)
+14. Bandwidth Integrity (lossy codec low-pass detection)
+15. Zero-Crossing Analysis
+16. Clipping Detection
+17. Codec Pre-Echo Risk
+18. Provenance Verification + fingerprint validation
 
-**阈值：** 所有阈值都是真实的。无硬编码的通过/失败——每个检查点都从实际的 AudioAnalysis.qcMetrics 字段计算。
-
----
-
-## 12. 区域配置 (SA-first)
-
-**文件：** `src/lib/rain/sa-regional.ts` (10 KB)
-
-- **货币：** ZAR 格式化（`R1,234.56`），`formatZar()` 辅助函数
-- **支付：** PayFast 配置（即时 EFT + 银行卡）、Ozow 配置（即时 EFT）、Stripe 配置（国际卡）
-- **表演权组织：** SAMRO、CAPASSO、SAMPRA
-- **语言：** 南非荷兰语、祖鲁语、科萨语、茨瓦纳语、索托语（含 ISO 639-2 代码）
-- **POPIA 合规性：** Beta 版期间不收集 PII。同意语言。数据存储仅在本地，不上传至云端。
-- **流派默认值：** Amapiano（磁带饱和 + 宽立体声）、Gospel（人声前置 + 中央声道强调）、Gqom（数字纯净度）、Afro-House（电子管饱和）
-- **发行元数据：** 南非 DSP 合作伙伴（Boomplay、Anghami、JioSaavn）
+**Thresholds:** All thresholds are genuine. No hardcoded pass/fail — each checkpoint computes from actual AudioAnalysis.qcMetrics fields.
 
 ---
 
-## 13. 安全架构
+## 12. Regional Configuration (SA-first)
 
-### 认证
+**File:** `src/lib/rain/sa-regional.ts` (10 KB)
 
-**文件：** `src/lib/rain/auth.ts`
+- **Currency:** ZAR formatting (`R1,234.56`), `formatZar()` helper
+- **Payments:** PayFast config (instant EFT + card), Ozow config (instant EFT), Stripe config (international cards)
+- **Performing Rights Orgs:** SAMRO, CAPASSO, SAMPRA
+- **Languages:** Afrikaans, Zulu, Xhosa, Tswana, Sotho (with ISO 639-2 codes)
+- **POPIA compliance:** No PII collected during Beta. Consent language. Data only stored locally, never uploaded.
+- **Genre defaults:** Amapiano (tape saturation + wide stereo), Gospel (vocals forward + center emphasis), Gqom (digital cleanliness), Afro-House (valve saturation)
+- **Release metadata:** SA DSP partners (Boomplay, Anghami, JioSaavn)
 
-- scrypt (N=16384, r=8, p=1) — OWASP 正确的成本
-- `timingSafeEqual` — 抗定时攻击
-- SHA-256 令牌哈希 — 数据库泄露无法重放
-- httpOnly cookie + 跨域 iframe 的 SameSite/Secure 处理
-- 无 `next-auth` 依赖 — 定制构建且更简洁
+---
 
-### 漏洞修复
+## 13. Security Architecture
 
-| 标识符 | 漏洞 | 修复 |
+### Authentication
+
+**File:** `src/lib/rain/auth.ts`
+
+- scrypt (N=16384, r=8, p=1) — OWASP-correct cost
+- `timingSafeEqual` — timing-attack resistant
+- SHA-256 token hashing — database breach cannot replay
+- httpOnly cookies + SameSite/Secure handling for cross-origin iframes
+- No `next-auth` dependency — custom-built and cleaner
+
+### Vulnerability Fixes
+
+| ID | Vulnerability | Fix |
 |---|---|---|
-| C3 | `x-user-id` 标头冒充绕过漏洞 | 已移除标头 |
-| C2 | 管理员状态信息泄露 | 已修复 |
-| C1 | 引导暴力破解 | 速率限制 (3/分钟) |
-| H10 | 生产环境中的 Prisma 查询日志记录 | 以 `NODE_ENV` 为条件 |
+| C3 | `x-user-id` header impersonation bypass | Header removed |
+| C2 | Admin status information leak | Fixed |
+| C1 | Bootstrap brute-force | Rate-limited (3/min) |
+| H10 | Prisma query logging in production | Conditioned on `NODE_ENV` |
 
-### 速率限制
+### Rate Limiting
 
-**文件：** `src/lib/rain/rate-limit.ts`
+**File:** `src/lib/rain/rate-limit.ts`
 
-带内存清理的令牌桶。适用于单实例部署。备注：多实例扩展时迁移至 Redis/Upstash。
+Token bucket with memory cleanup. Suitable for single-instance deployment. Note: migrate to Redis/Upstash for multi-instance scaling.
 
-### BETA 模式安全
-- 免费 Beta 版期间不收集 PII
-- 无用户账户 — 仅匿名会话
-- 音频永不离开设备（通过 Web Audio API 进行本地处理）
-- 分发 ZIP 在离开浏览器之前通过 Ed25519 签名
+### BETA Mode Security
+- No PII collected during free Beta
+- No user accounts — anonymous sessions only
+- Audio never leaves device (local processing via Web Audio API)
+- Distribution ZIPs Ed25519-signed before leaving the browser
 
 ---
 
-## 14. 支付基础设施
+## 14. Payment Infrastructure
 
-### BETA 状态：R0.00 — 所有层级免费
+### BETA Status: R0.00 — All Tiers Free
 
-**文件：** `src/lib/rain/payment-isolation.ts` — 支付隔离引擎
-**路由：** `src/app/api/rain/payment/route.ts` — 支付 API 端点
+**File:** `src/lib/rain/payment-isolation.ts` — Payment isolation engine
+**Route:** `src/app/api/rain/payment/route.ts` — Payment API endpoint
 
-### 支付提供商（已配置，待激活）
+### Payment Providers (Configured, Awaiting Activation)
 
-| 提供商 | 区域 | 方式 | 状态 |
+| Provider | Region | Method | Status |
 |---|---|---|---|
-| PayFast | 南非 | 即时 EFT + 银行卡 | 已配置，BETA 模式 |
-| Ozow | 南非 | 即时 EFT | 已配置，BETA 模式 |
-| Stripe | 国际 | 银行卡 | 已配置，BETA 模式 |
+| PayFast | South Africa | Instant EFT + Card | Configured, BETA mode |
+| Ozow | South Africa | Instant EFT | Configured, BETA mode |
+| Stripe | International | Card | Configured, BETA mode |
 
-### 隔离保证
-- 每个会话的 UUIDv7 paymentSessionId — 支付之间无交叉污染
-- 支付数据从不持久化到客户端存储
-- 支付令牌一次性使用，过期时间 5 分钟
-- 签名验证（PayFast 使用 HMAC-SHA512，Ozow 使用 HMAC-SHA256，Stripe 使用 webhook 签名）
-- 幂等性键防止重复支付
-- 速率限制：每个会话 3 次尝试/分钟
+### Isolation Guarantees
+- Per-session UUIDv7 paymentSessionId — no cross-payment contamination
+- Payment data never persisted to client storage
+- One-time-use payment tokens, 5-minute expiry
+- Signature verification (HMAC-SHA512 for PayFast, HMAC-SHA256 for Ozow, Stripe webhook signature)
+- Idempotency keys prevent duplicate payments
+- Rate limiting: 3 attempts per session per minute
 
-### 定价模型（DistroKid + 20%）
+### Pricing Model (DistroKid + 20%)
 
-| 套餐 | DistroKid ZAR/年 | RAIN ZAR/年 |
+| Tier | DistroKid ZAR/yr | RAIN ZAR/yr |
 |---|---|---|
 | Musician | R459.99 | R551.99 |
 | Musician Plus | R826.99 | R992.39 |
 | Ultimate | R1,649.00 | R1,978.80 |
 
-在 BETA 模式（当前）下，所有价格均为 R0.00。
+In BETA mode (current), all prices are R0.00.
 
 ---
 
-## 15. 分析引擎
+## 15. Analytics Engine
 
-**文件：** `src/lib/rain/analytics.ts`, `src/lib/rain/server-analytics.ts`
+**Files:** `src/lib/rain/analytics.ts`, `src/lib/rain/server-analytics.ts`
 
-### 客户端 (IndexedDB)
-- 每次渲染遥测（逐阶段 DSP 时间、宏值、乐谱、格式）
-- 每次渲染的质量控制快照（通过/警告/失败计数 + 每次检查状态）
-- 累积引擎统计信息（总渲染次数、DSP 时间、首次/最后渲染日期）
-- 导出详细信息（格式、比特深度、来源切换状态）
+### Client-side (IndexedDB)
+- Per-render telemetry (per-stage DSP time, macro values, score, format)
+- Per-render QC snapshot (pass/warn/fail counts + per-check status)
+- Cumulative engine stats (total renders, DSP time, first/last render date)
+- Export details (format, bit depth, provenance toggle state)
 
-### 服务端 (DB 事件)
-- 会话创建/渲染完成/导出完成/选卡查看/反馈提交
-- 用于渠道数学的匿名 + 已认证路径
-- 用于漏斗分析的基于事件的架构
+### Server-side (DB events)
+- Session created/render completed/export completed/tab viewed/feedback submitted
+- Anonymous + authenticated paths for funnel math
+- Event-based architecture for funnel analysis
 
 ---
 
-## 16. 测试覆盖
+## 16. Test Coverage
 
-**目录：** `tests/lib/`
+**Directory:** `tests/lib/`
 
-| 测试文件 | 检查内容 |
+| Test File | What It Checks |
 |---|---|
-| `constants.test.ts` | GENRES、PLATFORM_TARGETS、DSP_DELIVERY_PARTNERS、LANGUAGE_OPTIONS、PRO_OPTIONS |
-| `metadata-validation.test.ts` | validateIsrc()、validateUpc()、validateMetadata()、SA 语言、SAMRO/CAPASSO/SAMPRA |
-| `identifiers.test.ts` | ISRC 格式、UPC 校验位、ISWC 格式 |
-| `genre-overrides.test.ts` | 17 种流派的 GENRE_OVERRIDES — 所有字段都能在 macro-pass 中保留 |
-| `rainnet.test.ts` | ONNX 激活函数 (sigmoid、tanh、softplus)、decodeParams()、Mel 声谱图 |
-| `sa-regional.test.ts` | ZAR 格式化、POPIA 同意语言、支付配置、默认设置 |
+| `constants.test.ts` | GENRES, PLATFORM_TARGETS, DSP_DELIVERY_PARTNERS, LANGUAGE_OPTIONS, PRO_OPTIONS |
+| `metadata-validation.test.ts` | validateIsrc(), validateUpc(), validateMetadata(), SA languages, SAMRO/CAPASSO/SAMPRA |
+| `identifiers.test.ts` | ISRC format, UPC check digit, ISWC format |
+| `genre-overrides.test.ts` | 17 genres' GENRE_OVERRIDES — all fields survive macro-pass |
+| `rainnet.test.ts` | ONNX activation functions (sigmoid, tanh, softplus), decodeParams(), Mel spectrogram |
+| `sa-regional.test.ts` | ZAR formatting, POPIA consent language, payment config, defaults |
 
 ---
 
-## 17. CI/CD 管道
+## 17. CI/CD Pipeline
 
-**文件：** `.github/workflows/ci.yml`
+**File:** `.github/workflows/ci.yml`
 
 ```
-检查代码 → tsc --noEmit → prisma 验证 → 构建 → 测试
+checkout code → tsc --noEmit → prisma validate → build → test
 ```
 
-- 构建忽略类型错误 (`ignoreBuildErrors: true`)
-- CI 添加独立的 `tsc --noEmit` 门控
-- 生成 Prisma 客户端 → 模式验证
-- Bun 测试运行器，覆盖所有 6 个测试文件
+- Build ignores type errors (`ignoreBuildErrors: true`)
+- CI adds independent `tsc --noEmit` gate
+- Prisma client generation → schema validation
+- Bun test runner, cover 6 test files
 
 ---
 
-## 18. 法律与合规
+## 18. Legal & Compliance
 
-### 文件
+### Documents
 
-| 文档 | 路径 | 覆盖范围 |
+| Document | Path | Coverage |
 |---|---|---|
-| 服务条款 | `docs/legal/TERMS_OF_SERVICE.md` | 服务使用、责任限制、知识产权 |
-| 隐私政策 | `docs/legal/PRIVACY_POLICY.md` | POPIA 合规性、数据收集、用户权利 |
-| 数据处理协议 | `docs/legal/DATA_PROCESSING_AGREEMENT.md` | 数据处理关系、安全措施 |
-| AI 披露合规性 | `docs/legal/AI_DISCLOSURE_COMPLIANCE.md` | EU AI 法案第 50 条、DDEX AIInvolvement、C2PA |
-| 支付条款 | `docs/legal/PAYMENT_TERMS.md` | 支付处理、退款、PCI 合规性 |
-| 责任豁免 | `docs/legal/LIABILITY_WAIVER.md` | AI 免责声明、用户责任、分发链豁免 |
+| Terms of Service | `docs/legal/TERMS_OF_SERVICE.md` | Service use, liability limits, IP rights |
+| Privacy Policy | `docs/legal/PRIVACY_POLICY.md` | POPIA compliance, data collection, user rights |
+| Data Processing Agreement | `docs/legal/DATA_PROCESSING_AGREEMENT.md` | Processing relationships, security measures |
+| AI Disclosure Compliance | `docs/legal/AI_DISCLOSURE_COMPLIANCE.md` | EU AI Act Article 50, DDEX AIInvolvement, C2PA |
+| Payment Terms | `docs/legal/PAYMENT_TERMS.md` | Payment processing, refunds, PCI compliance |
+| Liability Waiver | `docs/legal/LIABILITY_WAIVER.md` | AI disclaimers, user responsibility, distribution chain |
 
-### 管辖地：南非 (ZA)
-### 公司：ThatGuy Productions / ARCOVEL Technologies International
+### Jurisdiction: South Africa (ZA)
+### Company: ThatGuy Productions / ARCOVEL Technologies International
 
 ---
 
-## 19. 已知限制
+## 19. Known Limitations
 
-| 限制 | 影响 | 缓解措施 |
+| Limitation | Impact | Mitigation |
 |---|---|---|
-| 32 位浮点 DSP（规范要求 64 位） | 极响亮通道的精度损失 | 对于 99% 的音频可以忽略不计。生产版本需要 C++/WASM。 |
-| 3 频段多频段压缩（规范要求 6 频段） | 较少精细的频率相关压缩 | 3 频段对于 Beta 版来说功能齐全。已在质量审计中注明，供未来升级。 |
-| 最小相位双二阶 EQ（规范要求线性相位） | 瞬态上的相位拖尾 | 适用于母带制作。计划升级至线性相位。 |
-| 仅立体声母带总线（空间是独立路径） | 空间渲染需要显式导出 | 立体声路径保持简洁。空间是独立的函数调用。 |
-| 音干分离上限为 60 秒（规范要求 GPU） | 长音频通过 Stems 选项卡手动操作 | 内存安全上限。GPU 推理将解除此限制。 |
-| LabelGrid 需要 API 密钥 | 在 Beta 版中无法自动分发 | DistroKid 浏览器自动化填补了这一空白。 |
-| DistroKid 需要 Playwright (~170 MB) | 需要一次性安装 | 无需 API 密钥。基于浏览器的上传与网页界面上传完全相同。 |
-| LSB 水印在 MP3 编码中无法保留 | 对于流媒体分发来说水印比较脆弱 | Ed25519 证书是真正的来源。水印是次级的。 |
-| Chromaprint 是简化版（非 AcoustID 兼容） | 通过指纹无法自动识别元数据 | 已在质量审计中注明。需要真正的 Chromaprint 二进制文件。 |
+| 32-bit float DSP (spec calls for 64-bit) | Precision loss on very loud channels | Negligible for 99% of audio. C++/WASM needed for production. |
+| 3-band multiband compression (spec calls for 6-band) | Less granular frequency-dependent compression | 3-band is functional for beta. Noted in quality audit for future upgrade. |
+| Minimum-phase biquad EQ (spec calls for linear-phase) | Phase smearing on transients | Suitable for mastering. Linear-phase upgrade planned. |
+| Stereo-only master bus (spatial is a separate path) | Spatial rendering requires explicit export | Stereo path stays clean. Spatial is a separate function call. |
+| Stem separation capped at 60s (spec calls for GPU) | Long audio handled manually via Stems tab | Memory-safe cap. GPU inference will lift this. |
+| LabelGrid requires API key | No automated distribution during Beta | DistroKid browser automation fills this gap. |
+| DistroKid requires Playwright (~170 MB) | One-time install needed | No API key required. Browser-based upload identical to web upload. |
+| LSB watermarks don't survive MP3 encoding | Watermarks fragile for streaming distribution | Ed25519 certs are the real provenance. Watermarks are secondary. |
+| Chromaprint is simplified (not AcoustID-compatible) | No auto metadata ID from fingerprint | Noted in quality audit. Real Chromaprint binary needed. |
 
 ---
 
-## 20. 文件清单
+## 20. File Manifest
 
-### 核心引擎 (src/lib/rain/)
+### Core Engine (src/lib/rain/)
 
-| 文件 | KB | 用途 |
+| File | KB | Purpose |
 |---|---|---|
-| `audio-engine.ts` | 113 | Web Audio 引擎、加载、预览、16 阶段渲染、WAV/MP3 导出 |
-| `dsp.ts` | 61 | LUFS、真峰值、双二阶 EQ、FFT、M/S、饱和、限制器、启发式算法 |
-| `stems.ts` | 66 | BS-RoFormer 4 次级联、12 个音干、维纳掩蔽 |
-| `spatial.ts` | 71 | 7.1.4 空间、HRTF、ADM BWF、Atmos 包 |
-| `repair.ts` | 54 | 8 个 DSP 修复模块，每个模块均具有真实算法 |
-| `distribution.ts` | 47 | DDEX ERN 4.3.2、ZIP 打包、验证、IndexedDB 队列 |
-| `rainnet-inference.ts` | 19 | ONNX 推理、Mel 声谱图、参数解码 |
-| `provenance.ts` | 18 | Ed25519 签名、C2PA 清单、指纹、ISRC/UPC |
-| `qc.ts` | 38 | 18 点质量控制引擎、自动修复、摘要 |
-| `constants.ts` | 20 | 流派、平台、DSP 合作伙伴、元数据选项 |
-| `metadata-validation.ts` | 15 | Ditto 标准验证、格式化程序、策展选项列表 |
-| `groove-emotion.ts` | 55 | BPM、律动、效价/唤醒度、分段、张力弧 |
-| `chain-of-custody.ts` | 76 | 8 种 AI 检测模式、WAV/MP3 清理、所有权声明 |
-| `distribution-multitrack.ts` | 15 | 多曲目 DDEX、专辑/EP 支持 |
-| `sa-regional.ts` | 10 | ZAR 格式化、PayFast/Ozow、POPIA、SA 默认值 |
-| `distrokid-delivery.ts` | 16 | 9 步浏览器自动化上传流程 |
-| `distrokid-pricing.ts` | 9 | 实时 DistroKid 定价 + 20% 加价 |
+| `audio-engine.ts` | 113 | Web Audio engine, load, preview, 16-stage render, WAV/MP3 export |
+| `dsp.ts` | 61 | LUFS, true peak, biquad EQ, FFT, M/S, saturation, limiting, heuristics |
+| `stems.ts` | 66 | BS-RoFormer 4-pass cascade, 12 stems, Wiener masking |
+| `spatial.ts` | 71 | 7.1.4 spatial, HRTF, ADM BWF, Atmos package |
+| `repair.ts` | 54 | 8 DSP repair modules, each with genuine algorithms |
+| `distribution.ts` | 47 | DDEX ERN 4.3.2, ZIP packaging, validation, IndexedDB queue |
+| `rainnet-inference.ts` | 19 | ONNX inference, Mel spectrogram, parameter decoding |
+| `provenance.ts` | 18 | Ed25519 signing, C2PA manifest, fingerprinting, ISRC/UPC |
+| `qc.ts` | 38 | 18-point QC engine, auto-repair, summary |
+| `constants.ts` | 20 | Genres, platforms, DSP partners, metadata options |
+| `metadata-validation.ts` | 15 | Ditto-standard validation, formatters, curated option lists |
+| `groove-emotion.ts` | 55 | BPM, groove, valence/arousal, sections, tension arc |
+| `chain-of-custody.ts` | 76 | 8 AI detection patterns, WAV/MP3 cleanup, custody certs |
+| `distribution-multitrack.ts` | 15 | Multi-track DDEX, album/EP support |
+| `sa-regional.ts` | 10 | ZAR formatting, PayFast/Ozow, POPIA, SA defaults |
+| `distrokid-delivery.ts` | 16 | 9-step browser automation upload flow |
+| `distrokid-pricing.ts` | 9 | Live DistroKid pricing + 20% markup |
 
-### API 路由
+### API Routes
 
-| 路由 | 用途 |
+| Route | Purpose |
 |---|---|
-| `/api/rain/render` | 渲染完成事件持久化 |
-| `/api/rain/distribute` | 传统多部分 LabelGrid 提交 |
-| `/api/rain/distribute/finalize` | 统一分发最终步骤 |
-| `/api/rain/payment` | 隔离的支付会话创建 |
-| `/api/rain/auth/*` | 注册、登录、登出、我 |
-| `/api/rain/session` | 会话创建/检索 |
-| `/api/rain/assist` | AI 联合母带工程师 |
-| `/api/rain/suggest` | 母带制作报告生成 |
-| `/api/rain/provenance` | 证书功能端点 |
-| `/api/rain/feedback` | 用户反馈提交 |
-| `/api/rain/source` | 企业级来源 ZIP 下载 |
-| `/api/rain/stats` | 使用统计信息 |
-| `/api/rain/reviews` | 公开评论提交 + 检索 |
-| `/api/rain/events` | 事件日志记录端点 |
-| `/api/rain/admin/*` | 管理员控制台（引导、账户、渲染、统计、状态） |
+| `/api/rain/render` | Render completion event persistence |
+| `/api/rain/distribute` | Legacy multipart LabelGrid submit |
+| `/api/rain/distribute/finalize` | Unified distribution final step |
+| `/api/rain/payment` | Isolated payment session creation |
+| `/api/rain/auth/*` | Register, login, logout, me |
+| `/api/rain/session` | Session creation/retrieval |
+| `/api/rain/assist` | AI co-mastering engineer |
+| `/api/rain/suggest` | Mastering report generation |
+| `/api/rain/provenance` | Certificate verification endpoints |
+| `/api/rain/feedback` | User feedback submission |
+| `/api/rain/source` | Enterprise provenance ZIP download |
+| `/api/rain/stats` | Usage statistics |
+| `/api/rain/reviews` | Public review submission + retrieval |
+| `/api/rain/events` | Event logging endpoint |
+| `/api/rain/admin/*` | Admin console (bootstrap, accounts, renders, stats, status) |
 
-### 前端选项卡
+### Frontend Tabs
 
-| 选项卡 | 组件 | 状态 |
+| Tab | Component | Status |
 |---|---|---|
-| 母带制作 | `MasteringTab.tsx` | ✅ 完整——16 阶段管道 |
-| 音干 | `StemsTab.tsx` | ✅ 完整——12 个音干控制 |
-| 空间 | `SpatialTab.tsx` | ✅ 完整——7.1.4 全景 |
-| 质量控制 | `QCTab.tsx` | ✅ 完整——18 点检查 |
-| 分发 | `DistributeTab.tsx` | ✅ 完整——DDEX + LabelGrid + DistroKid |
-| 导出 | `ExportTab.tsx` | ✅ 完整——WAV/MP3/Atmos |
-| 元数据 | `MetadataTab.tsx` | ✅ 完整——Ditto 标准 |
-| 来源 | `ProvenanceTab.tsx` | ✅ 完整——Ed25519 验证 |
-| 修复 | `RepairTab.tsx` | ✅ 完整——8 个模块 |
-| 参考 | `ReferenceTab.tsx` | ✅ 完整——31 频段匹配 |
-| AIE | `AIETab.tsx` | ✅ 完整——64 维声纹 |
-| 分析 | `AnalyticsTab.tsx` | ✅ 完整——KPI + 历史记录 |
-| 音高 | `PitchTab.tsx` | ⚠️ 存根——无 DSP |
-| 设置 | `SettingsTab.tsx` | ✅ 完整——引擎 + WASM 验证 |
+| Mastering | `MasteringTab.tsx` | ✅ Complete — 16-stage pipeline |
+| Stems | `StemsTab.tsx` | ✅ Complete — 12 stems control |
+| Spatial | `SpatialTab.tsx` | ✅ Complete — 7.1.4 panning |
+| QC | `QCTab.tsx` | ✅ Complete — 18-point check |
+| Distribution | `DistributeTab.tsx` | ✅ Complete — DDEX + LabelGrid + DistroKid |
+| Export | `ExportTab.tsx` | ✅ Complete — WAV/MP3/Atmos |
+| Metadata | `MetadataTab.tsx` | ✅ Complete — Ditto standard |
+| Provenance | `ProvenanceTab.tsx` | ✅ Complete — Ed25519 verification |
+| Repair | `RepairTab.tsx` | ✅ Complete — 8 modules |
+| Reference | `ReferenceTab.tsx` | ✅ Complete — 31-band matching |
+| AIE | `AIETab.tsx` | ✅ Complete — 64-dim voiceprint |
+| Analytics | `AnalyticsTab.tsx` | ✅ Complete — KPIs + history |
+| Pitch | `PitchTab.tsx` | ⚠️ Stub — no DSP |
+| Settings | `SettingsTab.tsx` | ✅ Complete — engine + WASM validation |
 
 ---
 
-*© 2026 ThatGuy Productions / ARCOVEL Technologies International。保留所有权利。专有和机密。*
+*© 2026 ThatGuy Productions / ARCOVEL Technologies International. All rights reserved. Proprietary and Confidential.*

@@ -1,54 +1,56 @@
 #!/bin/sh
+# RAIN V6 — Production startup script
+# Starts Next.js server, mini-services, and Caddy reverse proxy.
 
 set -e
 
-# 获取脚本所在目录
+# Get script directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR"
 
-# 存储所有子进程的 PID
+# Store all child process PIDs
 pids=""
 
-# 清理函数：优雅关闭所有服务
+# Cleanup function: gracefully shut down all services
 cleanup() {
     echo ""
-    echo "🛑 正在关闭所有服务..."
-    
-    # 发送 SIGTERM 信号给所有子进程
+    echo "Shutting down all services..."
+
+    # Send SIGTERM to all child processes
     for pid in $pids; do
         if kill -0 "$pid" 2>/dev/null; then
             service_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
-            echo "   关闭进程 $pid ($service_name)..."
+            echo "   Shutting down process $pid ($service_name)..."
             kill -TERM "$pid" 2>/dev/null
         fi
     done
-    
-    # 等待所有进程退出（最多等待 5 秒）
+
+    # Wait for all processes to exit (max 5 seconds)
     sleep 1
     for pid in $pids; do
         if kill -0 "$pid" 2>/dev/null; then
-            # 如果还在运行，等待最多 4 秒
+            # Still running, wait up to 4 more seconds
             timeout=4
             while [ $timeout -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
                 sleep 1
                 timeout=$((timeout - 1))
             done
-            # 如果仍然在运行，强制关闭
+            # If still running, force kill
             if kill -0 "$pid" 2>/dev/null; then
-                echo "   强制关闭进程 $pid..."
+                echo "   Force killing process $pid..."
                 kill -KILL "$pid" 2>/dev/null
             fi
         fi
     done
-    
-    echo "✅ 所有服务已关闭"
+
+    echo "All services stopped"
     exit 0
 }
 
-echo "🚀 开始启动所有服务..."
+echo "Starting all services..."
 echo ""
 
-# 切换到构建目录
+# Change to build directory
 cd "$BUILD_DIR" || exit 1
 
 ls -lah
@@ -56,12 +58,12 @@ ls -lah
 DEFAULT_PACKAGED_DB_PATH="/app/db/custom.db"
 DEFAULT_PACKAGED_DATABASE_URL="file:$DEFAULT_PACKAGED_DB_PATH"
 
-# 启动 Next.js 服务器
+# Start Next.js server
 if [ -f "./next-service-dist/server.js" ]; then
-    echo "🚀 启动 Next.js 服务器..."
+    echo "Starting Next.js server..."
     cd next-service-dist/ || exit 1
-    
-    # 设置环境变量
+
+    # Set environment variables
     export NODE_ENV=production
     export PORT="${PORT:-3000}"
     export HOSTNAME="${HOSTNAME:-0.0.0.0}"
@@ -69,67 +71,67 @@ if [ -f "./next-service-dist/server.js" ]; then
 
     if [ "$DATABASE_URL" = "$DEFAULT_PACKAGED_DATABASE_URL" ]; then
         if [ ! -f "$DEFAULT_PACKAGED_DB_PATH" ]; then
-            echo "❌ 未找到打包后的数据库文件 $DEFAULT_PACKAGED_DB_PATH"
-            echo "   为避免生产环境启动到空数据库，启动已终止"
+            echo "ERROR: Packaged database file not found: $DEFAULT_PACKAGED_DB_PATH"
+            echo "   Aborting startup to prevent launching with empty database"
             exit 1
         fi
 
-        echo "🗄️  当前使用打包数据库: $DEFAULT_PACKAGED_DB_PATH"
+        echo "Using packaged database: $DEFAULT_PACKAGED_DB_PATH"
     else
-        echo "🗄️  当前使用外部指定数据库: $DATABASE_URL"
+        echo "Using external database: $DATABASE_URL"
     fi
-    
-    # 后台启动 Next.js
+
+    # Start Next.js in background
     bun server.js &
     NEXT_PID=$!
     pids="$NEXT_PID"
-    
-    # 等待一小段时间检查进程是否成功启动
+
+    # Brief check that process started successfully
     sleep 1
     if ! kill -0 "$NEXT_PID" 2>/dev/null; then
-        echo "❌ Next.js 服务器启动失败"
+        echo "ERROR: Next.js server failed to start"
         exit 1
     else
-        echo "✅ Next.js 服务器已启动 (PID: $NEXT_PID, Port: $PORT)"
+        echo "Next.js server started (PID: $NEXT_PID, Port: $PORT)"
     fi
-    
+
     cd ../
 else
-    echo "⚠️  未找到 Next.js 服务器文件: ./next-service-dist/server.js"
+    echo "WARNING: Next.js server file not found: ./next-service-dist/server.js"
 fi
 
-# 启动 mini-services
+# Start mini-services
 if [ -f "./mini-services-start.sh" ]; then
-    echo "🚀 启动 mini-services..."
-    
-    # 运行启动脚本（从根目录运行，脚本内部会处理 mini-services-dist 目录）
+    echo "Starting mini-services..."
+
+    # Run startup script from root directory (script handles mini-services-dist internally)
     sh ./mini-services-start.sh &
     MINI_PID=$!
     pids="$pids $MINI_PID"
-    
-    # 等待一小段时间检查进程是否成功启动
+
+    # Brief check
     sleep 1
     if ! kill -0 "$MINI_PID" 2>/dev/null; then
-        echo "⚠️  mini-services 可能启动失败，但继续运行..."
+        echo "WARNING: mini-services may have failed to start, continuing..."
     else
-        echo "✅ mini-services 已启动 (PID: $MINI_PID)"
+        echo "mini-services started (PID: $MINI_PID)"
     fi
 elif [ -d "./mini-services-dist" ]; then
-    echo "⚠️  未找到 mini-services 启动脚本，但目录存在"
+    echo "WARNING: mini-services startup script not found, but directory exists"
 else
-    echo "ℹ️  mini-services 目录不存在，跳过"
+    echo "INFO: mini-services directory not found, skipping"
 fi
 
-# 启动 Caddy（如果存在 Caddyfile）
-echo "🚀 启动 Caddy..."
+# Start Caddy (if Caddyfile exists)
+echo "Starting Caddy..."
 
-# Caddy 作为前台进程运行（主进程）
-echo "✅ Caddy 已启动（前台运行）"
+# Caddy runs as foreground process (main process)
+echo "Caddy started (foreground)"
 echo ""
-echo "🎉 所有服务已启动！"
+echo "All services started!"
 echo ""
-echo "💡 按 Ctrl+C 停止所有服务"
+echo "Press Ctrl+C to stop all services"
 echo ""
 
-# Caddy 作为主进程运行
+# Caddy runs as the main process
 exec caddy run --config Caddyfile --adapter caddyfile
