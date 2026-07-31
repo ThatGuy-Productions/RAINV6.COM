@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-07-31T20:13:03.917Z",
+  "sampleRate": 48000,
+  "duration": 2,
+  "note": "RAIN V6 DSP Baseline — all values must be preserved across refactors. Audio correctness takes precedence over code elegance.",
+  "lufs": {
+    "silence": -70,
+    "sine1k_mono": -3.701300039316836,
+    "sine1k_stereo": -3.701300039317051,
+    "sine440_mono": -3.701299974179271,
+    "dcFull_mono": -0.691,
+    "noise_mono": -5.420799309793576,
+    "short_0_5s": -3.701300039316815
+  },
+  "truePeak": {
+    "silence": null,
+    "sine1k": 0,
+    "dcFull": 0,
+    "dcHalf": -6.020599913279624,
+    "noise": -0.00010975719914182419
+  },
+  "rms": {
+    "silence": 0,
+    "sine1k": 0.7071067744560742,
+    "dcFull": 1,
+    "dcHalf": 0.5,
+    "noise": 0.580109575981741
+  },
+  "stereoWidth": {
+    "mono": 0,
+    "stereo": 0,
+    "antiPhase": 2,
+    "silence": 0
+  },
+  "correlation": {
+    "identical": 1,
+    "antiPhase": -1,
+    "different": 1.2158434971434416e-10,
+    "silence": 1
+  },
+  "signalHashes": {
+    "sine1k": "19cfb9ae37b4bb59a0767934eb038259043ead553fe6a6e9c6bd7acb8e2d4b62",
+    "sine440": "9ad8b8169d8d96479610d66d138c1260860285cb689b5a4f4b521310dbb62669",
+    "silence": "fec9afb531a8e036eba1d81651896e1b2c1f78b0234dbadc8e7549563f09407b",
+    "dcFull": "128d3ea107a9c1226180d74af172c5df2469bd139ff1caee3f10751f7a90d67f",
+    "dcHalf": "cad5bf7a9e4a53621af13476ae8bcc2c653acacb66cc91af57fd728aaee46e7c",
+    "noise": "6cce1576edd5587d687065f948e730ad46be5fabe82f07b9a09ea1e899413f02"
+  },
+  "fftBinMapping": {
+    "fftSize": 4096,
+    "binResolution": 11.71875,
+    "binFor440Hz": 38,
+    "binFor1kHz": 85,
+    "binForNyquist": 2048
+  }
+}
