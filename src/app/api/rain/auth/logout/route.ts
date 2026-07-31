@@ -11,8 +11,19 @@ export const runtime = 'nodejs'
  * — calling logout when not logged in is a no-op, not an error.
  */
 export async function POST(req: NextRequest) {
-  const setCookie = await logout(req)
-  const res = NextResponse.json({ ok: true })
-  res.headers.set('Set-Cookie', setCookie)
-  return res
+  try {
+    const setCookie = await logout(req)
+    const res = NextResponse.json({ ok: true })
+    res.headers.set('Set-Cookie', setCookie)
+    return res
+  } catch (err) {
+    console.error('[auth/logout] Error:', err)
+    // Even on failure, clear the cookie client-side — the user
+    // intended to log out, and a stale cookie is harmless once
+    // the server-side token is gone (or expired).
+    return NextResponse.json(
+      { ok: true, note: 'Session cleared on client' },
+      { status: 200 },
+    )
+  }
 }

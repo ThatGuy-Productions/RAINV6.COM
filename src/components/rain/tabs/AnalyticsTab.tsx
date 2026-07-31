@@ -136,7 +136,7 @@ export function AnalyticsTab() {
       base.engineStats = all.engineStats
     }
     return base
-  }, [renderHistory, all, fileSampleRate, fileBitDepth, fileChannels])
+  }, [renderHistory, all])
 
   // Persisted-record aggregations — every one of these is a pure function
   // over real IndexedDB rows. Empty arrays yield zeros / empty arrays.

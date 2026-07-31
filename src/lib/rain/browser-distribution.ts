@@ -5,6 +5,10 @@
  * Used by distrokid-pricing.ts and distrokid-delivery.ts.
  */
 
+// ---------------------------------------------------------------------------
+// Config & result types
+// ---------------------------------------------------------------------------
+
 export interface BrowserAutomationConfig {
   /** Which browser to launch. Default: system Chromium (Playwright-managed). */
   browserType?: 'chromium' | 'chrome' | 'edge'

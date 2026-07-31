@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Image from 'next/image'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -490,9 +491,12 @@ export function DistributeTab() {
         />
         {artwork ? (
           <div className="flex items-center gap-3">
-            <img
+            <Image
               src={artwork.previewUrl}
               alt="Cover art preview"
+              width={80}
+              height={80}
+              unoptimized
               className="w-20 h-20 rounded object-cover border border-rain-border"
             />
             <div className="flex-1 text-xs space-y-1">

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AlertTriangle, Sparkles, Undo2, Redo2, Zap, SlidersHorizontal, Bookmark } from 'lucide-react'
 import { MACROS, TENSION_PAIRS } from '@/lib/rain/constants'
@@ -34,16 +34,17 @@ export function CreativeMacros({ onAiSuggest, aiLoading = false }: CreativeMacro
   // wrapper preserves the original store action semantics — it just
   // emits a recordActivity call alongside it. Failures are swallowed so
   // analytics can never break the undo/redo flow.
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     if (!canUndo) return
     undoMacros()
     void recordActivity('undo').catch(() => { /* swallow */ })
-  }
-  const handleRedo = () => {
+  }, [canUndo, undoMacros])
+
+  const handleRedo = useCallback(() => {
     if (!canRedo) return
     redoMacros()
     void recordActivity('redo').catch(() => { /* swallow */ })
-  }
+  }, [canRedo, redoMacros])
 
   // Listen for keyboard shortcut custom events (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z,
   // Ctrl/Cmd+Y). Routed through the same wrapper so keyboard undo/redo is
@@ -57,7 +58,7 @@ export function CreativeMacros({ onAiSuggest, aiLoading = false }: CreativeMacro
       window.removeEventListener('rain:undo', onKeyUndo)
       window.removeEventListener('rain:redo', onKeyRedo)
     }
-  }, [canUndo, canRedo, undoMacros, redoMacros])
+  }, [handleUndo, handleRedo])
 
   const tensions = TENSION_PAIRS.filter((t) => {
     const v1 = macros[t.keys[0]]

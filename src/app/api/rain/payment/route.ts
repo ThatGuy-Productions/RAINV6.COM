@@ -486,7 +486,7 @@ async function triggerDistributionFinalize(
     const respBody = await resp.json().catch(() => ({}))
     return {
       triggered: false,
-      error: (respBody as any).error || `Distribution pipeline returned HTTP ${resp.status}`,
+      error: (respBody as Record<string, unknown>).error as string || `Distribution pipeline returned HTTP ${resp.status}`,
     }
   } catch (e) {
     return {

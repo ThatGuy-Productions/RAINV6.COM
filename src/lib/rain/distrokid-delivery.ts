@@ -34,13 +34,19 @@ import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult 
 // Re-export types for consumers that import from this module
 export type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult }
 
+// This module dynamically imports Playwright (~170 MB) and uses its Page/Browser
+// APIs extensively. Playwright is an optional dev dependency, so we use `any`
+// for the Page/Browser parameters in step functions — these are only called
+// after the dynamic import succeeds, so the types are guaranteed at runtime.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 // ---------------------------------------------------------------------------
 // Step implementations — each returns { ok, error?, screenshot? }
 // ---------------------------------------------------------------------------
 
 /** Step 1: Open DistroKid upload page. */
 async function stepNavigate(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   _config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -58,7 +64,7 @@ async function stepNavigate(
 
 /** Step 2: Login. If already logged in (session cookie), skip. */
 async function stepLogin(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -102,7 +108,7 @@ async function stepLogin(
 
 /** Step 3: Select release type (Single). */
 async function stepSelectType(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   _config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -120,7 +126,7 @@ async function stepSelectType(
 
 /** Step 4: Fill metadata form. */
 async function stepFillMetadata(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -187,7 +193,7 @@ async function stepFillMetadata(
 
 /** Step 5: Upload audio file. */
 async function stepUploadAudio(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -213,7 +219,7 @@ async function stepUploadAudio(
 
 /** Step 6: Upload artwork. */
 async function stepUploadArtwork(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -236,7 +242,7 @@ async function stepUploadArtwork(
 
 /** Step 7: Set release date + store selection. */
 async function stepSetReleaseDate(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -261,7 +267,7 @@ async function stepSetReleaseDate(
 
 /** Step 8: Confirm and submit. */
 async function stepConfirm(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   _config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -283,7 +289,7 @@ async function stepConfirm(
 
 /** Step 9: Verify confirmation page. */
 async function stepVerify(
-  page: any,
+  page: any, // Playwright Page — dynamically imported
   _config: BrowserAutomationConfig,
 ): Promise<BrowserStepResult> {
   const start = Date.now()
@@ -323,8 +329,8 @@ export async function deliverViaDistroKid(
 ): Promise<BrowserDeliveryResult> {
   const steps: BrowserStepResult[] = []
   const totalStart = Date.now()
-  let page: any = null
-  let browser: any = null
+  let page: any = null // Playwright Page — dynamically imported
+  let browser: any = null // Playwright Browser — dynamically imported
 
   const addStep = (s: BrowserStepResult) => {
     steps.push(s)
