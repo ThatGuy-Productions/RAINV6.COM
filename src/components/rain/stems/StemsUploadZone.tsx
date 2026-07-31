@@ -419,7 +419,9 @@ export function StemsUploadZone({ onDone }: { onDone?: (ok: boolean) => void }) 
         }}
         aria-label="Upload a ZIP of separated stems"
       >
+        <label htmlFor="stems-file-input" className="sr-only">Upload stems ZIP file</label>
         <input
+          id="stems-file-input"
           ref={inputRef}
           type="file"
           accept=".zip,application/zip,application/x-zip-compressed"
@@ -429,6 +431,7 @@ export function StemsUploadZone({ onDone }: { onDone?: (ok: boolean) => void }) 
             if (f) void handleZipFile(f)
             e.target.value = ''
           }}
+          aria-label="Upload a ZIP of separated stems"
         />
 
         <motion.div

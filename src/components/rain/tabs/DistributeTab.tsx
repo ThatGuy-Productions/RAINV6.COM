@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Image from 'next/image'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -483,7 +484,9 @@ export function DistributeTab() {
             </button>
           )}
         </div>
+        <label htmlFor="artwork-file-input" className="sr-only">Upload cover artwork</label>
         <input
+          id="artwork-file-input"
           ref={fileInputRef}
           type="file"
           accept="image/jpeg,image/png"
@@ -492,10 +495,13 @@ export function DistributeTab() {
         />
         {artwork ? (
           <div className="flex items-center gap-3">
-            <img
+            <Image
               src={artwork.previewUrl}
               alt="Cover art preview"
+              width={artwork.dimensions[0]}
+              height={artwork.dimensions[1]}
               className="w-20 h-20 rounded object-cover border border-rain-border"
+              unoptimized
             />
             <div className="flex-1 text-xs space-y-1">
               <div className="font-mono text-rain-accent">{artwork.dimensions[0]}×{artwork.dimensions[1]} · {artwork.format}</div>
@@ -808,10 +814,12 @@ function DdexInfo({ label, value }: { label: string; value: string }) {
 }
 
 function Field({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const id = useId()
   return (
     <div>
-      <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">{label}</label>
+      <label htmlFor={id} className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">{label}</label>
       <input
+        id={id}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

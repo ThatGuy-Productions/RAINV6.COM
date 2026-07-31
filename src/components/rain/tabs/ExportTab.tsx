@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Download, FileAudio, Loader2, Box, CheckCircle2, XCircle, Info, MessageSquare, FileArchive, Lock } from 'lucide-react'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
@@ -612,10 +612,12 @@ function triggerDownload(blob: Blob, filename: string): void {
 }
 
 function MetadataField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const id = useId()
   return (
     <div>
-      <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">{label}</label>
+      <label htmlFor={id} className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">{label}</label>
       <input
+        id={id}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}

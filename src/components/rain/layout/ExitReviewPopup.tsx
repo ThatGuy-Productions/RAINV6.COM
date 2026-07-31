@@ -159,7 +159,9 @@ export function ExitReviewPopup() {
                   </div>
 
                   {/* Name */}
+                  <label htmlFor="exit-review-name" className="sr-only">Your name</label>
                   <input
+                    id="exit-review-name"
                     type="text"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -169,7 +171,9 @@ export function ExitReviewPopup() {
                   />
 
                   {/* Review */}
+                  <label htmlFor="exit-review-body" className="sr-only">Your review</label>
                   <textarea
+                    id="exit-review-body"
                     value={body}
                     onChange={(e) => setBody(e.target.value)}
                     placeholder="How was your RAIN V6 experience?"

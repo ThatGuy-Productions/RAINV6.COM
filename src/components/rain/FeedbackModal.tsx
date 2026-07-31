@@ -12,7 +12,7 @@
  * to follow-up.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X, Send, Loader2, CheckCircle2 } from 'lucide-react'
 import { notifySuccess, notifyError } from '@/lib/rain/notifications'
 
@@ -110,11 +110,13 @@ export function FeedbackModal() {
         ) : (
           <>
             <textarea
+              id="feedback-comment"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               placeholder="What do you need? What's broken? What would make RAIN indispensable for your workflow?"
               className="w-full bg-rain-surface-2 border border-rain-border rounded-lg px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:border-rain-accent/50 focus:outline-none resize-none min-h-[100px]"
               maxLength={2000}
+              aria-label="Your feedback"
             />
 
             <div className="mt-3 space-y-2">

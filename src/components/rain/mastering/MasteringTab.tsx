@@ -437,13 +437,15 @@ export function MasteringTab() {
             {/* Genre + Platform selectors */}
             <div className="rain-panel rounded-lg p-4 grid sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
+                <label htmlFor="mastering-genre-select" className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
                   Genre
                 </label>
                 <select
+                  id="mastering-genre-select"
                   value={genre}
                   onChange={(e) => setGenre(e.target.value)}
                   className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-rain-accent/50"
+                  aria-label="Select genre"
                 >
                   {GENRES.map((g) => (
                     <option key={g} value={g}>{g.charAt(0).toUpperCase() + g.slice(1)}</option>
@@ -451,13 +453,15 @@ export function MasteringTab() {
                 </select>
               </div>
               <div>
-                <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
+                <label htmlFor="mastering-platform-select" className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">
                   Platform Target ({PLATFORM_TARGETS.length})
                 </label>
                 <select
+                  id="mastering-platform-select"
                   value={platform}
                   onChange={(e) => setPlatform(e.target.value)}
                   className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-rain-accent/50"
+                  aria-label="Select platform target"
                 >
                   {PLATFORM_TARGETS.map((p) => (
                     <option key={p.slug} value={p.slug}>

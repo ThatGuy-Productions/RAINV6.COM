@@ -246,7 +246,9 @@ export function CustomPresets() {
               exit={{ opacity: 0, width: 0 }}
               className="flex items-center gap-1 overflow-hidden"
             >
+              <label htmlFor="preset-name-input" className="sr-only">Preset name</label>
               <input
+                id="preset-name-input"
                 autoFocus
                 type="text"
                 value={draftName}

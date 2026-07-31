@@ -192,7 +192,9 @@ export function UploadZone() {
             ))}
           </div>
         )}
+        <label htmlFor="audio-file-input" className="sr-only">Upload audio file</label>
         <input
+          id="audio-file-input"
           ref={inputRef}
           type="file"
           accept="audio/*,.wav,.mp3,.flac,.aac,.ogg,.m4a,.aiff"
@@ -202,6 +204,7 @@ export function UploadZone() {
             if (f) void handleFile(f)
             e.target.value = ''
           }}
+          aria-label="Upload audio file for mastering"
         />
       </div>
     )
