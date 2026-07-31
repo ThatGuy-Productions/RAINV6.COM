@@ -13,9 +13,10 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const SITE_URL = "https://rainv6beta.space-z.ai";
+const SITE_URL = "https://rainv6.com"
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "RAIN V6 — AI-Powered Audio Mastering | Professional Sound in Seconds",
   description: "Transform your mixes with RAIN V6's AI audio mastering engine. Real ITU-R BS.1770-4 LUFS, Ed25519 provenance, 12-stem separation, Dolby Atmos — all in your browser. Free public beta.",
   keywords: ["RAIN V6", "AI mastering", "audio mastering", "LUFS", "BS.1770-4", "Ed25519", "provenance", "DDEX", "Dolby Atmos", "stem separation", "MP3 encoder", "WAV export", "in-browser DSP"],
