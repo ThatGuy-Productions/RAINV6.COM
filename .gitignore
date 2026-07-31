@@ -57,4 +57,8 @@ server.log
 db/*.db
 upload/
 tool-results/
-download/*.pngrain-beta.zip
+download/*.png
+rain-beta.zip
+
+# Internal research and audit files — local only
+docs/audit/
