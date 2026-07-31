@@ -1,0 +1,423 @@
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\app\api\rain\payment\route.ts
+  487:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\app\tools\[slug]\page.tsx
+    5:86  warning  'FileImage' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+    5:97  warning  'FileText' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  261:17  warning  'pages' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  319:7   warning  'filename' is never reassigned. Use 'const' instead                               prefer-const
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\FeedbackModal.tsx
+  65:7  error  Error: This value cannot be modified
+
+Modifying a variable defined outside a component or hook is not allowed. Consider using an effect.
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\FeedbackModal.tsx:65:7
+  63 |   // Listen for global open events from other components
+  64 |   if (typeof window !== 'undefined') {
+> 65 |     ;(window as unknown as Record<string, unknown>).__rainOpenFeedback = () => {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ value cannot be modified
+  66 |       setOpen(true)
+  67 |       setSent(false)
+  68 |       setError(null)  react-hooks/immutability
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\KeyboardShortcutsOverlay.tsx
+  3:29  warning  'useCallback' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  8:3   warning  'RotateCcw' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  9:3   warning  'Repeat' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\admin\AdminConsole.tsx
+  456:19  warning  'setPolling' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  @typescript-eslint/no-unused-vars
+  497:10  error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\admin\AdminConsole.tsx:497:10
+  495 |   // Initial load
+  496 |   useEffect(() => {
+> 497 |     void fetchAll(false)
+      |          ^^^^^^^^ Avoid calling setState() directly within an effect
+  498 |   }, [fetchAll])
+  499 |
+  500 |   // 30s polling for stats only (keeps the overview live without thrashing  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\admin\AuthContext.tsx
+  65:10  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\admin\AuthContext.tsx:65:10
+  63 |
+  64 |   useEffect(() => {
+> 65 |     void refresh()
+     |          ^^^^^^^ Avoid calling setState() directly within an effect
+  66 |   }, [refresh])
+  67 |
+  68 |   const login = useCallback(  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\assistant\AssistantPanel.tsx
+  101:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\landing\LandingHero.tsx
+  22:26  warning  Irregular whitespace not allowed  no-irregular-whitespace
+  33:39  warning  Irregular whitespace not allowed  no-irregular-whitespace
+  43:41  warning  Irregular whitespace not allowed  no-irregular-whitespace
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\landing\LandingReviews.tsx
+  65:10  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\landing\LandingReviews.tsx:65:10
+  63 |   useEffect(() => {
+  64 |     if (!isInView) return
+> 65 |     void fetchReviews()
+     |          ^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  66 |   }, [isInView])
+  67 |
+  68 |   // Compute aggregate rating from loaded reviews  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\landing\ServiceNoticeBanner.tsx
+  17:28  warning  'CheckCircle2' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\layout\ExitReviewPopup.tsx
+  21:22  warning  'X' is defined but never used. Allowed unused vars must match /^_/u                               @typescript-eslint/no-unused-vars
+  25:7   warning  'INTERACTION_THRESHOLD' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\layout\StudioApp.tsx
+  3:31  warning  'useCallback' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\layout\StudioTopBar.tsx
+  25:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\layout\StudioTopBar.tsx:25:5
+  23 |   const [unseenCount, setUnseenCount] = useState(0)
+  24 |   useEffect(() => {
+> 25 |     setUnseenCount(getUnseenCount())
+     |     ^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  26 |     const refresh = () => setUnseenCount(getUnseenCount())
+  27 |     // Re-check on focus (user may have cleared localStorage elsewhere).
+  28 |     window.addEventListener('focus', refresh)  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\layout\WhatsNewPanel.tsx
+  15:21  warning  'useState' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\BlindTestModal.tsx
+  23:10  warning  'notifyInfo' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  23:22  warning  'notifySuccess' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\CreativeMacros.tsx
+   7:15  warning  'MacroKey' is defined but never used. Allowed unused vars must match /^_/u                                                        @typescript-eslint/no-unused-vars
+  60:6   warning  React Hook useEffect has missing dependencies: 'handleRedo' and 'handleUndo'. Either include them or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\GenrePresets.tsx
+    4:18  warning  'AnimatePresence' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+    7:34  warning  'GENRES' is defined but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+  165:9   warning  'genre' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\MasteringReportDialog.tsx
+  28:10  warning  'notifyError' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\MasteringTab.tsx
+  55:9  warning  'isDemo' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\ProcessingProgressPanel.tsx
+  104:9   warning  'progressLabel' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   @typescript-eslint/no-unused-vars
+  119:7   error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\mastering\ProcessingProgressPanel.tsx:119:7
+  117 |   useEffect(() => {
+  118 |     if (!isProcessing || !processingStartTime) {
+> 119 |       setEstimatedTimeRemaining(null)
+      |       ^^^^^^^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  120 |       return
+  121 |     }
+  122 |       react-hooks/set-state-in-effect
+  126:11  warning  'progressDelta' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\AnalyticsTab.tsx
+   34:8  warning  'ExportRecord' is defined but never used. Allowed unused vars must match /^_/u                                                                             @typescript-eslint/no-unused-vars
+   36:8  warning  'QCRecord' is defined but never used. Allowed unused vars must match /^_/u                                                                                 @typescript-eslint/no-unused-vars
+   37:8  warning  'RenderTelemetryRecord' is defined but never used. Allowed unused vars must match /^_/u                                                                    @typescript-eslint/no-unused-vars
+  142:6  warning  React Hook useMemo has unnecessary dependencies: 'fileBitDepth', 'fileChannels', and 'fileSampleRate'. Either exclude them or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\DistributeTab.tsx
+    7:3   warning  'Download' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             @typescript-eslint/no-unused-vars
+    8:12  warning  'ImageIcon' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            @typescript-eslint/no-unused-vars
+   28:3   warning  'submitToLabelGrid' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    @typescript-eslint/no-unused-vars
+   84:5   error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\DistributeTab.tsx:84:5
+  82 |
+  83 |   useEffect(() => {
+> 84 |     refreshJobs()
+     |     ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  85 |   }, [refreshJobs])
+  86 |
+  87 |   const handleGenerateIdentifiers = () => {  react-hooks/set-state-in-effect
+  495:13  warning  Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                @next/next/no-img-element
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\ExportTab.tsx
+    4:74  warning  'MessageSquare' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  142:9   warning  'isAtmos' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\QCTab.tsx
+  53:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\QCTab.tsx:53:7
+  51 |   useEffect(() => {
+  52 |     if (!rainCert) {
+> 53 |       setProvenanceValid(null)
+     |       ^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  54 |       return
+  55 |     }
+  56 |     let cancelled = false                                                  react-hooks/set-state-in-effect
+  68:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\QCTab.tsx:68:7
+  66 |   useEffect(() => {
+  67 |     if (!rainCert || !analysis) {
+> 68 |       setFingerprintMatch(null)
+     |       ^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  69 |       return
+  70 |     }
+  71 |     const fpAssertion = rainCert.manifest.assertions.find(  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\RepairTab.tsx
+  132:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\RepairTab.tsx:132:7
+  130 |   useEffect(() => {
+  131 |     if (!fileName) {
+> 132 |       setCurrentMetrics(null)
+      |       ^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  133 |       setLastResult(null)
+  134 |       setCanReset(false)
+  135 |       return  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\SecondaryTabs.tsx
+    4:57  warning  'Layers' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                @typescript-eslint/no-unused-vars
+  769:5   error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\tabs\SecondaryTabs.tsx:769:5
+  767 |   // Recompute the target spectrum whenever a new file is loaded.
+  768 |   useEffect(() => {
+> 769 |     refreshTargetSpectrum()
+      |     ^^^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  770 |   }, [fileName, refreshTargetSpectrum])
+  771 |
+  772 |   /** Handle the user uploading a reference audio file. */  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\ui\Card3D.tsx
+  60:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\rain\ui\Card3D.tsx:60:5
+  58 |     if (typeof window === 'undefined' || !window.matchMedia) return
+  59 |     const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+> 60 |     setReduced(mq.matches)
+     |     ^^^^^^^^^^ Avoid calling setState() directly within an effect
+  61 |     const onChange = () => setReduced(mq.matches)
+  62 |     mq.addEventListener('change', onChange)
+  63 |     return () => mq.removeEventListener('change', onChange)  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\ui\carousel.tsx
+  98:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\components\ui\carousel.tsx:98:5
+   96 |   React.useEffect(() => {
+   97 |     if (!api) return
+>  98 |     onSelect(api)
+      |     ^^^^^^^^ Avoid calling setState() directly within an effect
+   99 |     api.on("reInit", onSelect)
+  100 |     api.on("select", onSelect)
+  101 |  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\hooks\use-mobile.ts
+  14:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\hooks\use-mobile.ts:14:5
+  12 |     }
+  13 |     mql.addEventListener("change", onChange)
+> 14 |     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+     |     ^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  15 |     return () => mql.removeEventListener("change", onChange)
+  16 |   }, [])
+  17 |  react-hooks/set-state-in-effect
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\hooks\use-toast.ts
+  21:7  warning  'actionTypes' is assigned a value but only used as a type. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\audio-engine.ts
+   729:9  warning  Unexpected console statement. Only these console methods are allowed: warn, error             no-console
+   751:9  warning  'inferenceSource' is assigned a value but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  2088:9  warning  'watermarkInterval' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\chain-of-custody.ts
+    34:15  warning  'C2PAManifest' is defined but never used. Allowed unused vars must match /^_/u                        @typescript-eslint/no-unused-vars
+   773:9   warning  'revision' is assigned a value but never used. Allowed unused vars must match /^_/u                   @typescript-eslint/no-unused-vars
+   807:11  warning  'footerSize' is assigned a value but never used. Allowed unused vars must match /^_/u                 @typescript-eslint/no-unused-vars
+   874:9   warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-unused-vars')
+   924:7   warning  Unexpected lexical declaration in case block                                                          no-case-declarations
+  1257:15  warning  'bextRemoved' is assigned a value but never used. Allowed unused vars must match /^_/u                @typescript-eslint/no-unused-vars
+  1295:9   warning  'view' is assigned a value but never used. Allowed unused vars must match /^_/u                       @typescript-eslint/no-unused-vars
+  1602:3   warning  'bitDepth' is assigned a value but never used. Allowed unused args must match /^_/u                   @typescript-eslint/no-unused-vars
+  1727:5   warning  'parentCertId' is assigned a value but never used. Allowed unused vars must match /^_/u               @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\distribution-multitrack.ts
+  16:15  warning  'AiDisclosure' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\distrokid-delivery.ts
+   49:6   warning  'PlaywrightPage' is defined but never used. Allowed unused vars must match /^_/u                      @typescript-eslint/no-unused-vars
+   50:6   warning  'PlaywrightBrowser' is defined but never used. Allowed unused vars must match /^_/u                   @typescript-eslint/no-unused-vars
+   51:6   warning  'PlaywrightLaunchOptions' is defined but never used. Allowed unused vars must match /^_/u             @typescript-eslint/no-unused-vars
+   59:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+   77:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  121:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  139:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  207:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  233:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  256:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  283:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  305:9   warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  345:13  warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  346:16  warning  Unexpected any. Specify a different type                                                              @typescript-eslint/no-explicit-any
+  357:5   warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/ban-ts-comment')
+  426:5   warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/ban-ts-comment')
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\distrokid-pricing.ts
+  223:48  warning  'key' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\groove-emotion.ts
+    25:22  warning  'hannWindow' is defined but never used. Allowed unused vars must match /^_/u                    @typescript-eslint/no-unused-vars
+   174:7   warning  'HALF_TIME_THRESHOLD' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   189:54  warning  'sampleRate' is defined but never used. Allowed unused args must match /^_/u                    @typescript-eslint/no-unused-vars
+   924:9   warning  'right' is assigned a value but never used. Allowed unused vars must match /^_/u                @typescript-eslint/no-unused-vars
+  1134:9   warning  'barDurationS' is assigned a value but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+  1435:9   warning  'hopRate' is assigned a value but never used. Allowed unused vars must match /^_/u              @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\payment-isolation.ts
+  149:9  warning  'timeHigh' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  150:9  warning  'timeMid' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+  151:9  warning  'timeLow' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\provenance.ts
+  156:68  warning  'sampleRate' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  164:9   warning  'bandEnergies' is never reassigned. Use 'const' instead                       prefer-const
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\rainnet-inference.ts
+  28:10  warning  'PLATFORM_TARGETS' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+  43:7   warning  'MEL_DURATION' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\repair.ts
+  648:7  warning  'madSum' is never reassigned. Use 'const' instead                                  prefer-const
+  648:7  warning  'madSum' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\server-zip.ts
+  51:9  warning  'table' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\tier-gate.ts
+  21:10  warning  'db' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  72:60  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\usage.ts
+   92:35  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+   92:52  warning  'format' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  104:35  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  104:52  warning  'format' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\lib\rain\zip-reader.ts
+  70:7  warning  'FLAG_DATA_DESCRIPTOR' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  73:7  warning  'FLAG_UTF8' is assigned a value but never used. Allowed unused vars must match /^_/u             @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\src\proxy.ts
+   87:7   warning  'bucket' is never reassigned. Use 'const' instead                                           prefer-const
+  133:10  warning  'sanitizeInput' is defined but never used. Allowed unused vars must match /^_/u             @typescript-eslint/no-unused-vars
+  143:7   warning  'SANITIZE_ROUTES' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\tests\lib\genre-overrides.test.ts
+  14:15  warning  'ProcessingParams' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Admin\.openclaw-autoclaw\workspace\audit-rainv6\tests\lib\metadata-validation.test.ts
+   97:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  108:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  117:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  126:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  135:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  144:10  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+Γ£û 119 problems (14 errors, 105 warnings)
+  0 errors and 6 warnings potentially fixable with the `--fix` option.
+

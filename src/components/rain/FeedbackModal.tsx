@@ -61,13 +61,16 @@ export function FeedbackModal() {
   }
 
   // Listen for global open events from other components
-  if (typeof window !== 'undefined') {
-    ;(window as unknown as Record<string, unknown>).__rainOpenFeedback = () => {
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__rainOpenFeedback = () => {
       setOpen(true)
       setSent(false)
       setError(null)
     }
-  }
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__rainOpenFeedback
+    }
+  }, [])
 
   if (!open) return null
 

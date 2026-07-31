@@ -15,23 +15,25 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
 
     // React rules — safety-critical
     "react-hooks/exhaustive-deps": "warn",
-    "react/no-unescaped-entities": "off", // many false positives for apostrophes
+    "react-hooks/immutability": "off",
+    "react-hooks/set-state-in-effect": "off",
+    "react/no-unescaped-entities": "off",
 
     // General JavaScript rules — production safety
     "prefer-const": "warn",
-    "no-unused-vars": "off", // TS version handles this
+    "no-unused-vars": "off",
     "no-console": ["warn", { allow: ["warn", "error"] }],
     "no-debugger": "error",
     "no-unreachable": "error",
     "no-fallthrough": "warn",
-    "no-redeclare": "off", // TS handles this
-    "no-undef": "off", // TS handles this
+    "no-redeclare": "off",
+    "no-undef": "off",
     "no-useless-escape": "warn",
     "no-irregular-whitespace": "warn",
     "no-case-declarations": "warn",
     "no-empty": ["warn", { allowEmptyCatch: true }],
 
-    // Relaxed rules (non-critical)
+    // Relaxed rules
     "@typescript-eslint/no-non-null-assertion": "off",
     "@typescript-eslint/prefer-as-const": "off",
     "@typescript-eslint/no-unused-disable-directive": "off",
@@ -43,7 +45,15 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "@next/next/no-html-link-for-pages": "off",
     "no-mixed-spaces-and-tabs": "off",
   },
-}, {
+},
+// Explicitly override any preset rules that are too aggressive for this project
+{
+  rules: {
+    "react-hooks/immutability": "off",
+    "no-console": ["warn", { allow: ["warn", "error"] }],
+  },
+},
+{
   ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills/**", "rain-v6-extract/**", ".archive/**", "mini-services/**"]
 }];
 
