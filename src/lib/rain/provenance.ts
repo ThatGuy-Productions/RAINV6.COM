@@ -184,18 +184,104 @@ export async function computeFingerprint(channels: Float32Array[], sampleRate: n
 }
 
 // ---------------------------------------------------------------------------
+// FNV-1a 32-bit hash — fast, deterministic, non-cryptographic
+// ---------------------------------------------------------------------------
+
+/**
+ * FNV-1a 32-bit hash. Used exclusively for LOCAL identifier generation
+ * (ISRC/UPC). Not cryptographic — do not use for security purposes.
+ *
+ * ~30-50× faster than SHA-256 for the short strings we hash here
+ * (session IDs + counters), and the 32-bit output space is more than
+ * sufficient for the 5-digit ISRC designation and 11-digit UPC body.
+ */
+function fnv1a32(input: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
+}
+
+// ---------------------------------------------------------------------------
 // ISRC / UPC generation (ISO 3901)
 // ---------------------------------------------------------------------------
 
-export function generateIsrc(registrant = '2XX', year = new Date().getFullYear() % 100): string {
-  // CC-XXX-YY-NNNNN — country code (2), registrant (3), year (2), designation (5)
-  const designation = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+/*
+ * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ║  ⚠️  CRITICAL WARNING — LOCAL IDENTIFIERS ONLY  ⚠️                       ║
+ * ║                                                                          ║
+ * ║  These identifiers are generated deterministically from a session hash   ║
+ * ║  for LOCAL package assembly and testing purposes. They are NOT           ║
+ * ║  registered with IFPI, GS1, or any national ISRC agency. They will be   ║
+ * ║  REJECTED by every DSP and aggregator on the planet.                     ║
+ * ║                                                                          ║
+ * ║  BEFORE YOU DISTRIBUTE:                                                  ║
+ * ║    1. Obtain a real ISRC prefix from your national ISRC agency           ║
+ * ║       (RIAA in the US, PPL in the UK, SAMRO in South Africa, etc.).     ║
+ * ║    2. Obtain a real UPC/EAN company prefix from GS1.                    ║
+ * ║    3. Replace these locally-generated identifiers with real registered   ║
+ * ║       ones.                                                              ║
+ * ║                                                                          ║
+ * ║  These functions exist so the distribution pipeline can be tested        ║
+ * ║  end-to-end without requiring real credentials. They produce             ║
+ * ║  syntactically valid identifiers with correct check digits — but they    ║
+ * ║  are NOT registered and will NOT be accepted by any distribution         ║
+ * ║  service.                                                                ║
+ * ╚══════════════════════════════════════════════════════════════════════════╝
+ */
+
+/**
+ * Generate a deterministic ISRC from a session ID.
+ *
+ * ⚠️  NOT REGISTERED WITH IFPI — LOCAL IDENTIFIER ONLY. See warning above.
+ *
+ * Format: CC-XXX-YY-NNNNN (ISO 3901, compact form — no dashes)
+ *   CC = country code (fixed "US"), XXX = registrant (default "2XX"),
+ *   YY = year (2-digit, auto-derived from current date),
+ *   NNNNN = deterministic designation from FNV-1a hash of sessionId + counter.
+ *
+ * @param sessionId — Unique session identifier for deterministic output.
+ * @param registrant — 3-character registrant code (default "2XX").
+ * @param counter — Monotonic counter for generating multiple ISRCs in the
+ *                  same session without collisions.
+ * @returns A 12-character ISRC string (no dashes).
+ */
+export function generateIsrc(sessionId: string, registrant = '2XX', counter = 0): string {
+  const year = new Date().getFullYear() % 100
+  const hash = fnv1a32(`${sessionId}:isrc:${counter}`)
+  const designation = (hash % 100000).toString().padStart(5, '0')
   return `US${registrant}${year.toString().padStart(2, '0')}${designation}`
 }
 
-export function generateUpc(): string {
-  // 12-digit UPC-EAN-13 with valid check digit
-  const base = Array.from({ length: 11 }, () => Math.floor(Math.random() * 10))
+/**
+ * Generate a deterministic UPC-12 from a session ID.
+ *
+ * ⚠️  NOT REGISTERED WITH GS1 — LOCAL IDENTIFIER ONLY. See warning above.
+ *
+ * 12-digit UPC-EAN-13 with a valid mod-10 check digit. The 11 data digits
+ * are derived from an FNV-1a hash of sessionId + counter using a simple
+ * LCG to spread the entropy across all digit positions. The check digit
+ * is re-computed after digit generation (not derived from the hash) so the
+ * result always passes EAN-13 check-digit validation.
+ *
+ * @param sessionId — Unique session identifier for deterministic output.
+ * @param counter — Monotonic counter for generating multiple UPCs in the
+ *                  same session without collisions.
+ * @returns A 12-digit UPC string with a valid EAN-13 check digit.
+ */
+export function generateUpc(sessionId: string, counter = 0): string {
+  const hash = fnv1a32(`${sessionId}:upc:${counter}`)
+  // Use a simple LCG to generate 11 deterministic digits from the hash seed.
+  // This spreads the 32-bit hash entropy across all digit positions.
+  let state = hash
+  const base: number[] = []
+  for (let i = 0; i < 11; i++) {
+    state = (Math.imul(state, 1103515245) + 12345) & 0x7fffffff
+    base.push(state % 10)
+  }
+  // Compute EAN-13 check digit (weights: 3, 1, 3, 1, ...)
   let sum = 0
   for (let i = 0; i < 11; i++) sum += base[i] * (i % 2 === 0 ? 3 : 1)
   const check = (10 - (sum % 10)) % 10

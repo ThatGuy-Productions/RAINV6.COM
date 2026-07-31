@@ -421,7 +421,7 @@ function lowpass(input: Float32Array, freq: number, sampleRate: number): Float32
 
 /**
  * Decorrelate a signal using cascaded allpass filters. This creates a sense of
- * spaciousness without显著的 timbral change — used for the height channels.
+ * spaciousness without significant timbral change — used for the height channels.
  *
  * Implements Schroeder allpass: y[n] = -g·x[n] + x[n-1] + g·y[n-1]
  */
