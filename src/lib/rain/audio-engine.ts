@@ -701,6 +701,27 @@ class RainAudioEngine {
     // if the model isn't loaded yet or the audio is too short for a Mel spec.
     let params: ProcessingParams
     let inferenceSource: 'MODEL' | 'HEURISTIC' = 'HEURISTIC'
+
+    // ─── Stage 4b: Groove + Emotion Detection ───
+    // P4-GROOVE-EMOTION: analyse the source audio for groove pattern,
+    // emotional character, and section structure BEFORE the DSP runs.
+    // These feed into compression time constants, EQ tempering, and
+    // section-aware processing later in the pipeline.
+    wrappedOnProgress?.(4, 16, 'AI Inference + Groove/Emotion Detection')
+    let grooveEmotionOverrides: import('./groove-emotion').GrooveEmotionOverrides | null = null
+    try {
+      const { analyzeGrooveEmotion } = await import('./groove-emotion')
+      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate)
+      grooveEmotionOverrides = geProfile?.overrides ?? null
+      if (grooveEmotionOverrides) {
+        console.log(
+          `[GrooveEmotion] BPM=${geProfile.profile.bpm ?? '?'} | groove=${geProfile.profile.grooveType} | emotion=${geProfile.profile.emotionQuadrant}`,
+        )
+      }
+    } catch (geError) {
+      console.warn('[GrooveEmotion] analysis failed — continuing without groove/emotion:', geError)
+    }
+
     wrappedOnProgress?.(4, 16, 'AI Inference')
     checkCancel()
     try {
@@ -1017,6 +1038,16 @@ class RainAudioEngine {
       // 2. Multiband compression (3-band Linkwitz-Riley-ish crossover).
       // Moved from old Stage 11 — spec says multiband comp belongs in the
       // Master Bus stage, not the Loudness Targeting stage.
+      // P4-GROOVE-EMOTION: if groove was detected, override attack/release
+      // with groove-locked musical time constants before compression.
+      if (grooveEmotionOverrides) {
+        params.mb_attack_low = grooveEmotionOverrides.mb_attack_override.low
+        params.mb_attack_mid = grooveEmotionOverrides.mb_attack_override.mid
+        params.mb_attack_high = grooveEmotionOverrides.mb_attack_override.high
+        params.mb_release_low = grooveEmotionOverrides.mb_release_override.low
+        params.mb_release_mid = grooveEmotionOverrides.mb_release_override.mid
+        params.mb_release_high = grooveEmotionOverrides.mb_release_override.high
+      }
       applyMultibandCompression(inChannels, params, sampleRate)
 
       // 3. Stereo widening via M/S (preserved from prior Stage 10).

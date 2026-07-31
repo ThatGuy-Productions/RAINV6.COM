@@ -266,21 +266,97 @@ export function DistributeTab() {
     }
   }
 
+  // P4-DISTRIBUTE-FINALIZE: Submit via the unified pipeline endpoint.
+  // This replaces manual submitToLabelGrid — the endpoint handles
+  // DDEX validation + LabelGrid submission + status confirmation.
   const handleSubmit = async (job: DeliveryJob) => {
     if (job.status === 'submitting') return
     setSubmittingJobId(job.id)
     try {
-      const result = await submitToLabelGrid(job)
-      if (result.ok) {
-        notifySuccess('Delivered to LabelGrid', result.providerResponse.slice(0, 120))
-      } else if (result.requiresCredentials) {
-        notifyWarning(
-          'Credentials required',
-          'LABELGRID_API_KEY env var not set — package is built but not submitted. Set the env var in .env and restart the dev server to enable delivery.',
-        )
-      } else {
-        notifyError('Delivery failed', result.error)
+      const ddexXml = buildDdexErnXml({
+        title: metadata.title || 'Untitled',
+        artist: metadata.artist || 'Unknown Artist',
+        album: metadata.album,
+        genre: metadata.genre,
+        genreSubgenre: metadata.genreSubgenre,
+        year: metadata.year,
+        isrc: metadata.isrc || 'USXXX2400001',
+        upc: metadata.upc || '000000000000',
+        iswc: metadata.iswc,
+        releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+        releaseType: metadata.releaseType,
+        label: metadata.label,
+        distributor: metadata.distributor,
+        pLine: metadata.copyrightHolder,
+        cLine: metadata.copyrightYear
+          ? `${metadata.copyrightYear} ${metadata.copyrightHolder ?? metadata.publisher ?? metadata.artist ?? ''}`.trim()
+          : undefined,
+        publisher: metadata.publisher,
+        pro: metadata.pro,
+        masterOwner: metadata.masterOwner,
+        language: metadata.language,
+        explicitLyrics: metadata.explicitLyrics,
+        territories: metadata.territories,
+        contributors: metadata.contributors,
+        aiDisclosure: metadata.aiDisclosure ?? disclosure,
+        targetDsps: selectedPlatforms,
+        dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
+      })
+
+      const resp = await fetch('/api/rain/distribute/finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ddexXml,
+          manifest: job.manifest,
+          packageSha256: job.packageSha256,
+          packageSizeBytes: job.packageSizeBytes,
+          aiDisclosure: metadata.aiDisclosure ?? disclosure,
+          sessionId: useSessionStore.getState().sessionId ?? undefined,
+        }),
+      })
+
+      const body = await resp.json()
+
+      if (!body.ok) {
+        notifyError('Delivery failed', body.error || `HTTP ${resp.status}`)
+        // Update local job status
+        await updateDeliveryJob(job.id, {
+          status: 'failed',
+          error: body.error || `HTTP ${resp.status}`,
+          providerResponse: body.providerResponse,
+        })
+        await refreshJobs()
+        return
       }
+
+      // Real confirmation from the pipeline endpoint
+      if (body.delivery?.status === 'submitted') {
+        notifySuccess(
+          '✓ Delivered — Pipeline Complete',
+          body.message || 'Your release has been submitted to LabelGrid. Streaming platforms will receive it within 24-72 hours.',
+        )
+        await updateDeliveryJob(job.id, {
+          status: 'delivered',
+          submittedAt: Date.now(),
+          deliveredAt: Date.now(),
+          providerResponse: body.delivery.providerResponse,
+        })
+      } else if (body.delivery?.status === 'pending_credentials') {
+        notifyWarning(
+          'Package Validated — Credentials Required',
+          'The release is packaged and validated. Set LABELGRID_API_KEY in .env and restart the server to enable automatic delivery. The package can be submitted at any time.',
+        )
+        // Keep as packaged — ready for retry when credentials are set
+      } else if (body.delivery?.status === 'failed') {
+        notifyError('Delivery Attempted — Failed', body.delivery.providerError || 'The LabelGrid API returned an error. You can retry.')
+        await updateDeliveryJob(job.id, {
+          status: 'failed',
+          error: body.delivery.providerError,
+          providerResponse: body.delivery.providerResponse,
+        })
+      }
+
       await refreshJobs()
     } finally {
       setSubmittingJobId(null)

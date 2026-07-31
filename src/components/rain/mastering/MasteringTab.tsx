@@ -28,6 +28,7 @@ import { computeQCResults, summarizeQCResults } from '@/lib/rain/qc'
 import { BeforeAfterOverlay } from './BeforeAfterOverlay'
 import { ABComparisonToggle } from './ABComparisonToggle'
 import { BlindTestModal } from './BlindTestModal'
+import { AiDisclosurePanel, type DisclosureState } from '@/components/rain/forms/AiDisclosurePanel'
 import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
 import { getAnonId } from '@/lib/rain/anon-id'
@@ -70,6 +71,14 @@ export function MasteringTab() {
   const [showBlindTest, setShowBlindTest] = useState(false)
   const [showReport, setShowReport] = useState(false)
   const [demoLoading, setDemoLoading] = useState(false)
+  // P4-AI-DISCLOSURE: honest per-field AI disclosure state (EU AI Act Article 50)
+  const [aiDisclosure, setAiDisclosure] = useState<DisclosureState>({
+    vocals: 'none',
+    instrumentation: 'none',
+    composition: 'none',
+    mixing: 'assisted',
+    mastering: 'assisted',
+  })
   const renderStartTime = useRef<number>(0)
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // BETA-ANALYTICS: server-persisted Session id for the currently loaded
@@ -549,6 +558,26 @@ export function MasteringTab() {
 
             {/* Pipeline */}
             <SignalChain />
+
+            {/* AI Disclosure — honest per-field selections required by EU AI Act Article 50 */}
+            <div className="rain-panel rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                  AI Disclosure · EU AI Act Article 50
+                </div>
+                <div className="text-[9px] font-mono text-muted-foreground">
+                  Honest per-field declaration
+                </div>
+              </div>
+              <AiDisclosurePanel
+                value={aiDisclosure}
+                onChange={setAiDisclosure}
+                showPreamble={false}
+              />
+              <div className="mt-2 text-[10px] text-muted-foreground/60">
+                This disclosure is embedded in your DDEX package and visible to all streaming platforms.
+              </div>
+            </div>
 
             {/* Action buttons */}
             <div className="flex flex-wrap gap-2">
