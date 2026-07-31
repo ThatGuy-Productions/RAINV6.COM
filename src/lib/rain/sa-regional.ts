@@ -251,7 +251,7 @@ export function isSupportOnline(): boolean {
   const hour = saTime.getHours()
   const day = saTime.getDay() || 7 // Convert Sunday=0 to Sunday=7
   return (
-    SUPPORT_HOURS_SAST.days.includes(day) &&
+    (SUPPORT_HOURS_SAST.days as readonly number[]).includes(day) &&
     hour >= SUPPORT_HOURS_SAST.start &&
     hour < SUPPORT_HOURS_SAST.end
   )

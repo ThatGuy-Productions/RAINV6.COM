@@ -52,7 +52,7 @@ export interface ProcessingParams {
   // Analog saturation
   analog_saturation: boolean
   saturation_drive: number
-  saturation_mode: 'tape' | 'tube' | 'transformer'
+  saturation_mode: 'tape' | 'tube' | 'transformer' | 'transistor'
 
   // Mid/Side processing
   ms_enabled: boolean

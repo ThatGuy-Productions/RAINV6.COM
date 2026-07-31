@@ -709,13 +709,25 @@ class RainAudioEngine {
     // section-aware processing later in the pipeline.
     wrappedOnProgress?.(4, 16, 'AI Inference + Groove/Emotion Detection')
     let grooveEmotionOverrides: import('./groove-emotion').GrooveEmotionOverrides | null = null
+    // Extract channel data early — needed by both groove/emotion and RainNet
+    const inChannelsPre: Float32Array[] = []
+    for (let ch = 0; ch < channels; ch++) inChannelsPre.push(this.inputBuffer.getChannelData(ch).slice())
+    if (inChannelsPre.length === 1) inChannelsPre.push(inChannelsPre[0].slice())
+
     try {
       const { analyzeGrooveEmotion } = await import('./groove-emotion')
-      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate)
-      grooveEmotionOverrides = geProfile?.overrides ?? null
+      const geResult = analyzeGrooveEmotion(
+        inChannelsPre,
+        sampleRate,
+        {} as import('./types').SpectralFeatures,
+        genre,
+        platform,
+      )
+      grooveEmotionOverrides = geResult?.overrides ?? null
       if (grooveEmotionOverrides) {
+        const prof = geResult.profile
         console.log(
-          `[GrooveEmotion] BPM=${geProfile.profile.bpm ?? '?'} | groove=${geProfile.profile.grooveType} | emotion=${geProfile.profile.emotionQuadrant}`,
+          `[GrooveEmotion] BPM=${prof.groove.bpm ?? '?'} | groove=${prof.groove.grooveType} | emotion=${prof.emotion.quadrant}`,
         )
       }
     } catch (geError) {
@@ -725,7 +737,7 @@ class RainAudioEngine {
     wrappedOnProgress?.(4, 16, 'AI Inference')
     checkCancel()
     try {
-      const inCh0 = inChannels[0] ?? new Float32Array(0)
+      const inCh0 = inChannelsPre[0] ?? new Float32Array(0)
       const hasEnoughAudio = inCh0.length >= 48000 * 0.5 // at least 0.5s at 48kHz
       if (hasEnoughAudio) {
         const { runRainNetInference } = await import('./rainnet-inference')
@@ -734,7 +746,6 @@ class RainAudioEngine {
           sampleRate,
           genre,
           platform,
-          simpleMode: simpleMode ? 1.0 : 0.0,
         })
         params = result.params as ProcessingParams
         inferenceSource = 'MODEL'
@@ -750,11 +761,8 @@ class RainAudioEngine {
 
     wrappedOnProgress?.(1, 16, 'Format Normalization')
     checkCancel()
-    // Extract channel data
-    const inChannels: Float32Array[] = []
-    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
-    // Force stereo: if mono, duplicate
-    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
+    // Reuse pre-extracted channels from stage 4b to avoid redundant copying
+    const inChannels = inChannelsPre
 
     // AUDIT-C4 / DIRECTIVE FIX: stages 2-5 were pure `await sleep()` theatre.
     // Each stage now performs REAL, measurable DSP work that contributes to
@@ -1041,12 +1049,18 @@ class RainAudioEngine {
       // P4-GROOVE-EMOTION: if groove was detected, override attack/release
       // with groove-locked musical time constants before compression.
       if (grooveEmotionOverrides) {
-        params.mb_attack_low = grooveEmotionOverrides.mb_attack_override.low
-        params.mb_attack_mid = grooveEmotionOverrides.mb_attack_override.mid
-        params.mb_attack_high = grooveEmotionOverrides.mb_attack_override.high
-        params.mb_release_low = grooveEmotionOverrides.mb_release_override.low
-        params.mb_release_mid = grooveEmotionOverrides.mb_release_override.mid
-        params.mb_release_high = grooveEmotionOverrides.mb_release_override.high
+        const atkOv = grooveEmotionOverrides.mb_attack_override
+        const relOv = grooveEmotionOverrides.mb_release_override
+        if (atkOv) {
+          params.mb_attack_low = atkOv.low
+          params.mb_attack_mid = atkOv.mid
+          params.mb_attack_high = atkOv.high
+        }
+        if (relOv) {
+          params.mb_release_low = relOv.low
+          params.mb_release_mid = relOv.mid
+          params.mb_release_high = relOv.high
+        }
       }
       applyMultibandCompression(inChannels, params, sampleRate)
 

@@ -107,7 +107,8 @@ export interface BrowserDeliveryResult {
  * Selectors are semantic (text content, aria-labels, placeholder text)
  * to survive minor UI changes.
  */
-import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
+// Browser distribution types are loaded at runtime via distrokid-delivery.ts
+// (not needed for pricing static analysis)
 
 /**
  * DistroKid Tier & Add-on Pricing (Researched July 2026 from distrokid.com/pricing/)
@@ -221,8 +222,8 @@ export function buildPricingTable(): Array<{
 }> {
   return Object.entries(DISTROKID_TIERS).map(([key, tier]) => ({
     tier: tier.name,
-    distrokid: `$${tier.dkPrice}/yr`,
-    rainPrice: formatZar(calculateRainPrice(tier.dkPrice)),
+    distrokid: `R${tier.dkPriceZar}/yr`,
+    rainPrice: formatZar(tier.rainPriceZar),
     artists: String(tier.artists),
     features: tier.features.join(', '),
   }))
@@ -237,14 +238,21 @@ export function buildAddonTable(): Array<{
   rainPrice: string
   note: string
 }> {
-  return Object.entries(DISTROKID_ADDONS).map(([, addon]) => ({
-    name: addon.name,
-    distrokid: 'dkPrice' in addon
-      ? `$${addon.dkPrice}/yr`
-      : `$${addon.dkSingle} single / $${addon.dkAlbum} album`,
-    rainPrice: 'rainSingle' in addon
-      ? `${formatZar(addon.rainSingle)} single / ${formatZar(addon.rainAlbum)} album`
-      : formatZar(addon.rainPrice),
-    note: addon.note ?? ('perYear' in addon && addon.perYear ? 'Per year' : ''),
-  }))
+  return Object.entries(DISTROKID_ADDONS).map(([, addon]) => {
+    const a = addon as Record<string, unknown>
+    const dkStr = 'dkPrice' in a
+      ? `$${a.dkPrice}/yr`
+      : `$${a.dkSingle} single / $${a.dkAlbum} album`
+    const rainStr = 'rainSingle' in a
+      ? `${formatZar(a.rainSingle as number)} single / ${formatZar(a.rainAlbum as number)} album`
+      : formatZar(a.rainPrice as number)
+    const noteStr = 'note' in a ? String(a.note) :
+      ('perYear' in a && a.perYear ? 'Per year' : '')
+    return {
+      name: String(a.name),
+      distrokid: dkStr,
+      rainPrice: rainStr,
+      note: noteStr,
+    }
+  })
 }

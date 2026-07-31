@@ -29,7 +29,26 @@
  * content) to survive DistroKid's frequent UI changes.
  */
 
-import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
+// Stub types for browser automation (playwright integration requires `npm install playwright`)
+// The browser-distribution module is loaded at runtime only when a live DistroKid
+// delivery is triggered — it is not needed for type checking or static analysis.
+
+// Define these types locally since they don't exist in distribution-multitrack
+interface BrowserAutomationConfig {
+  headless?: boolean
+  credentials?: { email?: string; password?: string }
+  metadata?: { artist?: string; title?: string; genre?: string; language?: string; isrc?: string; upc?: string; album?: string; releaseDate?: string; label?: string; explicitLyrics?: string; artworkPath?: string }
+  packagePath?: string
+  loginEmail?: string
+  loginPassword?: string
+  dspLink?: string
+  timeoutMs?: number
+}
+interface BrowserDeliveryResult { ok: boolean; steps: BrowserStepResult[]; error?: string; totalDurationMs: number; aggregator?: string }
+interface BrowserStepResult { step: string; ok: boolean; durationMs: number; error?: string; screenshot?: string }
+type PlaywrightPage = Record<string, unknown>
+type PlaywrightBrowser = Record<string, unknown>
+type PlaywrightLaunchOptions = Record<string, unknown>
 
 // ---------------------------------------------------------------------------
 // Step implementations — each returns { ok, error?, screenshot? }
@@ -123,6 +142,7 @@ async function stepFillMetadata(
   const start = Date.now()
   const step = 'fill-metadata'
   const m = config.metadata
+  if (!m) return { step, ok: false, durationMs: Date.now() - start, error: 'No metadata provided' }
   try {
     // Artist name
     await page.fill('input[name*="artist" i], input[placeholder*="artist" i], input[aria-label*="artist" i]', m.artist)
@@ -215,7 +235,7 @@ async function stepUploadArtwork(
 ): Promise<BrowserStepResult> {
   const start = Date.now()
   const step = 'upload-artwork'
-  if (!config.metadata.artworkPath) {
+  if (!config.metadata?.artworkPath) {
     return { step, ok: true, durationMs: Date.now() - start }
   }
   try {
@@ -223,7 +243,7 @@ async function stepUploadArtwork(
     if (!fileInput) {
       return { step, ok: false, durationMs: Date.now() - start, error: 'Could not find artwork upload element' }
     }
-    await fileInput.setInputFiles(config.metadata.artworkPath)
+    await fileInput.setInputFiles(config.metadata!.artworkPath!)
     await page.waitForTimeout(3000)
     return { step, ok: true, durationMs: Date.now() - start }
   } catch (e) {
@@ -239,10 +259,12 @@ async function stepSetReleaseDate(
   const start = Date.now()
   const step = 'release-date'
   try {
+    const md = config.metadata
+    if (!md) return { step, ok: false, durationMs: Date.now() - start, error: 'No metadata provided' }
     // Set release date — usually a date input
     const dateInput = await page.$('input[type="date"], input[name*="release" i], input[placeholder*="release" i]')
-    if (dateInput) {
-      await dateInput.fill(config.metadata.releaseDate)
+    if (dateInput && md.releaseDate) {
+      await dateInput.fill(md.releaseDate)
     }
     await page.waitForTimeout(500)
 
@@ -332,6 +354,8 @@ export async function deliverViaDistroKid(
 
   try {
     // Dynamic import — Playwright is ~170 MB and not bundled
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore: playwright is an optional dependency, loaded at runtime only
     const { chromium } = await import('playwright')
 
     browser = await chromium.launch({
@@ -399,6 +423,8 @@ export async function deliverViaDistroKid(
  */
 export async function isBrowserAutomationAvailable(): Promise<boolean> {
   try {
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore: playwright is an optional dependency
     await import('playwright')
     return true
   } catch {

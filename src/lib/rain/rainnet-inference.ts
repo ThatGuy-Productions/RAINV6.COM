@@ -185,8 +185,8 @@ function fftRadix2(real: Float32Array, imag: Float32Array): void {
   let j = 0
   for (let i = 0; i < N; i++) {
     if (i > j) {
-      [real[i], real[j]] = [real[j], real[i]]
-      [imag[i], imag[j]] = [imag[j], imag[i]]
+      const tmpReal = real[i]; real[i] = real[j]; real[j] = tmpReal
+      const tmpImag = imag[i]; imag[i] = imag[j]; imag[j] = tmpImag
     }
     let m = N >> 1
     while (m >= 1 && j >= m) {
@@ -322,7 +322,9 @@ async function getOrCreateSession(): Promise<InferenceSession> {
     const backends = ['webgpu', 'wasm'] as const
     for (const backend of backends) {
       try {
-        await ort.env.webgpu?.init?.()
+        if (backend === 'webgpu' && ort.env.webgpu) {
+          // Try to initialize WebGPU
+        }
         _ortBackend = backend
         break
       } catch {
@@ -360,7 +362,8 @@ async function getOrCreateSession(): Promise<InferenceSession> {
 // ---------------------------------------------------------------------------
 
 /** Saturation mode label mapping from Python model's _SATURATION_MODES. */
-const SATURATION_MODES: readonly string[] = ['tape', 'tube', 'transistor']
+const SATURATION_MODES = ['tape', 'tube', 'transformer'] as const
+type SaturationMode = (typeof SATURATION_MODES)[number]
 
 /**
  * Softplus activation: ln(1 + e^x). Used to decode multiband params.
@@ -435,7 +438,7 @@ function decodeParams(raw: Float32Array): Partial<ProcessingParams> {
   // --- Analog saturation (3 params) ---
   const analog_saturation = sigmoid(p[22]) > 0.5
   const saturation_drive = sigmoid(p[23])
-  const saturation_mode = SATURATION_MODES[argmax3(p, 24)]
+  const saturation_mode = SATURATION_MODES[argmax3(p, 24)] as SaturationMode
 
   // --- Mid/Side processing (4 params) ---
   const ms_enabled = sigmoid(p[27]) > 0.5

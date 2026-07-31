@@ -167,15 +167,16 @@ async function handleCreate(
   }
 
   const validProviders: PaymentMethod[] = ['payfast', 'ozow', 'stripe']
-  if (!validProviders.includes(provider)) {
+  if (!validProviders.includes(provider as PaymentMethod)) {
     return NextResponse.json(
       { ok: false, error: `Invalid payment provider. Must be one of: ${validProviders.join(', ')}.`, stage: 'validate' },
       { status: 400, headers: corsHeaders(origin) },
     )
   }
+  const resolvedProvider: PaymentMethod = provider as PaymentMethod
 
   // ── Create isolated payment session ─────────────────────────────────────
-  const result = isolation.createSession(userSessionId, provider, amountCents, req)
+  const result = isolation.createSession(userSessionId, resolvedProvider, amountCents, req)
 
   if ('error' in result) {
     const status = result.retryAfter ? 429 : 400
@@ -220,7 +221,7 @@ async function handleCreate(
   }
 
   // ── Live mode: generate provider redirect URL ──────────────────────────
-  const providerInstance = isolation.getProvider(provider)
+  const providerInstance = isolation.getProvider(resolvedProvider)
   if (!providerInstance || !providerInstance.configured) {
     return NextResponse.json(
       { ok: false, error: 'Payment provider is not configured.', stage: 'provider' },

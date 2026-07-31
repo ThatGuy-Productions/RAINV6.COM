@@ -85,7 +85,7 @@ export function DistributeTab() {
   }, [refreshJobs])
 
   const handleGenerateIdentifiers = () => {
-    setMetadata({ isrc: generateIsrc(), upc: generateUpc() })
+    setMetadata({ isrc: generateIsrc(''), upc: generateUpc('') })
   }
 
   // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected

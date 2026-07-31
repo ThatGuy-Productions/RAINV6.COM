@@ -476,7 +476,7 @@ export function stereoWidthRatio(left: Float32Array, right: Float32Array): numbe
 // Saturation (analog modeling)
 // ---------------------------------------------------------------------------
 
-export type SaturationMode = 'tape' | 'tube' | 'transformer'
+export type SaturationMode = 'tape' | 'tube' | 'transformer' | 'transistor'
 
 /** Apply analog saturation in-place. drive 0..1 (where 1 = maximum drive). */
 export function applySaturation(samples: Float32Array, drive: number, mode: SaturationMode = 'tape') {
@@ -525,6 +525,9 @@ export function applySaturation(samples: Float32Array, drive: number, mode: Satu
         // Square-law approximation with soft knee
         y = x + k * x * x * Math.sign(x) * -0.3 + k * 0.3 * Math.tanh(x * 3)
         y = Math.max(-1, Math.min(1, y))
+        break
+      default:
+        y = x
         break
     }
     samples[i] = y
