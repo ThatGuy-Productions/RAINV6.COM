@@ -1,0 +1,160 @@
+// RAIN V6 — Prisma schema (Wave 3 P2-1)
+//
+// Sandbox provider is `sqlite` (Next.js-only environment). Production uses
+// PostgreSQL 18 (per spec) with row-level security policies. The model shape
+// below mirrors the production PostgreSQL schema; only the JSON-typed columns
+// (`inputMetadata`, `renderSettings`) are stored as `String` because SQLite
+// has no native JSON type. Production migrations will switch these to `Json`.
+//
+// 4 spec-mandated tables: Account, Session, Render, InferenceJob.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  tier         String   @default("free") // free|enterprise
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  /// Denormalized last-activity timestamp, bumped on every Event for this
+  /// user. Avoids scanning Event for "active in last 24h" style queries.
+  lastActiveAt DateTime @default(now())
+  sessions     Session[]
+  renders      Render[]
+  authTokens   AuthToken[]
+  events       Event[]
+}
+
+/// Authentication session tokens (distinct from mastering `Session`).
+/// The token value itself is never stored — only its SHA-256 hash, so a DB
+/// leak cannot be replayed. Used by the Enterprise admin door login flow.
+model AuthToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Session {
+  id              String   @id @default(cuid())
+  userId          String
+  user            Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String   @default("Untitled")
+  inputFileHash   String?
+  inputMetadata   String?  // JSON string (SQLite has no JSON type)
+  renderSettings  String?  // JSON string
+  rainDspWasmHash String?
+  status          String   @default("draft") // draft|inferring|rendered|archived
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  renders         Render[]
+  inferenceJobs   InferenceJob[]
+
+  @@index([userId])
+}
+
+model Render {
+  id              String   @id @default(cuid())
+  sessionId       String
+  session         Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId          String
+  user            Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outputFileHash  String
+  format          String   // wav24|wav16|mp3_320|atmos
+  loudnessLufs    Float?
+  truePeakDbfs    Float?
+  renderTimeMs    Int?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([sessionId])
+}
+
+model InferenceJob {
+  id          String    @id @default(cuid())
+  sessionId   String
+  session     Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  status      String    @default("pending") // pending|running|completed|failed
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+}
+
+/// User feedback — free-text, no auth required, investor-valuation friendly.
+model Feedback {
+  id            String   @id @default(cuid())
+  comment       String
+  email         String?
+  allowFollowUp Boolean  @default(false)
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Generic append-only event log — the source of truth for activation,
+/// retention, and funnel math (see src/lib/rain/server-analytics.ts).
+/// Additive to Account/Session/Render, not a replacement for them.
+model Event {
+  id        String   @id @default(cuid())
+  /// Null for pre-signup / anonymous events.
+  userId    String?
+  user      Account? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Client-generated anonymous ID, set before signup so pre-auth funnel
+  /// steps can be attributed to an account after it's created.
+  anonId    String?
+  /// signup | login | session_created | render_completed | export_completed
+  /// | tab_viewed | feedback_submitted | referral_signup
+  type      String
+  /// JSON string, e.g. { "format": "mp3_320", "tab": "stems" }
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, type, createdAt])
+  @@index([anonId, type, createdAt])
+  @@index([type, createdAt])
+}
+
+/// Public user reviews — real DB-backed testimonials shown on the landing
+/// page's live reviews section. Submitted by signed-in users (or anonymously
+/// with a name). Auto-approved for signed-in users; anonymous submissions
+/// require manual approval (approved=false by default).
+model Review {
+  id        String   @id @default(cuid())
+  /// Null for anonymous submissions, set when the reviewer is signed in.
+  userId    String?
+  /// Display name shown publicly (e.g. "Maya Okonkwo"). Required.
+  name      String
+  /// Optional role/credential line (e.g. "Mastering Engineer · Berlin").
+  role      String?
+  /// 1-5 star rating.
+  rating    Int
+  /// Short headline (e.g. "Finally, honest LUFS in a browser").
+  title     String
+  /// Full review body (max ~1000 chars).
+  body      String
+  /// Only approved=true reviews are returned by the public GET endpoint.
+  /// Signed-in users auto-approve; anonymous submissions default to false.
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([approved, createdAt])
+}

@@ -1,0 +1,980 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* RAIN V6 brand tokens */
+  --color-rain-accent: var(--rain-accent);
+  --color-rain-accent-soft: var(--rain-accent-soft);
+  --color-rain-surface: var(--rain-surface);
+  --color-rain-surface-2: var(--rain-surface-2);
+  --color-rain-surface-3: var(--rain-surface-3);
+  --color-rain-border: var(--rain-border);
+  --color-rain-glow: var(--rain-glow);
+}
+
+/* =========================================================================
+   RAIN V6 — Dark studio aesthetic (default)
+   The studio interface is dark by design. Light mode supports the landing
+   page marketing context.
+   ========================================================================= */
+:root {
+  --radius: 0.5rem;
+  /* Brand */
+  --rain-accent: #AAFF00;          /* signature lime */
+  --rain-accent-soft: rgba(170, 255, 0, 0.12);
+  --rain-glow: rgba(170, 255, 0, 0.35);
+  --rain-surface: #0A0B0E;          /* near-black */
+  --rain-surface-2: #12141A;
+  --rain-surface-3: #1B1E27;
+  --rain-border: #2A2E3A;
+
+  /* shadcn tokens (dark default for studio) */
+  --background: oklch(0.10 0.005 250); /* near-black with cold tint */
+  --foreground: oklch(0.97 0.005 250);
+  --card: oklch(0.13 0.006 250);
+  --card-foreground: oklch(0.97 0.005 250);
+  --popover: oklch(0.13 0.006 250);
+  --popover-foreground: oklch(0.97 0.005 250);
+  --primary: #AAFF00;
+  --primary-foreground: oklch(0.10 0.005 250);
+  --secondary: oklch(0.20 0.008 250);
+  --secondary-foreground: oklch(0.97 0.005 250);
+  --muted: oklch(0.18 0.006 250);
+  --muted-foreground: oklch(0.65 0.008 250);
+  --accent: oklch(0.22 0.008 250);
+  --accent-foreground: oklch(0.97 0.005 250);
+  --destructive: oklch(0.65 0.22 25);
+  --border: oklch(0.25 0.008 250);
+  --input: oklch(0.20 0.008 250);
+  --ring: var(--rain-accent);
+  --chart-1: #AAFF00;
+  --chart-2: #00D4FF;
+  --chart-3: #8B5CF6;
+  --chart-4: #F97316;
+  --chart-5: #D946EF;
+  --sidebar: oklch(0.12 0.006 250);
+  --sidebar-foreground: oklch(0.97 0.005 250);
+  --sidebar-primary: #AAFF00;
+  --sidebar-primary-foreground: oklch(0.10 0.005 250);
+  --sidebar-accent: oklch(0.20 0.008 250);
+  --sidebar-accent-foreground: oklch(0.97 0.005 250);
+  --sidebar-border: oklch(0.22 0.008 250);
+  --sidebar-ring: var(--rain-accent);
+}
+
+/* =========================================================================
+   Light mode (landing page / marketing)
+   ========================================================================= */
+.light {
+  --background: oklch(0.99 0.002 250);
+  --foreground: oklch(0.15 0.005 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.15 0.005 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.15 0.005 250);
+  --primary: #AAFF00;
+  --primary-foreground: oklch(0.10 0.005 250);
+  --secondary: oklch(0.96 0.003 250);
+  --secondary-foreground: oklch(0.20 0.005 250);
+  --muted: oklch(0.96 0.003 250);
+  --muted-foreground: oklch(0.50 0.008 250);
+  --accent: oklch(0.95 0.003 250);
+  --accent-foreground: oklch(0.20 0.005 250);
+  --destructive: oklch(0.55 0.22 25);
+  --border: oklch(0.90 0.005 250);
+  --input: oklch(0.95 0.003 250);
+  --ring: #AAFF00;
+  --rain-surface: #FFFFFF;
+  --rain-surface-2: #F5F6F8;
+  --rain-surface-3: #E9EBF0;
+  --rain-border: #D5D9E2;
+}
+
+/* Dark alias (used when explicitly forcing dark studio) */
+.dark {
+  --background: oklch(0.10 0.005 250);
+  --foreground: oklch(0.97 0.005 250);
+  --card: oklch(0.13 0.006 250);
+  --card-foreground: oklch(0.97 0.005 250);
+  --popover: oklch(0.13 0.006 250);
+  --popover-foreground: oklch(0.97 0.005 250);
+  --primary: #AAFF00;
+  --primary-foreground: oklch(0.10 0.005 250);
+  --secondary: oklch(0.20 0.008 250);
+  --secondary-foreground: oklch(0.97 0.005 250);
+  --muted: oklch(0.18 0.006 250);
+  --muted-foreground: oklch(0.65 0.008 250);
+  --accent: oklch(0.22 0.008 250);
+  --accent-foreground: oklch(0.97 0.005 250);
+  --destructive: oklch(0.65 0.22 25);
+  --border: oklch(0.25 0.008 250);
+  --input: oklch(0.20 0.008 250);
+  --ring: var(--rain-accent);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html, body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* =========================================================================
+   RAIN V6 — custom utility classes
+   ========================================================================= */
+@layer utilities {
+  .rain-bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(170, 255, 0, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(170, 255, 0, 0.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .rain-bg-dots {
+    background-image: radial-gradient(rgba(170, 255, 0, 0.18) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+  .rain-glow {
+    box-shadow: 0 0 24px -4px var(--rain-glow), 0 0 1px 0 var(--rain-accent);
+  }
+  .rain-glow-soft {
+    box-shadow: 0 0 32px -8px var(--rain-glow);
+  }
+  .rain-text-glow {
+    text-shadow: 0 0 18px var(--rain-glow);
+  }
+  .rain-gradient-text {
+    background: linear-gradient(120deg, #AAFF00 0%, #00D4FF 50%, #8B5CF6 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .rain-gradient-text-lime {
+    background: linear-gradient(120deg, #AAFF00 0%, #84CC16 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .rain-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .rain-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .rain-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--rain-border);
+    border-radius: 3px;
+  }
+  .rain-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--rain-accent);
+  }
+  .rain-panel {
+    background: linear-gradient(180deg, var(--rain-surface-2) 0%, var(--rain-surface) 100%);
+    border: 1px solid var(--rain-border);
+  }
+  .rain-equalizer {
+    background-image:
+      repeating-linear-gradient(
+        90deg,
+        rgba(170, 255, 0, 0.5) 0px,
+        rgba(170, 255, 0, 0.5) 2px,
+        transparent 2px,
+        transparent 6px
+      );
+  }
+}
+
+/* Range slider styling for rain accent */
+input[type='range'].rain-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--rain-border);
+  border-radius: 2px;
+  outline: none;
+}
+input[type='range'].rain-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  box-shadow: 0 0 12px -2px var(--rain-glow);
+  transition: transform 0.1s ease;
+}
+input[type='range'].rain-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type='range'].rain-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  border: none;
+}
+
+/* Pulse animation for live meters */
+@keyframes rain-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.rain-pulse { animation: rain-pulse 1.4s ease-in-out infinite; }
+
+@keyframes rain-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.rain-blink { animation: rain-blink 1s steps(2, end) infinite; }
+
+@keyframes rain-scan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.rain-scan::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(170, 255, 0, 0.15), transparent);
+  animation: rain-scan 2s ease-in-out infinite;
+}
+
+@keyframes rain-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.rain-float { animation: rain-float 4s ease-in-out infinite; }
+
+/* =========================================================================
+   RAIN V6 — CSS Enhancement Pack (Task 3-a)
+   New keyframe animations, utility classes, slider variants, scroll-driven
+   animations, custom selection colors, and focus-visible global styles.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   1. New keyframe animations
+   --------------------------------------------------------------------------- */
+
+/* Horizontal shimmer — sweeping highlight from left to right */
+@keyframes rain-shimmer {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+.rain-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(170, 255, 0, 0.08) 40%,
+    rgba(170, 255, 0, 0.18) 50%,
+    rgba(170, 255, 0, 0.08) 60%,
+    transparent 100%
+  );
+  animation: rain-shimmer 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Simple fade in */
+@keyframes rain-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.rain-fade-in {
+  animation: rain-fade-in 0.5s ease-out forwards;
+}
+
+/* Slide up + fade in */
+@keyframes rain-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rain-slide-up {
+  animation: rain-slide-up 0.5s ease-out forwards;
+}
+
+/* Scale in + fade in */
+@keyframes rain-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.rain-scale-in {
+  animation: rain-scale-in 0.35s ease-out forwards;
+}
+
+/* Slow rotation for decorative elements */
+@keyframes rain-rotate-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.rain-rotate-slow {
+  animation: rain-rotate-slow 20s linear infinite;
+}
+
+/* Meter bar bounce — subtle height pulse */
+@keyframes rain-meters-bounce {
+  0%   { transform: scaleY(0.8); }
+  60%  { transform: scaleY(1.0); }
+  80%  { transform: scaleY(0.95); }
+  100% { transform: scaleY(0.8); }
+}
+.rain-meters-bounce {
+  animation: rain-meters-bounce 1.2s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/* Breathing glow pulse — box-shadow intensity oscillation */
+@keyframes rain-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px -2px rgba(170, 255, 0, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 24px -2px rgba(170, 255, 0, 0.45);
+  }
+}
+.rain-glow-pulse {
+  animation: rain-glow-pulse 2.5s ease-in-out infinite;
+}
+
+/* Gradient text shimmer — background-position sweep */
+@keyframes rain-text-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.rain-text-shimmer {
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: rain-text-shimmer 3s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   2. New utility classes
+   --------------------------------------------------------------------------- */
+@layer utilities {
+  /* Glass morphism — light (enhanced per Task 8-a) */
+  .rain-glass {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: rgba(18, 20, 26, 0.65);
+    border: 1px solid rgba(170, 255, 0, 0.12);
+    box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  /* Glass morphism — strong (more opaque) */
+  .rain-glass-strong {
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    background: rgba(18, 20, 26, 0.8);
+    border: 1px solid rgba(170, 255, 0, 0.15);
+    box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  /* Card hover — lift + glow on hover */
+  .rain-card-hover {
+    transition: all 0.25s ease;
+  }
+  .rain-card-hover:hover {
+    transform: scale(1.02);
+    box-shadow: 0 0 28px -6px var(--rain-glow), 0 0 1px 0 var(--rain-accent);
+  }
+
+  /* Primary button — lime bg, dark text, hover glow, active scale */
+  .rain-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    border-radius: 0.5rem;
+    background: var(--rain-accent);
+    color: #0A0B0E;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 0 12px -4px var(--rain-glow);
+  }
+  .rain-btn-primary:hover {
+    box-shadow: 0 0 24px -2px var(--rain-glow), 0 0 1px 0 var(--rain-accent);
+    filter: brightness(1.1);
+  }
+  .rain-btn-primary:active {
+    transform: scale(0.97);
+  }
+
+  /* Ghost button — bordered, hover lime border */
+  .rain-btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--foreground);
+    border: 1px solid var(--rain-border);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .rain-btn-ghost:hover {
+    border-color: var(--rain-accent);
+    color: var(--rain-accent);
+    box-shadow: 0 0 12px -6px var(--rain-glow);
+  }
+
+  /* Inline badge — mono, uppercase, tracking */
+  .rain-badge {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-geist-mono), ui-monospace, monospace;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 9999px;
+    border: 1px solid var(--rain-border);
+    background: var(--rain-surface-2);
+    color: var(--rain-accent);
+    line-height: 1.4;
+  }
+
+  /* Horizontal divider — gradient fade */
+  .rain-divider {
+    height: 1px;
+    width: 100%;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--rain-border) 20%,
+      var(--rain-border) 80%,
+      transparent 100%
+    );
+    border: none;
+  }
+
+  /* Active/focused ring — lime pulse */
+  .rain-ring-active {
+    box-shadow: 0 0 0 2px var(--rain-surface), 0 0 0 4px var(--rain-accent);
+    animation: rain-glow-pulse 2s ease-in-out infinite;
+  }
+
+  /* Meter track — base style for meter bars */
+  .rain-meter-track {
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: var(--rain-surface-3);
+    overflow: hidden;
+  }
+
+  /* Meter fill — animated fill with glow */
+  .rain-meter-fill {
+    height: 100%;
+    border-radius: 9999px;
+    background: var(--rain-accent);
+    transition: all 0.3s ease;
+    box-shadow: 0 0 8px -2px var(--rain-glow);
+  }
+
+  /* Noise overlay — subtle SVG turbulence texture */
+  .rain-noise-overlay {
+    position: relative;
+  }
+  .rain-noise-overlay::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.015;
+    pointer-events: none;
+    z-index: 9999;
+    filter: url(#rain-noise-filter);
+    background: white;
+    mix-blend-mode: overlay;
+  }
+
+  /* Gradient border — uses background-clip padding trick */
+  .rain-gradient-border {
+    position: relative;
+    background: linear-gradient(180deg, var(--rain-surface-2) 0%, var(--rain-surface) 100%);
+    border: none;
+    border-radius: 0.5rem;
+  }
+  .rain-gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: linear-gradient(135deg, var(--rain-accent), rgba(170, 255, 0, 0.15), var(--rain-border));
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
+
+/* SVG filter for noise overlay (referenced by .rain-noise-overlay) */
+.rain-noise-svg {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+   3. Enhanced range slider styling
+   --------------------------------------------------------------------------- */
+
+/* Large knob variant — 18px thumb, 6px track */
+input[type='range'].rain-range-lg {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: var(--rain-border);
+  border-radius: 3px;
+  outline: none;
+}
+input[type='range'].rain-range-lg::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  box-shadow: 0 0 16px -2px var(--rain-glow);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+input[type='range'].rain-range-lg::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 24px -2px var(--rain-glow);
+}
+input[type='range'].rain-range-lg::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 16px -2px var(--rain-glow);
+}
+
+/* Focus-visible ring on all rain-range sliders */
+input[type='range'].rain-range:focus-visible,
+input[type='range'].rain-range-lg:focus-visible {
+  outline: 2px solid var(--rain-accent);
+  outline-offset: 3px;
+}
+
+/* Vertical range slider */
+input[type='range'].rain-range-vertical {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 4px;
+  height: 120px;
+  background: var(--rain-border);
+  border-radius: 2px;
+  outline: none;
+}
+input[type='range'].rain-range-vertical::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  box-shadow: 0 0 12px -2px var(--rain-glow);
+}
+input[type='range'].rain-range-vertical::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  cursor: pointer;
+  border: none;
+}
+
+/* ---------------------------------------------------------------------------
+   4. Scroll-driven animations (progressive enhancement)
+   --------------------------------------------------------------------------- */
+@keyframes rain-reveal-anim {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rain-reveal {
+  animation: rain-reveal-anim ease-out both;
+  animation-timeline: view();
+  animation-range: entry 0% entry 100%;
+}
+
+/* Fallback for browsers without scroll-driven animations */
+@supports not (animation-timeline: view()) {
+  .rain-reveal {
+    animation: rain-slide-up 0.6s ease-out forwards;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   5. Custom selection color
+   --------------------------------------------------------------------------- */
+::selection {
+  background: rgba(170, 255, 0, 0.3);
+  color: #000000;
+}
+::-moz-selection {
+  background: rgba(170, 255, 0, 0.3);
+  color: #000000;
+}
+
+/* ---------------------------------------------------------------------------
+   6. Focus-visible global styles
+   --------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--rain-accent);
+  outline-offset: 2px;
+}
+
+/* Preserve outline-none for elements that explicitly opt out */
+[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
+/* =========================================================================
+   RAIN V6 — Pipeline Data Flow Animations (Task 3-e)
+   Animations for the 16-stage pipeline: sequential glow, flow bars,
+   connector pulses, and the signature lime data-flow particle.
+   ========================================================================= */
+
+/* Sequential stage glow — left accent bar pulses on then fades */
+@keyframes rain-stage-glow {
+  0%, 15% { opacity: 0.15; }
+  20%, 35% { opacity: 1; box-shadow: 0 0 8px 1px rgba(170, 255, 0, 0.5); }
+  40%, 100% { opacity: 0.15; }
+}
+.rain-stage-glow {
+  animation: rain-stage-glow 4s ease-in-out infinite;
+  opacity: 0.15;
+}
+
+/* Top progress bar — sweep from left to right within the card */
+@keyframes rain-stage-progress {
+  0%, 10% { transform: translateX(-100%); }
+  25%, 40% { transform: translateX(0%); }
+  55%, 100% { transform: translateX(100%); }
+}
+.rain-stage-progress {
+  width: 100%;
+  animation: rain-stage-progress 4s ease-in-out infinite;
+  transform: translateX(-100%);
+}
+
+/* Horizontal connector pulse — gradient travels left to right */
+@keyframes rain-connector-line-pulse {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.rain-connector-line {
+  background: linear-gradient(
+    90deg,
+    rgba(170, 255, 0, 0.1) 0%,
+    rgba(170, 255, 0, 0.6) 50%,
+    rgba(170, 255, 0, 0.1) 100%
+  );
+  background-size: 200% 100%;
+  animation: rain-connector-line-pulse 2s linear infinite;
+}
+
+/* Vertical connector pulse — gradient travels top to bottom */
+@keyframes rain-connector-vline-pulse {
+  0% { background-position: 0 -200%; }
+  100% { background-position: 0 200%; }
+}
+.rain-connector-vline {
+  background: linear-gradient(
+    180deg,
+    rgba(170, 255, 0, 0.1) 0%,
+    rgba(170, 255, 0, 0.6) 50%,
+    rgba(170, 255, 0, 0.1) 100%
+  );
+  background-size: 100% 200%;
+  animation: rain-connector-vline-pulse 2s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Data flow particle — lime dot that traverses the pipeline left→right,
+   drops down a row, continues. Desktop (4×4 grid).
+   Total cycle ≈ 6s, then repeats.
+   --------------------------------------------------------------------------- */
+@keyframes rain-data-flow-desktop {
+  /* Row 1: left → right (0% – 22%) */
+  0%   { left: 0%;    top: 0;    opacity: 0; }
+  2%   { left: 0%;    top: 0;    opacity: 1; }
+  22%  { left: 100%;  top: 0;    opacity: 1; }
+
+  /* Drop to row 2 (22% – 28%) */
+  25%  { left: 100%;  top: 25%;  opacity: 1; }
+
+  /* Row 2: right → left (snake) — but we go left→right for simplicity */
+  28%  { left: 0%;    top: 25%;  opacity: 1; }
+  47%  { left: 100%;  top: 25%;  opacity: 1; }
+
+  /* Drop to row 3 */
+  50%  { left: 100%;  top: 50%;  opacity: 1; }
+
+  /* Row 3 */
+  53%  { left: 0%;    top: 50%;  opacity: 1; }
+  72%  { left: 100%;  top: 50%;  opacity: 1; }
+
+  /* Drop to row 4 */
+  75%  { left: 100%;  top: 75%;  opacity: 1; }
+
+  /* Row 4 */
+  78%  { left: 0%;    top: 75%;  opacity: 1; }
+  95%  { left: 100%;  top: 75%;  opacity: 1; }
+  98%  { left: 100%;  top: 75%;  opacity: 0; }
+  100% { left: 100%;  top: 75%;  opacity: 0; }
+}
+
+.rain-data-flow-particle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  box-shadow: 0 0 16px 4px rgba(170, 255, 0, 0.6), 0 0 4px 1px rgba(170, 255, 0, 0.9);
+  pointer-events: none;
+  z-index: 20;
+  animation: rain-data-flow-desktop 6s ease-in-out infinite;
+  opacity: 0;
+}
+
+/* Mobile data flow — simplified left→right sweep */
+@keyframes rain-data-flow-mobile {
+  0%   { left: 0%;   top: 0;   opacity: 0; }
+  3%   { left: 0%;   top: 0;   opacity: 1; }
+  90%  { left: 100%; top: 85%; opacity: 1; }
+  97%  { left: 100%; top: 85%; opacity: 0; }
+  100% { left: 100%; top: 85%; opacity: 0; }
+}
+
+.rain-data-flow-particle-sm {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--rain-accent);
+  box-shadow: 0 0 12px 3px rgba(170, 255, 0, 0.5), 0 0 3px 1px rgba(170, 255, 0, 0.8);
+  pointer-events: none;
+  z-index: 20;
+  animation: rain-data-flow-mobile 6s ease-in-out infinite;
+  opacity: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Particle drift animation (Task 8-a)
+   --------------------------------------------------------------------------- */
+@keyframes rain-drift-up {
+  0% {
+    transform: translateY(100vh) translateX(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(50vh) translateX(var(--drift-x, 10px));
+    opacity: 0.6;
+  }
+  90% {
+    opacity: 0.4;
+  }
+  100% {
+    transform: translateY(-20vh) translateX(var(--drift-x-end, -10px));
+    opacity: 0;
+  }
+}
+
+/* Particle with trail effect */
+.rain-particle-trail {
+  position: relative;
+}
+.rain-particle-trail::before {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 1px;
+  left: -24px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: linear-gradient(to left, var(--particle-color, rgba(170, 255, 0, 0.6)), transparent);
+  opacity: 0.5;
+}
+
+/* ---------------------------------------------------------------------------
+   Ambient particle drift for studio view (Task 9-a)
+   - Slower, more subtle than landing hero
+   - 20s cycle, gentle upward drift with horizontal sway
+   --------------------------------------------------------------------------- */
+@keyframes rain-drift-slow {
+  0% {
+    transform: translateY(0) translateX(0);
+    opacity: var(--particle-base-opacity, 0.1);
+  }
+  25% {
+    transform: translateY(-25vh) translateX(var(--sway-x, 8px));
+    opacity: var(--particle-mid-opacity, 0.12);
+  }
+  50% {
+    transform: translateY(-50vh) translateX(calc(var(--sway-x, 8px) * -0.5));
+    opacity: var(--particle-base-opacity, 0.1);
+  }
+  75% {
+    transform: translateY(-75vh) translateX(var(--sway-x-end, 6px));
+    opacity: var(--particle-mid-opacity, 0.12);
+  }
+  100% {
+    transform: translateY(-100vh) translateX(0);
+    opacity: var(--particle-base-opacity, 0.1);
+  }
+}
+
+.rain-drift-slow {
+  animation: rain-drift-slow 20s linear infinite;
+  will-change: transform, opacity;
+}
+
+/* ---------------------------------------------------------------------------
+   Animated gradient border for buttons (Task 8-a)
+   --------------------------------------------------------------------------- */
+@keyframes rain-gradient-border-rotate {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.rain-btn-gradient-border {
+  position: relative;
+  z-index: 0;
+  overflow: hidden;
+}
+.rain-btn-gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    #AAFF00 0%,
+    #00D4FF 25%,
+    #8B5CF6 50%,
+    #AAFF00 75%,
+    #00D4FF 100%
+  );
+  background-size: 300% 100%;
+  animation: rain-gradient-border-rotate 8s linear infinite;
+  opacity: 0.8;
+}
+.rain-btn-gradient-border::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--rain-accent);
+}
