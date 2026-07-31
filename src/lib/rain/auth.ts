@@ -30,6 +30,7 @@ import { randomBytes, scryptSync, timingSafeEqual, createHash } from 'crypto'
 import { cookies } from 'next/headers'
 import type { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
+import { shouldRotateToken } from '@/lib/rain/auth-hardening'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -182,44 +183,94 @@ export function clearCookieHeader(req?: NextRequest | null): string {
 // Session resolution
 // ---------------------------------------------------------------------------
 
+export interface SessionRotationResult {
+  user: AuthUser | null
+  /** If non-null, the session token should be rotated — set this cookie header. */
+  rotatedCookie: string | null
+}
+
 /**
  * Resolve the authenticated user from a request's session cookie.
  * Reads the `rain_admin_session` cookie, hashes it, looks up the
  * AuthToken row, verifies expiry, and returns the Account (without the
  * password hash). Returns null when not authenticated / expired / invalid.
  *
+ * Also checks for session staleness (>7 days old) and returns a
+ * `rotatedCookie` if the token should be rotated. The caller should
+ * set this cookie on the response to complete the rotation.
+ *
  * This is the single source of truth for "who is calling this route".
  * The tier-gate calls this first, so logging in as Enterprise
  * transparently unlocks every tier-gated feature across the app.
  */
-export async function getSessionUser(req: NextRequest | null): Promise<AuthUser | null> {
+export async function getSessionUserWithRotation(req: NextRequest | null): Promise<SessionRotationResult> {
   const token = await readSessionToken(req)
-  if (!token) return null
+  if (!token) return { user: null, rotatedCookie: null }
   try {
     const tokenHash = hashToken(token)
     const row = await db.authToken.findUnique({
       where: { tokenHash },
       include: { user: true },
     })
-    if (!row) return null
+    if (!row) return { user: null, rotatedCookie: null }
     // Expiry check (defensive — cookies also expire client-side).
     if (row.expiresAt.getTime() < Date.now()) {
       // Clean up the expired token opportunistically.
       await db.authToken.delete({ where: { id: row.id } }).catch(() => {})
-      return null
+      return { user: null, rotatedCookie: null }
     }
     const { user } = row
-    return {
+    const authUser: AuthUser = {
       id: user.id,
       email: user.email,
       name: user.name,
       tier: user.tier,
       createdAt: user.createdAt,
     }
+
+    // Check if the token should be rotated (>7 days old)
+    let rotatedCookie: string | null = null
+    if (shouldRotateToken(row.createdAt)) {
+      try {
+        // Mint a new token
+        const newToken = generateToken()
+        const newTokenHash = hashToken(newToken)
+        const newExpiresAt = new Date(Date.now() + SESSION_TTL_MS)
+        // Create the new token row
+        await db.authToken.create({
+          data: {
+            tokenHash: newTokenHash,
+            userId: user.id,
+            expiresAt: newExpiresAt,
+            userAgent: row.userAgent,
+            ip: row.ip,
+          },
+        })
+        // Delete the old token row
+        await db.authToken.delete({ where: { id: row.id } }).catch(() => {})
+        // Build the cookie header for the new token
+        rotatedCookie = sessionCookieHeader(newToken, req)
+      } catch (rotationErr) {
+        // Rotation failure should NOT block the request — log and continue
+        console.error('[auth] Token rotation failed (non-fatal):', rotationErr)
+      }
+    }
+
+    return { user: authUser, rotatedCookie }
   } catch (err) {
     console.error('[auth] getSessionUser failed:', err)
-    return null
+    return { user: null, rotatedCookie: null }
   }
+}
+
+/**
+ * Backward-compatible wrapper: resolves the authenticated user without
+ * performing session rotation. Existing callers that don't need rotation
+ * can continue using this function.
+ */
+export async function getSessionUser(req: NextRequest | null): Promise<AuthUser | null> {
+  const { user } = await getSessionUserWithRotation(req)
+  return user
 }
 
 /** Read the raw session token from the cookie on a request (or next/headers).

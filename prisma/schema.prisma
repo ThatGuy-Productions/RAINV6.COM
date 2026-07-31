@@ -30,8 +30,9 @@ model Account {
   lastActiveAt DateTime @default(now())
   sessions     Session[]
   renders      Render[]
-  authTokens   AuthToken[]
-  events       Event[]
+  authTokens      AuthToken[]
+  passwordResets  PasswordResetToken[]
+  events          Event[]
 }
 
 /// Authentication session tokens (distinct from mastering `Session`).
@@ -131,6 +132,21 @@ model Event {
   @@index([userId, type, createdAt])
   @@index([anonId, type, createdAt])
   @@index([type, createdAt])
+}
+
+/// Password reset tokens — 1-hour expiry, single-use, SHA-256 hashed.
+/// The raw token is sent to the user's email; only the hash is persisted.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime? // null until consumed — single-use
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 /// Public user reviews — real DB-backed testimonials shown on the landing
