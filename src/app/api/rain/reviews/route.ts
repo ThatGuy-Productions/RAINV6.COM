@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { sanitizeHtml, sanitizeOptional } from '@/lib/rain/sanitize'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -69,18 +70,18 @@ export async function POST(req: NextRequest) {
   }
 
   // Validate fields
+  // ── Sanitize user input to prevent stored XSS ────────────────────────
   const name =
-    typeof body.name === 'string' && body.name.trim()
-      ? body.name.trim().slice(0, MAX_NAME)
-      : user?.name?.slice(0, MAX_NAME) ?? null
-  if (!name) {
+    typeof body.name === 'string'
+      ? sanitizeHtml(body.name).slice(0, MAX_NAME) || null
+      : null
+  const fallbackName = user?.name?.slice(0, MAX_NAME) ?? null
+  const resolvedName = name || fallbackName
+  if (!resolvedName) {
     return NextResponse.json({ error: 'Name is required' }, { status: 400 })
   }
 
-  const role =
-    typeof body.role === 'string' && body.role.trim()
-      ? body.role.trim().slice(0, MAX_ROLE)
-      : null
+  const role = sanitizeOptional(body.role)?.slice(0, MAX_ROLE) ?? null
 
   const ratingNum = typeof body.rating === 'number' ? body.rating : parseInt(String(body.rating), 10)
   if (!Number.isFinite(ratingNum) || ratingNum < 1 || ratingNum > 5) {
@@ -88,16 +89,16 @@ export async function POST(req: NextRequest) {
   }
 
   const title =
-    typeof body.title === 'string' && body.title.trim()
-      ? body.title.trim().slice(0, MAX_TITLE)
+    typeof body.title === 'string'
+      ? sanitizeHtml(body.title).slice(0, MAX_TITLE) || null
       : null
   if (!title) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 })
   }
 
   const reviewBody =
-    typeof body.body === 'string' && body.body.trim()
-      ? body.body.trim().slice(0, MAX_BODY)
+    typeof body.body === 'string'
+      ? sanitizeHtml(body.body).slice(0, MAX_BODY) || null
       : null
   if (!reviewBody) {
     return NextResponse.json({ error: 'Review body is required' }, { status: 400 })
@@ -110,7 +111,7 @@ export async function POST(req: NextRequest) {
     const review = await db.review.create({
       data: {
         userId: user?.id ?? null,
-        name,
+        name: resolvedName,
         role,
         rating: ratingNum,
         title,

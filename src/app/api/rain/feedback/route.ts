@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { sanitizeHtml } from '@/lib/rain/sanitize'
 
 export const runtime = 'nodejs'
 
@@ -21,12 +22,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const comment = typeof body.comment === 'string' ? body.comment.trim() : ''
-  if (!comment || comment.length < 3) {
+  const rawComment = typeof body.comment === 'string' ? body.comment.trim() : ''
+  if (!rawComment || rawComment.length < 3) {
     return NextResponse.json({ error: 'Please provide at least a short comment' }, { status: 400 })
   }
-  if (comment.length > 2000) {
+  if (rawComment.length > 2000) {
     return NextResponse.json({ error: 'Comment too long — 2000 characters max' }, { status: 400 })
+  }
+
+  // ── Sanitize comment to prevent stored XSS ────────────────────────────
+  const comment = sanitizeHtml(rawComment).slice(0, 2000)
+  if (!comment || comment.length < 3) {
+    return NextResponse.json({ error: 'Please provide at least a short comment' }, { status: 400 })
   }
 
   try {
