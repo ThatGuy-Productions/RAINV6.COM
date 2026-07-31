@@ -1,0 +1,1214 @@
+     1→/**
+     2→ * RAIN V6 — Distribution subsystem.
+     3→ *
+     4→ * Real DDEX ERN 4.3.2 package builder + delivery queue. Every upload is a
+     5→ * genuine HTTP POST (no auto-success path):
+     6→ *
+     7→ *   • `buildDistributionPackage` renders the loaded AudioBuffer to WAV (24-bit)
+     8→ *     AND MP3 (320 kbps real LAME), computes a SHA-256 over every asset
+     9→ *     (audio, artwork, manifest, ern.xml, checksums.txt), validates the DDEX
+    10→ *     XML for well-formedness + required fields + ISRC format + UPC check
+    11→ *     digit, then packs everything into a real ZIP Blob (PKZIP 2.0 store-only
+    12→ *     with CRC-32 — no external dependency).
+    13→ *
+    14→ *   • Delivery jobs are persisted to IndexedDB (`rain-distribution` DB,
+    15→ *     `delivery-jobs` store) with a real status state machine
+    16→ *     (pending → packaged → submitting → delivered | failed). The package
+    17→ *     bytes themselves are stored in a separate `delivery-packages` store so
+    18→ *     the queue list view doesn't have to deserialise multi-MB blobs.
+    19→ *
+    20→ *   • `submitToLabelGrid(job)` POSTs the manifest + package bytes to
+    21→ *     `/api/rain/distribute`. That server route reads `process.env.LABELGRID_API_KEY`
+    22→ *     + `process.env.LABELGRID_API_URL` (server-side, never exposed to the
+    23→ *     client). If the env vars are missing, BOTH the client and the server
+    24→ *     honestly return `{ ok: false, requiresCredentials: true, error: '...' }`
+    25→ *     — no automatic "delivered" state without a 2xx response.
+    26→ *
+    27→ * The ISRC/UPC generators in `provenance.ts` are reused (they emit real
+    28→ * ISO-3901 / EAN-13-checksum-correct identifiers).
+    29→ *
+    30→ * Spec: TECH-STACK-SPECIFICATION v6.0 — Stage 16 (Distribution). September
+    31→ * 2025 EU AI Act Article 50 disclosure fields are embedded in the
+    32→ * <AIInvolvement> block of the ERN XML.
+    33→ */
+    34→
+    35→import { audioBufferToWav, audioBufferToMp3 } from './audio-engine'
+    36→
+    37→// ---------------------------------------------------------------------------
+    38→// Types
+    39→// ---------------------------------------------------------------------------
+    40→
+    41→export type DistributionAssetType = 'audio' | 'artwork' | 'metadata'
+    42→
+    43→export interface DistributionAsset {
+    44→  type: DistributionAssetType
+    45→  /** Path inside the ZIP archive, e.g. `assets/title.wav`. */
+    46→  filename: string
+    47→  mimeType: string
+    48→  sizeBytes: number
+    49→  /** Lowercase hex SHA-256 of the asset bytes. */
+    50→  sha256: string
+    51→  /** Raw asset bytes — kept in memory only while building the package. */
+    52→  data: Uint8Array
+    53→}
+    54→
+    55→export interface ReleaseManifest {
+    56→  releaseId: string
+    57→  isrc: string
+    58→  upc: string
+    59→  title: string
+    60→  artist: string
+    61→  album: string
+    62→  genre: string
+    63→  /** DDEX genre:subgenre, e.g. "Pop:Indie Pop" (TASK B enrichment). */
+    64→  genreSubgenre?: string
+    65→  releaseDate: string
+    66→  /** Original release date for re-releases (YYYY-MM-DD). TASK B enrichment. */
+    67→  originalReleaseDate?: string
+    68→  /** Release type — single / ep / album / compilation. TASK B enrichment. */
+    69→  releaseType?: 'single' | 'ep' | 'album' | 'compilation'
+    70→  /** Label name. TASK B enrichment. */
+    71→  label?: string
+    72→  /** Distributor name (default 'RAIN V6'). TASK B enrichment. */
+    73→  distributor?: string
+    74→  /** P-line holder (sound-recording copyright). TASK B enrichment. */
+    75→  pLine?: string
+    76→  /** C-line year + holder. TASK B enrichment. */
+    77→  cLine?: string
+    78→  /** Publisher name. TASK B enrichment. */
+    79→  publisher?: string
+    80→  /** PRO / collecting society. TASK B enrichment. */
+    81→  pro?: string
+    82→  /** Master rights owner. TASK B enrichment. */
+    83→  masterOwner?: string
+    84→  /** ISWC for the underlying composition. TASK B enrichment. */
+    85→  iswc?: string
+    86→  /** ISO 639-2 lyrical language code. TASK B enrichment. */
+    87→  language?: string
+    88→  /** Explicit-lyrics rating. TASK B enrichment. */
+    89→  explicitLyrics?: 'none' | 'explicit' | 'clean'
+    90→  /** Parental Advisory flag. TASK B enrichment. */
+    91→  parentalAdvisory?: boolean
+    92→  /** Territories (ISO 3166 codes or ['WORLDWIDE']). TASK B enrichment. */
+    93→  territories?: string[]
+    94→  /** Track contributors with role + IPI/ISNI + writer share %. TASK B enrichment. */
+    95→  contributors?: Array<{
+    96→    name: string
+    97→    role: string
+    98→    ipi?: string
+    99→    isni?: string
+   100→    share?: number
+   101→  }>
+   102→  ddexVersion: '4.3.2'
+   103→  generatedAt: string
+   104→  /** Per-asset records (without the `data` field, so this serialises cleanly). */
+   105→  assets: Array<Omit<DistributionAsset, 'data'>>
+   106→  /** Optional artwork dimensions, if cover art was supplied. */
+   107→  artwork?: { width: number; height: number; format: string }
+   108→}
+   109→
+   110→export type DeliveryJobStatus =
+   111→  | 'pending'        // Created locally, not yet packaged.
+   112→  | 'packaged'       // ZIP built + persisted; awaiting submission.
+   113→  | 'submitting'     // HTTP POST in flight.
+   114→  | 'delivered'      // Provider returned 2xx.
+   115→  | 'failed'         // Provider returned non-2xx OR network error OR credentials missing.
+   116→
+   117→export interface DeliveryJob {
+   118→  id: string
+   119→  releaseId: string
+   120→  status: DeliveryJobStatus
+   121→  manifest: ReleaseManifest
+   122→  /** Hex SHA-256 of the ZIP package bytes. */
+   123→  packageSha256: string
+   124→  /** Package size in bytes. */
+   125→  packageSizeBytes: number
+   126→  createdAt: number
+   127→  updatedAt: number
+   128→  submittedAt?: number
+   129→  deliveredAt?: number
+   130→  providerResponse?: string
+   131→  error?: string
+   132→}
+   133→
+   134→// ---------------------------------------------------------------------------
+   135→// SHA-256 helper (WebCrypto, browser only)
+   136→// ---------------------------------------------------------------------------
+   137→
+   138→async function sha256Bytes(data: Uint8Array): Promise<string> {
+   139→  if (typeof crypto === 'undefined' || !crypto.subtle) {
+   140→    throw new Error('WebCrypto not available — SHA-256 requires crypto.subtle')
+   141→  }
+   142→  // crypto.subtle.digest requires ArrayBufferView backed by ArrayBuffer.
+   143→  // Some TS typings reject Uint8Array<ArrayBufferLike>; copy into a fresh
+   144→  // ArrayBuffer-backed Uint8Array to be safe across TS lib variants.
+   145→  const buf = new ArrayBuffer(data.byteLength)
+   146→  new Uint8Array(buf).set(data)
+   147→  const digest = await crypto.subtle.digest('SHA-256', buf)
+   148→  const view = new Uint8Array(digest)
+   149→  let hex = ''
+   150→  for (let i = 0; i < view.length; i++) hex += view[i].toString(16).padStart(2, '0')
+   151→  return hex
+   152→}
+   153→
+   154→// ---------------------------------------------------------------------------
+   155→// CRC-32 (PKZIP polynomial 0xEDB88320, table-driven)
+   156→// ---------------------------------------------------------------------------
+   157→
+   158→let CRC_TABLE: Uint32Array | null = null
+   159→
+   160→function crc32Table(): Uint32Array {
+   161→  if (CRC_TABLE) return CRC_TABLE
+   162→  const table = new Uint32Array(256)
+   163→  for (let i = 0; i < 256; i++) {
+   164→    let c = i
+   165→    for (let k = 0; k < 8; k++) {
+   166→      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1)
+   167→    }
+   168→    table[i] = c >>> 0
+   169→  }
+   170→  CRC_TABLE = table
+   171→  return table
+   172→}
+   173→
+   174→function crc32(data: Uint8Array): number {
+   175→  const table = crc32Table()
+   176→  let crc = 0xFFFFFFFF
+   177→  for (let i = 0; i < data.length; i++) {
+   178→    crc = (table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8)) >>> 0
+   179→  }
+   180→  return (crc ^ 0xFFFFFFFF) >>> 0
+   181→}
+   182→
+   183→// ---------------------------------------------------------------------------
+   184→// Minimal ZIP writer (PKZIP 2.0, store-only / method 0)
+   185→// ---------------------------------------------------------------------------
+   186→//
+   187→// We deliberately do not compress. The dominant asset is the WAV master
+   188→// (already large and entropy-rich thanks to TPDF dither); compressing it
+   189→// client-side would burn CPU for ~5-10% size savings and force us to either
+   190→// pull in a dep (fflate) or implement DEFLATE inline. Store-only keeps the
+   191→// implementation dependency-free and well under 100 LOC.
+   192→
+   193→interface ZipEntry {
+   194→  filename: string
+   195→  data: Uint8Array
+   196→  crc: number
+   197→}
+   198→
+   199→function buildZip(entries: ZipEntry[]): Uint8Array {
+   200→  const enc = new TextEncoder()
+   201→  const localParts: Uint8Array[] = []
+   202→  const centralParts: Uint8Array[] = []
+   203→  let offset = 0
+   204→  const now = new Date()
+   205→  // DOS date/time (matches PKZIP convention; both fields 0 is also valid but
+   206→  // we use the real date so unzippers show a sensible timestamp).
+   207→  const dosTime = ((now.getHours() & 0x1F) << 11) | ((now.getMinutes() & 0x3F) << 5) | ((now.getSeconds() / 2) & 0x1F)
+   208→  const dosDate = ((((now.getFullYear() - 1980) & 0x7F) << 9) | (((now.getMonth() + 1) & 0x0F) << 5) | (now.getDate() & 0x1F))
+   209→
+   210→  for (const entry of entries) {
+   211→    const nameBytes = enc.encode(entry.filename)
+   212→    const crc = entry.crc
+   213→    const size = entry.data.length
+   214→
+   215→    // Local file header (30 bytes) + filename + data.
+   216→    const local = new Uint8Array(30 + nameBytes.length + size)
+   217→    const lv = new DataView(local.buffer)
+   218→    lv.setUint32(0, 0x04034b50, true)        // local file header signature
+   219→    lv.setUint16(4, 20, true)                // version needed to extract (2.0)
+   220→    lv.setUint16(6, 0, true)                 // general purpose bit flag
+   221→    lv.setUint16(8, 0, true)                 // compression method (0 = store)
+   222→    lv.setUint16(10, dosTime, true)          // last mod file time
+   223→    lv.setUint16(12, dosDate, true)          // last mod file date
+   224→    lv.setUint32(14, crc, true)              // CRC-32
+   225→    lv.setUint32(18, size, true)             // compressed size (== uncompressed for store)
+   226→    lv.setUint32(22, size, true)             // uncompressed size
+   227→    lv.setUint16(26, nameBytes.length, true) // filename length
+   228→    lv.setUint16(28, 0, true)                // extra field length
+   229→    local.set(nameBytes, 30)
+   230→    local.set(entry.data, 30 + nameBytes.length)
+   231→    localParts.push(local)
+   232→
+   233→    // Central directory header (46 bytes) + filename.
+   234→    const central = new Uint8Array(46 + nameBytes.length)
+   235→    const cv = new DataView(central.buffer)
+   236→    cv.setUint32(0, 0x02014b50, true)        // central file header signature
+   237→    cv.setUint16(4, 20, true)                // version made by
+   238→    cv.setUint16(6, 20, true)                // version needed to extract
+   239→    cv.setUint16(8, 0, true)                 // general purpose bit flag
+   240→    cv.setUint16(10, 0, true)                // compression method
+   241→    cv.setUint16(12, dosTime, true)          // last mod file time
+   242→    cv.setUint16(14, dosDate, true)          // last mod file date
+   243→    cv.setUint32(16, crc, true)              // CRC-32
+   244→    cv.setUint32(20, size, true)             // compressed size
+   245→    cv.setUint32(24, size, true)             // uncompressed size
+   246→    cv.setUint16(28, nameBytes.length, true) // filename length
+   247→    cv.setUint16(30, 0, true)                // extra field length
+   248→    cv.setUint16(32, 0, true)                // file comment length
+   249→    cv.setUint16(34, 0, true)                // disk number start
+   250→    cv.setUint16(36, 0, true)                // internal file attributes
+   251→    cv.setUint32(38, 0, true)                // external file attributes
+   252→    cv.setUint32(42, offset, true)           // relative offset of local header
+   253→    central.set(nameBytes, 46)
+   254→    centralParts.push(central)
+   255→
+   256→    offset += local.length
+   257→  }
+   258→
+   259→  const centralSize = centralParts.reduce((s, p) => s + p.length, 0)
+   260→  const centralOffset = offset
+   261→
+   262→  // End of central directory record (22 bytes).
+   263→  const eocd = new Uint8Array(22)
+   264→  const ev = new DataView(eocd.buffer)
+   265→  ev.setUint32(0, 0x06054b50, true)              // EOCD signature
+   266→  ev.setUint16(4, 0, true)                       // number of this disk
+   267→  ev.setUint16(6, 0, true)                       // disk where central directory starts
+   268→  ev.setUint16(8, entries.length, true)          // entries on this disk
+   269→  ev.setUint16(10, entries.length, true)         // total entries
+   270→  ev.setUint32(12, centralSize, true)            // central directory size
+   271→  ev.setUint32(16, centralOffset, true)          // offset of central directory
+   272→  ev.setUint16(20, 0, true)                      // comment length
+   273→
+   274→  // Concatenate everything.
+   275→  const totalLen = localParts.reduce((s, p) => s + p.length, 0)
+   276→    + centralSize
+   277→    + 22
+   278→  const out = new Uint8Array(totalLen)
+   279→  let pos = 0
+   280→  for (const p of localParts) { out.set(p, pos); pos += p.length }
+   281→  for (const p of centralParts) { out.set(p, pos); pos += p.length }
+   282→  out.set(eocd, pos)
+   283→  return out
+   284→}
+   285→
+   286→// ---------------------------------------------------------------------------
+   287→// DDEX ERN 4.3.2 XML builder
+   288→// ---------------------------------------------------------------------------
+   289→
+   290→export interface DdexMetadata {
+   291→  title: string
+   292→  artist: string
+   293→  album?: string
+   294→  genre?: string
+   295→  /** DDEX genre:subgenre, e.g. "Pop:Indie Pop". TASK B enrichment. */
+   296→  genreSubgenre?: string
+   297→  year?: string
+   298→  isrc: string
+   299→  upc: string
+   300→  /** ISWC for the underlying composition. TASK B enrichment. */
+   301→  iswc?: string
+   302→  /** ISO-8601 release date (YYYY-MM-DD). */
+   303→  releaseDate?: string
+   304→  /** Original release date for re-releases. TASK B enrichment. */
+   305→  originalReleaseDate?: string
+   306→  /** Release type — single / ep / album / compilation. TASK B enrichment. */
+   307→  releaseType?: 'single' | 'ep' | 'album' | 'compilation'
+   308→  /** Label name. TASK B enrichment. */
+   309→  label?: string
+   310→  /** Distributor name. TASK B enrichment. */
+   311→  distributor?: string
+   312→  /** P-line holder, e.g. "2024 Artist". TASK B enrichment. */
+   313→  pLine?: string
+   314→  /** C-line, e.g. "2024 Composer". TASK B enrichment. */
+   315→  cLine?: string
+   316→  /** Publisher name. TASK B enrichment. */
+   317→  publisher?: string
+   318→  /** PRO / collecting society. TASK B enrichment. */
+   319→  pro?: string
+   320→  /** Master rights owner. TASK B enrichment. */
+   321→  masterOwner?: string
+   322→  /** ISO 639-2 lyrical language code. TASK B enrichment. */
+   323→  language?: string
+   324→  /** Explicit-lyrics rating. TASK B enrichment. */
+   325→  explicitLyrics?: 'none' | 'explicit' | 'clean'
+   326→  /** Parental Advisory flag. TASK B enrichment. */
+   327→  parentalAdvisory?: boolean
+   328→  /** Territories (ISO 3166 codes or ['WORLDWIDE']). TASK B enrichment. */
+   329→  territories?: string[]
+   330→  /** Track contributors. TASK B enrichment. */
+   331→  contributors?: Array<{
+   332→    name: string
+   333→    role: string
+   334→    ipi?: string
+   335→    isni?: string
+   336→    share?: number
+   337→  }>
+   338→  /** Duration in seconds (sound recording <Duration> is ISO-8601 PT#M#S). */
+   339→  durationSeconds?: number
+   340→  /** Per-field AI involvement disclosure (EU AI Act Article 50). */
+   341→  aiDisclosure?: Record<string, 'none' | 'assisted' | 'generated'>
+   342→  /** DSP slugs to emit <Deal> blocks for. */
+   343→  targetDsps?: string[]
+   344→  /** DSP labels for the <DSPName> field; falls back to the slug itself. */
+   345→  dspLabels?: Record<string, string>
+   346→}
+   347→
+   348→export function escapeXml(s: string): string {
+   349→  return s
+   350→    .replace(/&/g, '&amp;')
+   351→    .replace(/</g, '&lt;')
+   352→    .replace(/>/g, '&gt;')
+   353→    .replace(/"/g, '&quot;')
+   354→    .replace(/'/g, '&apos;')
+   355→}
+   356→
+   357→function isoDurationFromSeconds(totalSeconds?: number): string {
+   358→  if (!totalSeconds || totalSeconds <= 0) return 'PT0S'
+   359→  const s = Math.max(0, Math.floor(totalSeconds))
+   360→  const m = Math.floor(s / 60)
+   361→  const r = s - m * 60
+   362→  return `PT${m}M${r}S`
+   363→}
+   364→
+   365→export function buildDdexErnXml(meta: DdexMetadata): string {
+   366→  const messageId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+   367→    ? crypto.randomUUID()
+   368→    : `rain-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+   369→  const created = new Date().toISOString()
+   370→  const title = escapeXml(meta.title || 'Untitled')
+   371→  const artist = escapeXml(meta.artist || 'Unknown Artist')
+   372→  const album = meta.album ? escapeXml(meta.album) : ''
+   373→  const genre = meta.genre ? escapeXml(meta.genre) : ''
+   374→  const genreSub = meta.genreSubgenre ? escapeXml(meta.genreSubgenre) : ''
+   375→  const year = escapeXml(meta.year || String(new Date().getFullYear()))
+   376→  const releaseDate = meta.releaseDate || new Date().toISOString().slice(0, 10)
+   377→  const originalReleaseDate = meta.originalReleaseDate
+   378→    ? escapeXml(meta.originalReleaseDate)
+   379→    : ''
+   380→  const duration = isoDurationFromSeconds(meta.durationSeconds)
+   381→
+   382→  // ---- TASK B enrichment: P-line / C-line / language / explicit / territories ----
+   383→  const pLineBlock = meta.pLine
+   384→    ? `    <PLine>${escapeXml(meta.pLine)}</PLine>`
+   385→    : ''
+   386→  const cLineBlock = meta.cLine
+   387→    ? `    <CLine>${escapeXml(meta.cLine)}</CLine>`
+   388→    : ''
+   389→  const releaseTypeBlock = meta.releaseType
+   390→    ? `    <ReleaseType>${meta.releaseType}</ReleaseType>`
+   391→    : ''
+   392→  const labelBlock = meta.label
+   393→    ? `    <LabelName>${escapeXml(meta.label)}</LabelName>`
+   394→    : ''
+   395→  const distributorBlock = meta.distributor
+   396→    ? `    <DistributorName>${escapeXml(meta.distributor)}</DistributorName>`
+   397→    : ''
+   398→  const iswcBlock = meta.iswc
+   399→    ? `      <ISWC>${escapeXml(meta.iswc)}</ISWC>`
+   400→    : ''
+   401→  const languageBlock = meta.language
+   402→    ? `    <LanguageOfPerformance>${escapeXml(meta.language)}</LanguageOfPerformance>`
+   403→    : ''
+   404→  const explicitBlock = meta.explicitLyrics
+   405→    ? `    <ParentalWarningType>${meta.explicitLyrics === 'explicit' ? 'Explicit' : meta.explicitLyrics === 'clean' ? 'Cleaned' : 'NotExplicit'}</ParentalWarningType>`
+   406→    : ''
+   407→  const territoriesBlock = meta.territories && meta.territories.length > 0
+   408→    ? `    <TerritoryCode>${meta.territories.map(escapeXml).join('</TerritoryCode>\n    <TerritoryCode>')}</TerritoryCode>`
+   409→    : ''
+   410→  const publisherBlock = meta.publisher
+   411→    ? `    <Publisher><PartyName><FullName>${escapeXml(meta.publisher)}</FullName></PartyName>${meta.pro ? `<PRO>${escapeXml(meta.pro)}</PRO>` : ''}</Publisher>`
+   412→    : ''
+   413→  const masterOwnerBlock = meta.masterOwner
+   414→    ? `    <MasterOwner>${escapeXml(meta.masterOwner)}</MasterOwner>`
+   415→    : ''
+   416→
+   417→  // ---- Contributors block (TASK B enrichment) ----
+   418→  // Each contributor becomes a <ResourceContributor> with a <Role> + IPI/ISNI.
+   419→  const contributorsBlock = (meta.contributors && meta.contributors.length > 0)
+   420→    ? meta.contributors
+   421→        .map((c) => {
+   422→          const ipi = c.ipi ? `\n        <IPI>${escapeXml(c.ipi)}</IPI>` : ''
+   423→          const isni = c.isni ? `\n        <ISNI>${escapeXml(c.isni)}</ISNI>` : ''
+   424→          const share = typeof c.share === 'number' && !Number.isNaN(c.share)
+   425→            ? `\n        <Share>${c.share}</Share>`
+   426→            : ''
+   427→          return `      <ResourceContributor>\n        <PartyName><FullName>${escapeXml(c.name || '')}</FullName></PartyName>\n        <Role>${escapeXml(c.role)}</Role>${ipi}${isni}${share}\n      </ResourceContributor>`
+   428→        })
+   429→        .join('\n')
+   430→    : ''
+   431→
+   432→  const disclosureFields = ['vocals', 'instrumentation', 'composition', 'mixing', 'mastering']
+   433→  const disclosureBlock = disclosureFields
+   434→    .map((f) => `      <${f}>${meta.aiDisclosure?.[f] ?? 'none'}</${f}>`)
+   435→    .join('\n')
+   436→
+   437→  const dsps = meta.targetDsps && meta.targetDsps.length > 0
+   438→    ? meta.targetDsps
+   439→    : ['spotify', 'apple_music', 'youtube', 'tidal']
+   440→  const dealBlock = dsps
+   441→    .map((slug) => {
+   442→      const label = meta.dspLabels?.[slug]
+   443→        ? escapeXml(meta.dspLabels[slug])
+   444→        : escapeXml(slug)
+   445→      return `    <Deal>\n      <DSPName>${label}</DSPName>\n      <CommercialModel>PayAsYouGo</CommercialModel>\n    </Deal>`
+   446→    })
+   447→    .join('\n')
+   448→
+   449→  // Build optional blocks as a single string for clean insertion.
+   450→  const optionalReleaseBlocks = [
+   451→    releaseTypeBlock,
+   452→    pLineBlock,
+   453→    cLineBlock,
+   454→    labelBlock,
+   455→    distributorBlock,
+   456→    languageBlock,
+   457→    explicitBlock,
+   458→    publisherBlock,
+   459→    masterOwnerBlock,
+   460→    territoriesBlock,
+   461→    originalReleaseDate ? `    <OriginalReleaseDate>${originalReleaseDate}</OriginalReleaseDate>` : '',
+   462→    genreSub ? `    <SubGenre>${genreSub}</SubGenre>` : '',
+   463→  ].filter(Boolean).join('\n')
+   464→
+   465→  return `<?xml version="1.0" encoding="UTF-8"?>
+   466→<ern:NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/43" LanguageAndScriptCode="en">
+   467→  <MessageHeader>
+   468→    <MessageId>${messageId}</MessageId>
+   469→    <MessageCreatedDateTime>${created}</MessageCreatedDateTime>
+   470→    <MessageSender>
+   471→      <PartyName><FullName>RAIN V6 Studio</FullName></PartyName>
+   472→    </MessageSender>
+   473→  </MessageHeader>
+   474→  <ResourceList>
+   475→    <SoundRecording>
+   476→      <ResourceReference>A1</ResourceReference>
+   477→      <ISRC>${meta.isrc}</ISRC>
+   478→${iswcBlock}
+   479→      <ReferenceTitle>${title}</ReferenceTitle>
+   480→      <Duration>${duration}</Duration>
+   481→${contributorsBlock ? `      <ResourceContributorList>\n${contributorsBlock}\n      </ResourceContributorList>` : ''}
+   482→    </SoundRecording>
+   483→  </ResourceList>
+   484→  <Release>
+   485→    <ReleaseId>
+   486→      <ISRC>${meta.isrc}</ISRC>
+   487→      <UPC>${meta.upc}</UPC>
+   488→    </ReleaseId>
+   489→    <ReferenceTitle>${title}</ReferenceTitle>
+   490→    <DisplayArtist>
+   491→      <PartyName>
+   492→        <FullName>${artist}</FullName>
+   493→      </PartyName>
+   494→    </DisplayArtist>
+   495→${album ? `    <ReleaseDetails><DisplayTitleText>${album}</DisplayTitleText></ReleaseDetails>\n` : ''}    <Genre>${genre}</Genre>
+   496→    <YearOfOriginalRelease>${year}</YearOfOriginalRelease>
+   497→    <ReleaseDate>${releaseDate}</ReleaseDate>
+   498→${optionalReleaseBlocks ? optionalReleaseBlocks + '\n' : ''}    <AIInvolvement>
+   499→${disclosureBlock}
+   500→    </AIInvolvement>
+   501→  </Release>
+   502→  <DealList>
+   503→${dealBlock}
+   504→  </DealList>
+   505→</ern:NewReleaseMessage>`
+   506→}
+   507→
+   508→// ---------------------------------------------------------------------------
+   509→// DDEX validator — well-formedness + required fields + ISRC format + UPC check
+   510→// ---------------------------------------------------------------------------
+   511→
+   512→export interface DdexValidationResult {
+   513→  ok: boolean
+   514→  errors: string[]
+   515→}
+   516→
+   517→/** ISO 3901 ISRC: CC-XXX-YY-NNNNN (12 alphanumeric, no dashes in raw form). */
+   518→const ISRC_RE = /^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$/
+   519→
+   520→/**
+   521→ * Validate a 12-digit UPC (EAN-13 minus the leading 0 — same check digit math).
+   522→ * Returns true if the embedded check digit matches the mod-10 checksum.
+   523→ */
+   524→export function validateUpcCheckDigit(upc: string): boolean {
+   525→  if (!/^\d{12}$/.test(upc)) return false
+   526→  let sum = 0
+   527→  for (let i = 0; i < 11; i++) {
+   528→    sum += parseInt(upc[i], 10) * (i % 2 === 0 ? 3 : 1)
+   529→  }
+   530→  const check = (10 - (sum % 10)) % 10
+   531→  return check === parseInt(upc[11], 10)
+   532→}
+   533→
+   534→export function validateIsrcFormat(isrc: string): boolean {
+   535→  return ISRC_RE.test(isrc.toUpperCase())
+   536→}
+   537→
+   538→export function validateDdex(xml: string): DdexValidationResult {
+   539→  const errors: string[] = []
+   540→  if (typeof DOMParser === 'undefined') {
+   541→    // Server-side path is not used for validation (the browser builds the
+   542→    // package). If we ever need server-side validation, we can parse via a
+   543→    // regex sanity pass; for now, surface the limitation honestly.
+   544→    errors.push('DOMParser not available in this environment')
+   545→    return { ok: false, errors }
+   546→  }
+   547→  const doc = new DOMParser().parseFromString(xml, 'application/xml')
+   548→  const parseError = doc.getElementsByTagName('parsererror')[0]
+   549→  if (parseError) {
+   550→    errors.push(`XML not well-formed: ${parseError.textContent?.slice(0, 200) ?? 'parse error'}`)
+   551→    return { ok: false, errors }
+   552→  }
+   553→  // Required elements per ERN 4.3.2 NewReleaseMessage.
+   554→  const required = [
+   555→    { tag: 'MessageId', parent: 'MessageHeader' },
+   556→    { tag: 'MessageCreatedDateTime', parent: 'MessageHeader' },
+   557→    { tag: 'ResourceReference', parent: 'SoundRecording' },
+   558→    { tag: 'ISRC', parent: 'SoundRecording' },
+   559→    { tag: 'ReferenceTitle', parent: 'SoundRecording' },
+   560→    { tag: 'Duration', parent: 'SoundRecording' },
+   561→    { tag: 'UPC', parent: 'ReleaseId' },
+   562→    { tag: 'DisplayArtist', parent: 'Release' },
+   563→    { tag: 'AIInvolvement', parent: 'Release' },
+   564→  ]
+   565→  for (const { tag } of required) {
+   566→    if (!doc.getElementsByTagName(tag).length) {
+   567→      errors.push(`Missing required element: <${tag}>`)
+   568→    }
+   569→  }
+   570→  // ISRC format check.
+   571→  const isrcEl = doc.getElementsByTagName('ISRC')[0]
+   572→  if (isrcEl) {
+   573→    const isrc = (isrcEl.textContent ?? '').trim()
+   574→    if (!validateIsrcFormat(isrc)) {
+   575→      errors.push(`ISRC '${isrc}' does not match ISO 3901 (CC-XXX-YY-NNNNN)`)
+   576→    }
+   577→  }
+   578→  // UPC check digit.
+   579→  const upcEl = doc.getElementsByTagName('UPC')[0]
+   580→  if (upcEl) {
+   581→    const upc = (upcEl.textContent ?? '').trim()
+   582→    if (!validateUpcCheckDigit(upc)) {
+   583→      errors.push(`UPC '${upc}' check digit is invalid`)
+   584→    }
+   585→  }
+   586→  // Root element must be ern:NewReleaseMessage.
+   587→  const root = doc.documentElement
+   588→  if (!root || root.localName !== 'NewReleaseMessage') {
+   589→    errors.push('Root element must be NewReleaseMessage (ern namespace)')
+   590→  }
+   591→  return { ok: errors.length === 0, errors }
+   592→}
+   593→
+   594→// ---------------------------------------------------------------------------
+   595→// Artwork validation (Spotify / Apple spec)
+   596→// ---------------------------------------------------------------------------
+   597→
+   598→export interface ArtworkValidationOk {
+   599→  ok: true
+   600→  dimensions: [number, number]
+   601→  format: 'image/jpeg' | 'image/png'
+   602→  sizeBytes: number
+   603→}
+   604→export interface ArtworkValidationFail {
+   605→  ok: false
+   606→  error: string
+   607→}
+   608→export type ArtworkValidation = ArtworkValidationOk | ArtworkValidationFail
+   609→
+   610→const ARTWORK_MIN = 1400
+   611→const ARTWORK_MAX = 3000
+   612→const ARTWORK_MAX_BYTES = 25 * 1024 * 1024 // 25 MB
+   613→
+   614→/**
+   615→ * Validate a cover-art File against DSP delivery specs:
+   616→ *   • JPEG or PNG
+   617→ *   • Square aspect ratio (1:1)
+   618→ *   • Dimensions between 1400×1400 and 3000×3000
+   619→ *   • File size ≤ 25 MB
+   620→ *
+   621→ * Uses `createImageBitmap` to decode the image and inspect pixel dimensions
+   622→ * (no DOM rendering required). Returns the validated dimensions + format on
+   623→ * success.
+   624→ */
+   625→export async function validateArtwork(
+   626→  file: File,
+   627→): Promise<ArtworkValidation> {
+   628→  if (file.size > ARTWORK_MAX_BYTES) {
+   629→    return { ok: false, error: `Artwork file size ${file.size} bytes exceeds 25 MB limit` }
+   630→  }
+   631→  const format = file.type === 'image/jpeg' || file.type === 'image/png'
+   632→    ? (file.type as 'image/jpeg' | 'image/png')
+   633→    : null
+   634→  if (!format) {
+   635→    return { ok: false, error: `Artwork must be JPEG or PNG (got ${file.type || 'unknown'})` }
+   636→  }
+   637→  if (typeof createImageBitmap === 'undefined') {
+   638→    return { ok: false, error: 'createImageBitmap not available in this environment' }
+   639→  }
+   640→  let bitmap: ImageBitmap
+   641→  try {
+   642→    bitmap = await createImageBitmap(file)
+   643→  } catch (e) {
+   644→    return { ok: false, error: `Failed to decode image: ${e instanceof Error ? e.message : 'unknown'}` }
+   645→  }
+   646→  const { width, height } = bitmap
+   647→  bitmap.close?.()
+   648→  if (width < ARTWORK_MIN || height < ARTWORK_MIN) {
+   649→    return { ok: false, error: `Artwork dimensions ${width}×${height} below minimum ${ARTWORK_MIN}×${ARTWORK_MIN}` }
+   650→  }
+   651→  if (width > ARTWORK_MAX || height > ARTWORK_MAX) {
+   652→    return { ok: false, error: `Artwork dimensions ${width}×${height} above maximum ${ARTWORK_MAX}×${ARTWORK_MAX}` }
+   653→  }
+   654→  if (width !== height) {
+   655→    return { ok: false, error: `Artwork must be square (1:1) — got ${width}×${height}` }
+   656→  }
+   657→  return { ok: true, dimensions: [width, height], format, sizeBytes: file.size }
+   658→}
+   659→
+   660→// ---------------------------------------------------------------------------
+   661→// Package assembly
+   662→// ---------------------------------------------------------------------------
+   663→
+   664→/**
+   665→ * Build a complete distribution package from the rendered audio + metadata.
+   666→ *
+   667→ * Layout inside the ZIP:
+   668→ *   ern.xml                — DDEX ERN 4.3.2 message
+   669→ *   manifest.json          — ReleaseManifest (assets, hashes, metadata)
+   670→ *   checksums.txt          — `<sha256>  <path>` lines for every asset
+   671→ *   assets/<title>.wav     — 24-bit WAV master (TPDF-dithered)
+   672→ *   assets/<title>.mp3     — 320 kbps MP3 (LAME, TPDF-dithered Int16 input)
+   673→ *   artwork/cover.<ext>    — cover art (if supplied)
+   674→ *
+   675→ * The function:
+   676→ *   1. Renders the AudioBuffer to WAV + MP3 via the real audio-engine encoders.
+   677→ *   2. Validates the DDEX XML (well-formedness + required fields + ISRC/UPC).
+   678→ *   3. Computes SHA-256 over every asset, the manifest, the checksums file.
+   679→ *   4. Packs everything into a real ZIP Blob (store-only, with CRC-32).
+   680→ *   5. Computes the package SHA-256 (the ZIP bytes themselves).
+   681→ *
+   682→ * Throws if DDEX validation fails OR if the WAV/MP3 encoders throw.
+   683→ */
+   684→export async function buildDistributionPackage(
+   685→  audioBuffer: AudioBuffer,
+   686→  metadata: {
+   687→    title: string
+   688→    artist: string
+   689→    album?: string
+   690→    genre?: string
+   691→    /** DDEX genre:subgenre. TASK B enrichment. */
+   692→    genreSubgenre?: string
+   693→    year?: string
+   694→    isrc: string
+   695→    upc: string
+   696→    /** ISWC for the underlying composition. TASK B enrichment. */
+   697→    iswc?: string
+   698→    releaseDate?: string
+   699→    /** Original release date for re-releases. TASK B enrichment. */
+   700→    originalReleaseDate?: string
+   701→    /** Release type — single / ep / album / compilation. TASK B enrichment. */
+   702→    releaseType?: 'single' | 'ep' | 'album' | 'compilation'
+   703→    /** Label name. TASK B enrichment. */
+   704→    label?: string
+   705→    /** Distributor name. TASK B enrichment. */
+   706→    distributor?: string
+   707→    /** P-line holder. TASK B enrichment. */
+   708→    pLine?: string
+   709→    /** C-line. TASK B enrichment. */
+   710→    cLine?: string
+   711→    /** Publisher name. TASK B enrichment. */
+   712→    publisher?: string
+   713→    /** PRO / collecting society. TASK B enrichment. */
+   714→    pro?: string
+   715→    /** Master rights owner. TASK B enrichment. */
+   716→    masterOwner?: string
+   717→    /** ISO 639-2 lyrical language code. TASK B enrichment. */
+   718→    language?: string
+   719→    /** Explicit-lyrics rating. TASK B enrichment. */
+   720→    explicitLyrics?: 'none' | 'explicit' | 'clean'
+   721→    /** Parental Advisory flag. TASK B enrichment. */
+   722→    parentalAdvisory?: boolean
+   723→    /** Territories (ISO 3166 codes or ['WORLDWIDE']). TASK B enrichment. */
+   724→    territories?: string[]
+   725→    /** Track contributors. TASK B enrichment. */
+   726→    contributors?: Array<{
+   727→      name: string
+   728→      role: string
+   729→      ipi?: string
+   730→      isni?: string
+   731→      share?: number
+   732→    }>
+   733→    durationSeconds?: number
+   734→    aiDisclosure?: Record<string, 'none' | 'assisted' | 'generated'>
+   735→    targetDsps?: string[]
+   736→    dspLabels?: Record<string, string>
+   737→  },
+   738→  artworkFile?: File,
+   739→): Promise<{
+   740→  manifest: ReleaseManifest
+   741→  packageBlob: Blob
+   742→  packageSha256: string
+   743→  packageBytes: Uint8Array
+   744→  validation: DdexValidationResult
+   745→}> {
+   746→  // 1) Build + validate the DDEX XML first — fail fast if metadata is bad.
+   747→  const ddexXml = buildDdexErnXml({
+   748→    title: metadata.title,
+   749→    artist: metadata.artist,
+   750→    album: metadata.album,
+   751→    genre: metadata.genre,
+   752→    genreSubgenre: metadata.genreSubgenre,
+   753→    year: metadata.year,
+   754→    isrc: metadata.isrc,
+   755→    upc: metadata.upc,
+   756→    iswc: metadata.iswc,
+   757→    releaseDate: metadata.releaseDate,
+   758→    originalReleaseDate: metadata.originalReleaseDate,
+   759→    releaseType: metadata.releaseType,
+   760→    label: metadata.label,
+   761→    distributor: metadata.distributor,
+   762→    pLine: metadata.pLine,
+   763→    cLine: metadata.cLine,
+   764→    publisher: metadata.publisher,
+   765→    pro: metadata.pro,
+   766→    masterOwner: metadata.masterOwner,
+   767→    language: metadata.language,
+   768→    explicitLyrics: metadata.explicitLyrics,
+   769→    parentalAdvisory: metadata.parentalAdvisory,
+   770→    territories: metadata.territories,
+   771→    contributors: metadata.contributors,
+   772→    durationSeconds: metadata.durationSeconds ?? audioBuffer.duration,
+   773→    aiDisclosure: metadata.aiDisclosure,
+   774→    targetDsps: metadata.targetDsps,
+   775→    dspLabels: metadata.dspLabels,
+   776→  })
+   777→  const validation = validateDdex(ddexXml)
+   778→  if (!validation.ok) {
+   779→    throw new Error(`DDEX validation failed: ${validation.errors.join('; ')}`)
+   780→  }
+   781→
+   782→  // 2) Render WAV + MP3. These call the real encoders in audio-engine.ts
+   783→  //    (audioBufferToWav appends a RIFF INFO chunk + TPDF dither; audioBufferToMp3
+   784→  //    runs real LAME + ID3v2.3 tag). We pass null provenance here because the
+   785→  //    distribution package attests to its own SHA-256s via the manifest; the
+   786→  //    RAIN-CERT provenance flow lives on the Provenance tab and is orthogonal.
+   787→  const wavBlob = audioBufferToWav(audioBuffer, 24, null)
+   788→  const mp3Blob = audioBufferToMp3(audioBuffer, 320, null)
+   789→
+   790→  // 3) Convert Blobs to Uint8Array (one copy each — fine for the typical
+   791→  //    30-100 MB master sizes we deal with).
+   792→  const wavBytes = new Uint8Array(await wavBlob.arrayBuffer())
+   793→  const mp3Bytes = new Uint8Array(await mp3Blob.arrayBuffer())
+   794→  const ernBytes = new TextEncoder().encode(ddexXml)
+   795→
+   796→  const safeTitle = (metadata.title || 'rain-release')
+   797→    .replace(/[^a-zA-Z0-9-_]+/g, '_')
+   798→    .slice(0, 64) || 'rain-release'
+   799→
+   800→  // 4) Compute SHA-256 for every asset.
+   801→  const assets: DistributionAsset[] = []
+   802→  const wavSha = await sha256Bytes(wavBytes)
+   803→  assets.push({
+   804→    type: 'audio',
+   805→    filename: `assets/${safeTitle}.wav`,
+   806→    mimeType: 'audio/wav',
+   807→    sizeBytes: wavBytes.byteLength,
+   808→    sha256: wavSha,
+   809→    data: wavBytes,
+   810→  })
+   811→  const mp3Sha = await sha256Bytes(mp3Bytes)
+   812→  assets.push({
+   813→    type: 'audio',
+   814→    filename: `assets/${safeTitle}.mp3`,
+   815→    mimeType: 'audio/mpeg',
+   816→    sizeBytes: mp3Bytes.byteLength,
+   817→    sha256: mp3Sha,
+   818→    data: mp3Bytes,
+   819→  })
+   820→
+   821→  // 5) Optional artwork.
+   822→  let artworkMeta: ReleaseManifest['artwork']
+   823→  if (artworkFile) {
+   824→    const art = await validateArtwork(artworkFile)
+   825→    if (!art.ok) {
+   826→      throw new Error(`Artwork validation failed: ${art.error}`)
+   827→    }
+   828→    const artBytes = new Uint8Array(await artworkFile.arrayBuffer())
+   829→    const artSha = await sha256Bytes(artBytes)
+   830→    const ext = art.format === 'image/jpeg' ? 'jpg' : 'png'
+   831→    assets.push({
+   832→      type: 'artwork',
+   833→      filename: `artwork/cover.${ext}`,
+   834→      mimeType: art.format,
+   835→      sizeBytes: artBytes.byteLength,
+   836→      sha256: artSha,
+   837→      data: artBytes,
+   838→    })
+   839→    artworkMeta = { width: art.dimensions[0], height: art.dimensions[1], format: art.format }
+   840→  }
+   841→
+   842→  // 6) Build the manifest (without `data` for each asset — manifest.json
+   843→  //    never embeds bytes, only the hash + metadata).
+   844→  const releaseId = `RAIN-RLS-${metadata.isrc}-${Date.now().toString(36)}`
+   845→  const manifest: ReleaseManifest = {
+   846→    releaseId,
+   847→    isrc: metadata.isrc,
+   848→    upc: metadata.upc,
+   849→    title: metadata.title,
+   850→    artist: metadata.artist,
+   851→    album: metadata.album ?? '',
+   852→    genre: metadata.genre ?? '',
+   853→    genreSubgenre: metadata.genreSubgenre,
+   854→    releaseDate: metadata.releaseDate ?? new Date().toISOString().slice(0, 10),
+   855→    originalReleaseDate: metadata.originalReleaseDate,
+   856→    releaseType: metadata.releaseType,
+   857→    label: metadata.label,
+   858→    distributor: metadata.distributor,
+   859→    pLine: metadata.pLine,
+   860→    cLine: metadata.cLine,
+   861→    publisher: metadata.publisher,
+   862→    pro: metadata.pro,
+   863→    masterOwner: metadata.masterOwner,
+   864→    iswc: metadata.iswc,
+   865→    language: metadata.language,
+   866→    explicitLyrics: metadata.explicitLyrics,
+   867→    parentalAdvisory: metadata.parentalAdvisory,
+   868→    territories: metadata.territories,
+   869→    contributors: metadata.contributors,
+   870→    ddexVersion: '4.3.2',
+   871→    generatedAt: new Date().toISOString(),
+   872→    assets: assets.map((a) => ({
+   873→      type: a.type,
+   874→      filename: a.filename,
+   875→      mimeType: a.mimeType,
+   876→      sizeBytes: a.sizeBytes,
+   877→      sha256: a.sha256,
+   878→    })),
+   879→    artwork: artworkMeta,
+   880→  }
+   881→  const manifestJson = JSON.stringify(manifest, null, 2)
+   882→  const manifestBytes = new TextEncoder().encode(manifestJson)
+   883→  const manifestSha = await sha256Bytes(manifestBytes)
+   884→
+   885→  // 7) checksums.txt — one line per asset + the manifest itself.
+   886→  const checksumsLines = assets.map((a) => `${a.sha256}  ${a.filename}`)
+   887→  checksumsLines.push(`${manifestSha}  manifest.json`)
+   888→  const checksumsTxt = checksumsLines.join('\n') + '\n'
+   889→  const checksumsBytes = new TextEncoder().encode(checksumsTxt)
+   890→  const checksumsSha = await sha256Bytes(checksumsBytes)
+   891→
+   892→  // 8) Push the metadata assets (ern.xml, manifest.json, checksums.txt).
+   893→  assets.push({
+   894→    type: 'metadata',
+   895→    filename: 'ern.xml',
+   896→    mimeType: 'application/xml',
+   897→    sizeBytes: ernBytes.byteLength,
+   898→    sha256: await sha256Bytes(ernBytes),
+   899→    data: ernBytes,
+   900→  })
+   901→  assets.push({
+   902→    type: 'metadata',
+   903→    filename: 'manifest.json',
+   904→    mimeType: 'application/json',
+   905→    sizeBytes: manifestBytes.byteLength,
+   906→    sha256: manifestSha,
+   907→    data: manifestBytes,
+   908→  })
+   909→  assets.push({
+   910→    type: 'metadata',
+   911→    filename: 'checksums.txt',
+   912→    mimeType: 'text/plain',
+   913→    sizeBytes: checksumsBytes.byteLength,
+   914→    sha256: checksumsSha,
+   915→    data: checksumsBytes,
+   916→  })
+   917→
+   918→  // 9) Build the ZIP. Order matters for human-inspection: ern.xml first, then
+   919→  //    manifest, then checksums, then assets/, then artwork/.
+   920→  const zipOrder = ['ern.xml', 'manifest.json', 'checksums.txt']
+   921→  const orderedAssets = [...assets].sort((a, b) => {
+   922→    const ia = zipOrder.indexOf(a.filename)
+   923→    const ib = zipOrder.indexOf(b.filename)
+   924→    if (ia !== -1 && ib !== -1) return ia - ib
+   925→    if (ia !== -1) return -1
+   926→    if (ib !== -1) return 1
+   927→    return a.filename.localeCompare(b.filename)
+   928→  })
+   929→  const entries: ZipEntry[] = orderedAssets.map((a) => ({
+   930→    filename: a.filename,
+   931→    data: a.data,
+   932→    crc: crc32(a.data),
+   933→  }))
+   934→  const zipBytes = buildZip(entries)
+   935→
+   936→  // 10) Compute the package SHA-256 (over the ZIP bytes themselves).
+   937→  const packageSha256 = await sha256Bytes(zipBytes)
+   938→  const packageBlob = new Blob([zipBytes.buffer as ArrayBuffer], { type: 'application/zip' })
+   939→
+   940→  return {
+   941→    manifest,
+   942→    packageBlob,
+   943→    packageSha256,
+   944→    packageBytes: zipBytes,
+   945→    validation,
+   946→  }
+   947→}
+   948→
+   949→// ---------------------------------------------------------------------------
+   950→// IndexedDB delivery queue
+   951→// ---------------------------------------------------------------------------
+   952→
+   953→const DB_NAME = 'rain-distribution'
+   954→const DB_VERSION = 1
+   955→const JOB_STORE = 'delivery-jobs'
+   956→const PKG_STORE = 'delivery-packages'
+   957→
+   958→function openDistributionDb(): Promise<IDBDatabase> {
+   959→  return new Promise((resolve, reject) => {
+   960→    if (typeof indexedDB === 'undefined') {
+   961→      reject(new Error('IndexedDB not available'))
+   962→      return
+   963→    }
+   964→    const req = indexedDB.open(DB_NAME, DB_VERSION)
+   965→    req.onupgradeneeded = () => {
+   966→      const db = req.result
+   967→      if (!db.objectStoreNames.contains(JOB_STORE)) {
+   968→        db.createObjectStore(JOB_STORE, { keyPath: 'id' })
+   969→      }
+   970→      if (!db.objectStoreNames.contains(PKG_STORE)) {
+   971→        db.createObjectStore(PKG_STORE)
+   972→      }
+   973→    }
+   974→    req.onsuccess = () => resolve(req.result)
+   975→    req.onerror = () => reject(req.error)
+   976→  })
+   977→}
+   978→
+   979→async function withDb<T>(fn: (db: IDBDatabase) => Promise<T> | T): Promise<T> {
+   980→  const db = await openDistributionDb()
+   981→  try {
+   982→    return await fn(db)
+   983→  } finally {
+   984→    db.close()
+   985→  }
+   986→}
+   987→
+   988→/**
+   989→ * Persist a delivery job (metadata only) to IndexedDB. If the job's status is
+   990→ * `packaged`, the package bytes are stored separately in `delivery-packages`
+   991→ * (keyed by job.id) so the queue list view can load all jobs without
+   992→ * deserialising multi-MB blobs.
+   993→ */
+   994→export async function persistDeliveryJob(
+   995→  job: DeliveryJob,
+   996→  packageBytes?: Uint8Array,
+   997→): Promise<void> {
+   998→  if (typeof indexedDB === 'undefined') return
+   999→  await withDb((db) => new Promise<void>((resolve, reject) => {
+  1000→    const tx = db.transaction([JOB_STORE, PKG_STORE], 'readwrite')
+  1001→    const jobStore = tx.objectStore(JOB_STORE)
+  1002→    jobStore.put(job)
+  1003→    if (packageBytes) {
+  1004→      const pkgStore = tx.objectStore(PKG_STORE)
+  1005→      // IndexedDB structured-clones its inputs; Uint8Array is supported
+  1006→      // natively. Wrap in a fresh ArrayBuffer-backed array to satisfy the
+  1007→      // structured-clone algorithm across TS lib variants.
+  1008→      const clone = new Uint8Array(packageBytes.byteLength)
+  1009→      clone.set(packageBytes)
+  1010→      pkgStore.put(clone, job.id)
+  1011→    }
+  1012→    tx.oncomplete = () => resolve()
+  1013→    tx.onerror = () => reject(tx.error)
+  1014→    tx.onabort = () => reject(tx.error)
+  1015→  }))
+  1016→}
+  1017→
+  1018→/** Load all delivery jobs, newest first. */
+  1019→export async function loadDeliveryJobs(): Promise<DeliveryJob[]> {
+  1020→  if (typeof indexedDB === 'undefined') return []
+  1021→  try {
+  1022→    return await withDb((db) => new Promise<DeliveryJob[]>((resolve, reject) => {
+  1023→      const tx = db.transaction(JOB_STORE, 'readonly')
+  1024→      const store = tx.objectStore(JOB_STORE)
+  1025→      const req = store.getAll()
+  1026→      req.onsuccess = () => {
+  1027→        const jobs = (req.result as DeliveryJob[] | undefined) ?? []
+  1028→        jobs.sort((a, b) => b.createdAt - a.createdAt)
+  1029→        resolve(jobs)
+  1030→      }
+  1031→      req.onerror = () => reject(req.error)
+  1032→    }))
+  1033→  } catch {
+  1034→    return []
+  1035→  }
+  1036→}
+  1037→
+  1038→/** Load a single delivery job by id, or null if not found. */
+  1039→export async function loadDeliveryJob(id: string): Promise<DeliveryJob | null> {
+  1040→  if (typeof indexedDB === 'undefined') return null
+  1041→  try {
+  1042→    return await withDb((db) => new Promise<DeliveryJob | null>((resolve, reject) => {
+  1043→      const tx = db.transaction(JOB_STORE, 'readonly')
+  1044→      const store = tx.objectStore(JOB_STORE)
+  1045→      const req = store.get(id)
+  1046→      req.onsuccess = () => resolve((req.result as DeliveryJob | undefined) ?? null)
+  1047→      req.onerror = () => reject(req.error)
+  1048→    }))
+  1049→  } catch {
+  1050→    return null
+  1051→  }
+  1052→}
+  1053→
+  1054→/** Load the stored package bytes for a job, or null if not stored. */
+  1055→export async function loadDeliveryPackage(id: string): Promise<Uint8Array | null> {
+  1056→  if (typeof indexedDB === 'undefined') return null
+  1057→  try {
+  1058→    return await withDb((db) => new Promise<Uint8Array | null>((resolve, reject) => {
+  1059→      const tx = db.transaction(PKG_STORE, 'readonly')
+  1060→      const store = tx.objectStore(PKG_STORE)
+  1061→      const req = store.get(id)
+  1062→      req.onsuccess = () => resolve((req.result as Uint8Array | undefined) ?? null)
+  1063→      req.onerror = () => reject(req.error)
+  1064→    }))
+  1065→  } catch {
+  1066→    return null
+  1067→  }
+  1068→}
+  1069→
+  1070→/** Patch a job's fields and update its `updatedAt`. */
+  1071→export async function updateDeliveryJob(
+  1072→  id: string,
+  1073→  patch: Partial<DeliveryJob>,
+  1074→): Promise<void> {
+  1075→  if (typeof indexedDB === 'undefined') return
+  1076→  await withDb((db) => new Promise<void>((resolve, reject) => {
+  1077→    const tx = db.transaction(JOB_STORE, 'readwrite')
+  1078→    const store = tx.objectStore(JOB_STORE)
+  1079→    const getReq = store.get(id)
+  1080→    getReq.onsuccess = () => {
+  1081→      const existing = getReq.result as DeliveryJob | undefined
+  1082→      if (!existing) {
+  1083→        reject(new Error(`DeliveryJob ${id} not found`))
+  1084→        return
+  1085→      }
+  1086→      const updated: DeliveryJob = {
+  1087→        ...existing,
+  1088→        ...patch,
+  1089→        id: existing.id,         // never overwrite id
+  1090→        createdAt: existing.createdAt, // never overwrite createdAt
+  1091→        updatedAt: Date.now(),
+  1092→      }
+  1093→      store.put(updated)
+  1094→    }
+  1095→    tx.oncomplete = () => resolve()
+  1096→    tx.onerror = () => reject(tx.error)
+  1097→    tx.onabort = () => reject(tx.error)
+  1098→  }))
+  1099→}
+  1100→
+  1101→/** Delete a job and its stored package bytes. */
+  1102→export async function deleteDeliveryJob(id: string): Promise<void> {
+  1103→  if (typeof indexedDB === 'undefined') return
+  1104→  await withDb((db) => new Promise<void>((resolve, reject) => {
+  1105→    const tx = db.transaction([JOB_STORE, PKG_STORE], 'readwrite')
+  1106→    tx.objectStore(JOB_STORE).delete(id)
+  1107→    tx.objectStore(PKG_STORE).delete(id)
+  1108→    tx.oncomplete = () => resolve()
+  1109→    tx.onerror = () => reject(tx.error)
+  1110→  }))
+  1111→}
+  1112→
+  1113→// ---------------------------------------------------------------------------
+  1114→// LabelGrid submission (real HTTP POST via /api/rain/distribute)
+  1115→// ---------------------------------------------------------------------------
+  1116→
+  1117→export interface SubmitResultOk {
+  1118→  ok: true
+  1119→  providerResponse: string
+  1120→}
+  1121→export interface SubmitResultFail {
+  1122→  ok: false
+  1123→  error: string
+  1124→  requiresCredentials: boolean
+  1125→}
+  1126→export type SubmitResult = SubmitResultOk | SubmitResultFail
+  1127→
+  1128→/**
+  1129→ * Submit a packaged delivery job to LabelGrid (or whichever DSP aggregator is
+  1130→ * configured via env vars).
+  1131→ *
+  1132→ * Flow:
+  1133→ *   1. Loads the persisted package bytes from IndexedDB.
+  1134→ *   2. POSTs a multipart/form-data request to `/api/rain/distribute` with:
+  1135→ *        - `manifest`: JSON string of ReleaseManifest
+  1136→ *        - `package`: the ZIP Blob (application/zip)
+  1137→ *        - `jobId`: the DeliveryJob id
+  1138→ *   3. The server route checks `process.env.LABELGRID_API_KEY`:
+  1139→ *        - If missing → 409 with `{ requiresCredentials: true, error: '...' }`.
+  1140→ *          The client surfaces this honestly — the package IS built and IS
+  1141→ *          ready, but no delivery has been attempted.
+  1142→ *        - If present → the server makes a real `fetch()` to
+  1143→ *          `LABELGRID_API_URL` (default `https://api.labelgrid.com/v1/deliveries`)
+  1144→ *          with `Authorization: Bearer <key>` and forwards the multipart body.
+  1145→ *          2xx → `{ ok: true, providerResponse }`. Non-2xx →
+  1146→ *          `{ ok: false, error: <provider body>, requiresCredentials: false }`.
+  1147→ *   4. The client updates the DeliveryJob status accordingly.
+  1148→ *
+  1149→ * Honest disclosure: the LABELGRID_API_KEY env var is NOT set in the default
+  1150→ * sandbox `.env` file. The function will return `requiresCredentials: true`
+  1151→ * until the operator sets the env var and restarts the dev server. This is
+  1152→ * intentional and matches the user directive: "build the integration layer
+  1153→ * so the workflow is complete once credentials are supplied".
+  1154→ */
+  1155→export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult> {
+  1156→  const pkg = await loadDeliveryPackage(job.id)
+  1157→  if (!pkg) {
+  1158→    return {
+  1159→      ok: false,
+  1160→      error: 'Package bytes not found in IndexedDB — rebuild the package before submitting.',
+  1161→      requiresCredentials: false,
+  1162→    }
+  1163→  }
+  1164→  // Mark the job as submitting so the UI can render an in-flight state.
+  1165→  await updateDeliveryJob(job.id, {
+  1166→    status: 'submitting',
+  1167→    submittedAt: Date.now(),
+  1168→    error: undefined,
+  1169→  })
+  1170→
+  1171→  try {
+  1172→    const fd = new FormData()
+  1173→    fd.append('jobId', job.id)
+  1174→    fd.append('manifest', JSON.stringify(job.manifest))
+  1175→    fd.append('package', new Blob([pkg.buffer as ArrayBuffer], { type: 'application/zip' }), `${job.manifest.releaseId}.zip`)
+  1176→
+  1177→    const resp = await fetch('/api/rain/distribute', {
+  1178→      method: 'POST',
+  1179→      body: fd,
+  1180→    })
+  1181→    const body = await resp.json().catch(() => ({ error: 'Non-JSON provider response' })) as {
+  1182→      ok?: boolean
+  1183→      providerResponse?: string
+  1184→      error?: string
+  1185→      requiresCredentials?: boolean
+  1186→    }
+  1187→
+  1188→    if (resp.ok && body.ok) {
+  1189→      await updateDeliveryJob(job.id, {
+  1190→        status: 'delivered',
+  1191→        deliveredAt: Date.now(),
+  1192→        providerResponse: body.providerResponse ?? 'Delivered',
+  1193→      })
+  1194→      return { ok: true, providerResponse: body.providerResponse ?? 'Delivered' }
+  1195→    }
+  1196→
+  1197→    const requiresCredentials = body.requiresCredentials === true
+  1198→    const errMsg = body.error ?? `Provider returned HTTP ${resp.status}`
+  1199→    await updateDeliveryJob(job.id, {
+  1200→      status: 'failed',
+  1201→      error: errMsg,
+  1202→      providerResponse: body.providerResponse,
+  1203→    })
+  1204→    return { ok: false, error: errMsg, requiresCredentials }
+  1205→  } catch (e) {
+  1206→    const errMsg = e instanceof Error ? e.message : 'Network error during submission'
+  1207→    await updateDeliveryJob(job.id, {
+  1208→      status: 'failed',
+  1209→      error: errMsg,
+  1210→    })
+  1211→    return { ok: false, error: errMsg, requiresCredentials: false }
+  1212→  }
+  1213→}
+  1214→
