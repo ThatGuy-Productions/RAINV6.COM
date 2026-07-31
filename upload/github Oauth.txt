@@ -1,0 +1,11 @@
+Client ID
+Ov23likU9HNZ2JA9H8AB
+Client secrets
+An application can have up to 5 client secrets at a time. Remove a secret in order to add a new one.
+
+Make sure to copy your new client secret now. You won’t be able to see it again.
+
+Client secret
+ 463af7c511036db931a496cfc469f9dbef61348b Copied!
+Added now by aurorav5
+Never used
