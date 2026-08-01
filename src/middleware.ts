@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { checkRateLimit } from '@/lib/rain/rate-limit'
 import type { NextRequest } from 'next/server'
 
 // ─── Rate Limiting Store (in-memory, per-process) ────────────────────────

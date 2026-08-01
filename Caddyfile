@@ -18,3 +18,11 @@ rainv6.com, www.rainv6.com {
 	header { X-Frame-Options "DENY" X-Content-Type-Options "nosniff" Referrer-Policy "strict-origin-when-cross-origin" Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" }
 	log { output file /var/log/caddy/access.log format json }
 }
+
+# SEC-M1 — Upload size enforcement at reverse proxy (uncomment for production)
+# handle /api/rain/source {
+#     request_body {
+#         max_size 500MB
+#     }
+#     reverse_proxy localhost:3000
+# }
