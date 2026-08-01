@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://rainv6beta.space-z.ai/sitemap.xml
+Disallow: /api/
+Disallow: /admin/
+Sitemap: https://rainv6.com/sitemap.xml

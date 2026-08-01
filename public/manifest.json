@@ -1,13 +1,13 @@
 {
-  "name": "RAIN V6 — AI Audio Mastering",
+  "name": "RAIN V6 — AI Audio Operating System",
   "short_name": "RAIN V6",
-  "description": "AI-powered audio mastering platform with real DSP, Ed25519 provenance, and in-browser processing.",
-  "background_color": "#0a0a0a",
-  "theme_color": "#ccff00",
-  "display": "standalone",
   "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#a3e635",
+  "description": "Deterministic, browser-first audio mastering, 12-stem separation, Ed25519 provenance, Dolby Atmos.",
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "/og-image.svg", "sizes": "1200x630", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "/rainv6-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/rainv6-icon-512.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
