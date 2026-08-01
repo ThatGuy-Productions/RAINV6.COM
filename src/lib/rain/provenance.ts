@@ -17,7 +17,7 @@ const KEY_NAME = 'rain-ed25519-primary'
 
 interface StoredKeys {
   publicKey: JsonWebKey
-  privateKey: JsonWebKey
+  encryptedPrivate: import("./secure-key-storage").EncryptedPrivateJwk
   createdAt: string
 }
 
@@ -84,8 +84,13 @@ async function loadKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey
 
 async function saveKeys(publicKey: CryptoKey, privateKey: CryptoKey): Promise<void> {
   const pubJwk = await crypto.subtle.exportKey('jwk', publicKey)
+  // SEC-H1: export private briefly, encrypt, import back as non-extractable; persist only blob
   const privJwk = await crypto.subtle.exportKey('jwk', privateKey)
-  const stored: StoredKeys = { publicKey: pubJwk, privateKey: privJwk, createdAt: new Date().toISOString() }
+  const { encryptPrivateJwk } = await import('./secure-key-storage')
+  // Master secret must be provided securely in production (env / keystore), not hardcoded
+  const masterSecret = typeof process !== 'undefined' && process.env?.SECRET_KEY ? process.env.SECRET_KEY : 'rain-v6-change-me-in-production'
+  const encryptedPrivate = await encryptPrivateJwk(privJwk, masterSecret)
+  const stored: StoredKeys = { publicKey: pubJwk, encryptedPrivate, createdAt: new Date().toISOString() }
   return withDb((db) => new Promise((resolve, reject) => {
     const tx = db.transaction('keys', 'readwrite')
     tx.objectStore('keys').put(stored, KEY_NAME)

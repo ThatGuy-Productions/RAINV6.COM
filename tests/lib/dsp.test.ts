@@ -4,7 +4,8 @@
  * Tests for the core DSP functions in the audio processing pipeline.
  * Note: computeRms and computePeak return dBFS values, not linear.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect }
+import { seededRandom } from '../helpers/seeded-random' from 'vitest'
 import {
   computeLufs,
   computeTruePeak,
@@ -79,8 +80,8 @@ describe('DSP Utilities', () => {
       const left = new Float32Array(100)
       const right = new Float32Array(100)
       for (let i = 0; i < 100; i++) {
-        left[i] = Math.random() * 0.5
-        right[i] = Math.random() * 0.5
+        left[i] = seededRandom(42) * 0.5
+        right[i] = seededRandom(42) * 0.5
       }
       const { mid, side } = midSideEncode(left, right)
       const decoded = midSideDecode(mid, side)
@@ -105,8 +106,8 @@ describe('DSP Utilities', () => {
       const left = new Float32Array(100)
       const right = new Float32Array(100)
       for (let i = 0; i < 100; i++) {
-        left[i] = Math.random() * 0.5
-        right[i] = Math.random() * 0.5
+        left[i] = seededRandom(42) * 0.5
+        right[i] = seededRandom(42) * 0.5
       }
       const width = stereoWidthRatio(left, right)
       expect(width).toBeGreaterThanOrEqual(0)
