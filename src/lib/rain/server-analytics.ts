@@ -138,7 +138,7 @@ export async function getRetentionCohorts(days: number[] = [1, 7, 30]): Promise<
     where: { type: 'signup' },
     select: { userId: true, createdAt: true },
   })
-  const validSignups = signups.filter((s) => s.userId) as { userId: string; createdAt: Date }[]
+  const validSignups = signups.filter((s: any) => s.userId) as { userId: string; createdAt: Date }[]
 
   // Pull all events once, grouped by user, sorted — cheap at beta scale
   // (thousands, not millions, of rows). Revisit with a SQL window function

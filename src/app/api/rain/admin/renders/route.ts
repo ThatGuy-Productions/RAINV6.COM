@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
       },
     })
     return NextResponse.json({
-      renders: renders.map((r) => ({
+      renders: renders.map((r: any) => ({
         id: r.id,
         sessionId: r.sessionId,
         userId: r.userId,

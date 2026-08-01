@@ -39,10 +39,10 @@ export async function GET(req: NextRequest) {
       by: ['userId'],
       _max: { createdAt: true },
     })
-    const lastByUser = new Map(lastRenders.map((r) => [r.userId, r._max.createdAt]))
+    const lastByUser = new Map(lastRenders.map((r: any) => [r.userId, r._max.createdAt]))
 
     return NextResponse.json({
-      accounts: accounts.map((a) => ({
+      accounts: accounts.map((a: any) => ({
         id: a.id,
         email: a.email,
         name: a.name,

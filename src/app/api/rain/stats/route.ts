@@ -66,7 +66,7 @@ export async function GET() {
       const dayEnd = new Date(day)
       dayEnd.setDate(dayEnd.getDate() + 1)
       const count = recentEvents.filter(
-        (e) => e.createdAt >= day && e.createdAt < dayEnd,
+        (e: any) => e.createdAt >= day && e.createdAt < dayEnd,
       ).length
       activitySeries.push({
         date: day.toISOString().slice(0, 10), // YYYY-MM-DD

@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
     // Build a full tier breakdown including zero-count tiers (so the UI can
     // render a complete bar chart of the pricing ladder).
     const tierBreakdown = PRICING_TIERS.map((t) => {
-      const row = accountTiers.find((r) => r.tier === t.slug)
+      const row = accountTiers.find((r: any) => r.tier === t.slug)
       return { slug: t.slug, name: t.name, accent: t.accent, count: row?._count._all ?? 0 }
     })
 
@@ -108,14 +108,14 @@ export async function GET(req: NextRequest) {
         activeSessions: activeTokens,
       },
       tierBreakdown,
-      renderFormats: renderFormats.map((r) => ({ format: r.format, count: r._count._all })),
+      renderFormats: renderFormats.map((r: any) => ({ format: r.format, count: r._count._all })),
       renderVelocity: {
         last24h: renders24h,
         last7d: renders7d,
         last30d: renders30d,
       },
-      sessionStatuses: sessionStatuses.map((s) => ({ status: s.status, count: s._count._all })),
-      jobStatuses: jobStatuses.map((j) => ({ status: j.status, count: j._count._all })),
+      sessionStatuses: sessionStatuses.map((s: any) => ({ status: s.status, count: s._count._all })),
+      jobStatuses: jobStatuses.map((j: any) => ({ status: j.status, count: j._count._all })),
       renderTimeMs: {
         avg: avgRenderTime._avg.renderTimeMs ?? null,
         max: avgRenderTime._max.renderTimeMs ?? null,
