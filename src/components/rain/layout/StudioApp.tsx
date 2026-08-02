@@ -14,7 +14,7 @@ import { ExportTab } from '@/components/rain/tabs/ExportTab'
 import { DistributeTab } from '@/components/rain/tabs/DistributeTab'
 import { ProvenanceTab } from '@/components/rain/tabs/ProvenanceTab'
 import { AnalyticsTab } from '@/components/rain/tabs/AnalyticsTab'
-import { SpatialTab, PitchTab, ReferenceTab, AIETab, SettingsTab } from '@/components/rain/tabs/SecondaryTabs'
+import { SpatialTab, ReferenceTab, AIETab, SettingsTab } from '@/components/rain/tabs/SecondaryTabs'
 import { KeyboardShortcuts } from '@/components/rain/mastering/KeyboardShortcuts'
 import { KeyboardShortcutsOverlay } from '@/components/rain/KeyboardShortcutsOverlay'
 import { DataRain } from '@/components/rain/ui/DataRain'
@@ -24,6 +24,8 @@ import { AdminDoorModal } from '@/components/rain/admin/AdminDoorModal'
 import { AdminConsole } from '@/components/rain/admin/AdminConsole'
 import { SignUpModal } from '@/components/rain/admin/SignUpModal'
 import { SignInModal } from '@/components/rain/admin/SignInModal'
+import { ForgotPasswordModal } from '@/components/rain/admin/ForgotPasswordModal'
+import { ResetPasswordModal } from '@/components/rain/admin/ResetPasswordModal'
 import { FeedbackModal } from '@/components/rain/FeedbackModal'
 import { WhatsNewPanel } from '@/components/rain/layout/WhatsNewPanel'
 import { StudioTour } from '@/components/rain/layout/StudioTour'
@@ -51,6 +53,12 @@ export function StudioApp({ onExit }: StudioAppProps) {
   const [signUpOpen, setSignUpOpen] = useState(false)
   // Sign-in modal state (returning free-tier users).
   const [signInOpen, setSignInOpen] = useState(false)
+  // Forgot password modal state.
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false)
+  // Reset password modal state.
+  const [resetPasswordOpen, setResetPasswordOpen] = useState(false)
+  // Reset token (set from forgot password flow or URL).
+  const [resetToken, setResetToken] = useState('')
   // What's New changelog panel state.
   const [whatsNewOpen, setWhatsNewOpen] = useState(false)
 
@@ -69,17 +77,27 @@ export function StudioApp({ onExit }: StudioAppProps) {
     const openConsole = () => setConsoleOpen(true)
     const openSignUp = () => setSignUpOpen(true)
     const openSignIn = () => setSignInOpen(true)
+    const openForgotPassword = () => setForgotPasswordOpen(true)
+    const openResetPassword = (e: Event) => {
+      const token = (e as CustomEvent).detail?.token ?? ''
+      setResetToken(token)
+      setResetPasswordOpen(true)
+    }
     const openWhatsNew = () => setWhatsNewOpen(true)
     window.addEventListener('rain:admin-door-open', openDoor)
     window.addEventListener('rain:admin-console-open', openConsole)
     window.addEventListener('rain:signup-open', openSignUp)
     window.addEventListener('rain:signin-open', openSignIn)
+    window.addEventListener('rain:forgot-password-open', openForgotPassword)
+    window.addEventListener('rain:reset-password-open', openResetPassword)
     window.addEventListener('rain:whatsnew-open', openWhatsNew)
     return () => {
       window.removeEventListener('rain:admin-door-open', openDoor)
       window.removeEventListener('rain:admin-console-open', openConsole)
       window.removeEventListener('rain:signup-open', openSignUp)
       window.removeEventListener('rain:signin-open', openSignIn)
+      window.removeEventListener('rain:forgot-password-open', openForgotPassword)
+      window.removeEventListener('rain:reset-password-open', openResetPassword)
       window.removeEventListener('rain:whatsnew-open', openWhatsNew)
     }
   }, [])
@@ -103,7 +121,7 @@ export function StudioApp({ onExit }: StudioAppProps) {
       case 'mastering': return <MasteringTab />
       case 'stems': return <StemsTab />
       case 'repair': return <RepairTab />
-      case 'pitch': return <PitchTab />
+      // Pitch tab removed — non-functional (CREPE/PSOLA not implemented). Will return in V7 with real DSP.
       case 'spatial': return <SpatialTab />
       case 'qc': return <QCTab />
       case 'reference': return <ReferenceTab />
@@ -167,6 +185,36 @@ export function StudioApp({ onExit }: StudioAppProps) {
       {signUpOpen && <SignUpModal onClose={() => setSignUpOpen(false)} />}
       {/* Sign In — returning free-tier users login modal */}
       {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
+      {/* Forgot Password — initiated from sign-in modal */}
+      {forgotPasswordOpen && (
+        <ForgotPasswordModal
+          onClose={() => setForgotPasswordOpen(false)}
+          onBackToSignIn={() => {
+            setForgotPasswordOpen(false)
+            setSignInOpen(true)
+          }}
+          onTokenReceived={(token) => {
+            setForgotPasswordOpen(false)
+            setResetToken(token)
+            setResetPasswordOpen(true)
+          }}
+        />
+      )}
+      {/* Reset Password — set new password after receiving token */}
+      {resetPasswordOpen && (
+        <ResetPasswordModal
+          onClose={() => {
+            setResetPasswordOpen(false)
+            setResetToken('')
+          }}
+          token={resetToken}
+          onBackToSignIn={() => {
+            setResetPasswordOpen(false)
+            setResetToken('')
+            setSignInOpen(true)
+          }}
+        />
+      )}
       {/* Free Beta Feedback Widget */}
       <FeedbackModal />
       {/* What's New changelog panel — opened by the notifications bell */}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { bootstrapEnterpriseAdmin, loginWithPassword } from '@/lib/rain/auth'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 
@@ -16,7 +17,7 @@ export const runtime = 'nodejs'
  *
  * Body: { email, password, name? }
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   // Rate limit: 3 bootstrap attempts per minute per IP (conservative)
   // The existing rate limiter uses RPM (requests per minute).
   // 3 RPM = 3 attempts per minute, which is sufficient for a one-time endpoint.
@@ -58,4 +59,4 @@ export async function POST(req: NextRequest) {
   const res = NextResponse.json({ user: result.user }, { status: 201 })
   res.headers.set('Set-Cookie', session.setCookie)
   return res
-}
+})

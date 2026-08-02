@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { loginWithPassword } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 
@@ -16,7 +17,7 @@ export const runtime = 'nodejs'
  * `getSessionUser`, so the tier-gate transparently unlocks every
  * tier-gated route the caller's tier permits.
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   let body: { email?: unknown; password?: unknown }
   try {
     body = await req.json()
@@ -37,4 +38,4 @@ export async function POST(req: NextRequest) {
   const res = NextResponse.json({ user: result.user })
   res.headers.set('Set-Cookie', result.setCookie)
   return res
-}
+})

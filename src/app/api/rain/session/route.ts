@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 
@@ -24,7 +25,7 @@ export const runtime = 'nodejs'
  *
  * Body: { name?: string, fileName?: string, anonId?: string }
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   const user = await getSessionUser(req).catch(() => null)
 
   let body: { name?: unknown; fileName?: unknown; anonId?: unknown }
@@ -80,4 +81,4 @@ export async function POST(req: NextRequest) {
     // can proceed without a sessionId; the render endpoint tolerates that.
     return NextResponse.json({ sessionId: null }, { status: 200 })
   }
-}
+})

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { registerUser, loginWithPassword } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 
@@ -17,7 +18,7 @@ export const runtime = 'nodejs'
  * Data isolation: every new account has its own userId. Sessions, renders,
  * and stems are scoped to that userId via Prisma — no cross-user access.
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   let body: { email?: unknown; password?: unknown; name?: unknown; anonId?: unknown }
   try {
     body = await req.json()
@@ -59,4 +60,4 @@ export async function POST(req: NextRequest) {
   const res = NextResponse.json({ user: loginResult.user }, { status: 201 })
   res.headers.set('Set-Cookie', loginResult.setCookie)
   return res
-}
+})

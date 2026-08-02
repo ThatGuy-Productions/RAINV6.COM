@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   const user = await getSessionUser(req).catch(() => null)
 
   let body: Record<string, unknown>
@@ -141,4 +142,4 @@ export async function POST(req: NextRequest) {
     console.error('[api/rain/reviews] POST failed:', err)
     return NextResponse.json({ error: 'Failed to submit review' }, { status: 500 })
   }
-}
+})

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent } from '@/lib/rain/server-analytics'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -32,7 +33,7 @@ export const maxDuration = 120
  *   anonId?: string,
  * }
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   const user = await getSessionUser(req).catch(() => null)
 
   let body: Record<string, unknown>
@@ -195,7 +196,7 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json(confirmation, { status: 200 })
-}
+})
 
 /**
  * GET /api/rain/distribute/finalize

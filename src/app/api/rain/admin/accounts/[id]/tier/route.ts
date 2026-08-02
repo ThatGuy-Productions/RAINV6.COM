@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { withTierGate } from '@/lib/rain/tier-gate'
 import { setUserTier } from '@/lib/rain/auth'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 
@@ -16,7 +17,7 @@ export const runtime = 'nodejs'
  * tier to any account, which is how the door unlocks features for
  * non-enterprise users during demos / trials / support.
  */
-export async function PATCH(
+export const PATCH = withCsrf(async (
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -47,4 +48,4 @@ export async function PATCH(
     )
   }
   return NextResponse.json({ user: updated, actor: { id: gate.userId, tier: gate.tier } })
-}
+})

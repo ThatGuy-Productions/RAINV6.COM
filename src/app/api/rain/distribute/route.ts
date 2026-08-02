@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 // Forwarding a multi-MB ZIP can take a while against the provider; allow up to
@@ -39,7 +40,7 @@ export const maxDuration = 60
  * LabelGrid changes their endpoint shape, set `LABELGRID_API_URL` to the new
  * endpoint and the integration will follow without code changes.
  */
-export async function POST(req: NextRequest) {
+export const POST = withCsrf(async (req: NextRequest) => {
   const apiKey = process.env.LABELGRID_API_KEY
   const apiUrl = process.env.LABELGRID_API_URL || 'https://api.labelgrid.com/v1/deliveries'
 
@@ -131,4 +132,4 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     )
   }
-}
+})

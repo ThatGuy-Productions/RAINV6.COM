@@ -363,7 +363,7 @@ export const TABS: readonly TabDef[] = [
   { slug: 'mastering', label: 'Mastering', icon: 'Sliders', group: 'master', description: '16-stage mastering engine' },
   { slug: 'stems', label: 'Stems', icon: 'Layers', group: 'master', description: '12-stem BS-RoFormer separation' },
   { slug: 'repair', label: 'Repair', icon: 'Wrench', group: 'repair', description: 'Neural spectral repair' },
-  { slug: 'pitch', label: 'Pitch', icon: 'Music2', group: 'repair', description: 'Pitch correction & formant' },
+  // Pitch tab removed — non-functional (CREPE/PSOLA not implemented). Will return in V7 with real DSP.
   { slug: 'spatial', label: 'Spatial', icon: 'Box', group: 'master', description: 'Dolby Atmos binaural' },
   { slug: 'qc', label: 'QC', icon: 'ShieldCheck', group: 'master', description: '18-point quality control' },
   { slug: 'reference', label: 'Reference', icon: 'Target', group: 'intelligence', description: 'A/B reference matching' },

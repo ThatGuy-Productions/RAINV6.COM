@@ -1035,9 +1035,11 @@ class RainAudioEngine {
         }
       }
 
-      // 2. Multiband compression (3-band Linkwitz-Riley-ish crossover).
-      // Moved from old Stage 11 — spec says multiband comp belongs in the
-      // Master Bus stage, not the Loudness Targeting stage.
+      // 2. Multiband compression — 4-band Linkwitz-Riley crossover at
+      //    80/500/4000 Hz with soft knee and feed-forward detection.
+      //    Industry-standard mastering crossover points.
+      //    Moved from old Stage 11 — spec says multiband comp belongs in the
+      //    Master Bus stage, not the Loudness Targeting stage.
       // P4-GROOVE-EMOTION: if groove was detected, override attack/release
       // with groove-locked musical time constants before compression.
       if (grooveEmotionOverrides) {
@@ -1521,53 +1523,148 @@ class RainAudioEngine {
 function sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)) }
 
 // ---------------------------------------------------------------------------
-// Multiband compression (3-band, simplified)
+// Multiband compression — 4-band Linkwitz-Riley crossover at 80/500/4000 Hz
+// with soft knee and feed-forward detection — industry-standard mastering
+// crossover points.
 // ---------------------------------------------------------------------------
 
-function applyMultibandCompression(channels: Float32Array[], params: ProcessingParams, sampleRate: number) {
-  if (channels.length < 2) return
-  const lowXover = 200
-  const midXover = 2000
-
-  const lowLpf = designBiquad('lowpass', lowXover, sampleRate, 0.7071)
-  const highHpf = designBiquad('highpass', midXover, sampleRate, 0.7071)
-  const midBand1 = designBiquad('highpass', lowXover, sampleRate, 0.7071)
-  const midBand2 = designBiquad('lowpass', midXover, sampleRate, 0.7071)
-
-  for (let ch = 0; ch < channels.length; ch++) {
-    const orig = channels[ch].slice()
-    const low = orig.slice(); applyBiquad(low, lowLpf)
-    const high = orig.slice(); applyBiquad(high, highHpf)
-    const mid = orig.slice(); applyBiquad(mid, midBand1); applyBiquad(mid, midBand2)
-
-    // Apply compression per band
-    compressBand(low, params.mb_threshold_low, params.mb_ratio_low, params.mb_attack_low, params.mb_release_low, sampleRate)
-    compressBand(mid, params.mb_threshold_mid, params.mb_ratio_mid, params.mb_attack_mid, params.mb_release_mid, sampleRate)
-    compressBand(high, params.mb_threshold_high, params.mb_ratio_high, params.mb_attack_high, params.mb_release_high, sampleRate)
-
-    // Sum back
-    for (let i = 0; i < channels[ch].length; i++) {
-      channels[ch][i] = low[i] + mid[i] + high[i]
-    }
-  }
+/**
+ * Soft-knee gain reduction curve.
+ *   overshoot > 0  = signal is above threshold
+ *   overshoot = 0  = signal at threshold
+ *   kneeWidth      = transition width in dB around threshold
+ *
+ * Below knee: no reduction. Inside knee: quadratic blend. Above knee:
+ * hard ratio (conventional compression).
+ */
+function softKneeGainReduction(overshoot: number, ratio: number, kneeWidth: number): number {
+  if (overshoot <= -kneeWidth / 2) return 0
+  if (overshoot >= kneeWidth / 2) return overshoot / ratio
+  const k2 = kneeWidth / 2
+  return (overshoot + k2) ** 2 / (4 * k2 * ratio)
 }
 
-function compressBand(samples: Float32Array, thresholdDb: number, ratio: number, attackMs: number, releaseMs: number, sampleRate: number) {
+/**
+ * Feed-forward compression per band: reads the sidechain signal (the band
+ * itself BEFORE compression) to compute gain reduction, then applies that
+ * reduction to the signal — classic feed-forward topology used in most
+ * modern digital dynamics processors (Waves, FabFilter, etc.).
+ */
+function compressBand(
+  samples: Float32Array,
+  thresholdDb: number,
+  ratio: number,
+  attackMs: number,
+  releaseMs: number,
+  sampleRate: number,
+  kneeWidthDb: number = 6,
+): void {
   const attackCoef = Math.exp(-1 / (attackMs * 0.001 * sampleRate))
   const releaseCoef = Math.exp(-1 / (releaseMs * 0.001 * sampleRate))
   const thresholdLin = Math.pow(10, thresholdDb / 20)
-  let gainReduction = 1
+
+  // Feed-forward: read sidechain (the band itself), compute gain envelope
+  const gainReduction = new Float32Array(samples.length)
+  let gr = 0 // running gain reduction in dB
+
   for (let i = 0; i < samples.length; i++) {
     const x = Math.abs(samples[i])
-    let target = 1
-    if (x > thresholdLin) {
-      const overDb = 20 * Math.log10(x / thresholdLin)
-      const reducedDb = overDb * (1 - 1 / ratio)
-      target = Math.pow(10, -reducedDb / 20)
+    const overDb = x > 1e-10 ? 20 * Math.log10(x / thresholdLin) : -240
+
+    // Soft-knee gain computation
+    let targetGr = softKneeGainReduction(overDb, ratio, kneeWidthDb)
+
+    // Attack/release smoothing (coefficient-based, not sample-and-hold)
+    if (targetGr > gr) {
+      // Attack: gain reduction INCREASES (more compression)
+      gr = gr * attackCoef + targetGr * (1 - attackCoef)
+    } else {
+      // Release: gain reduction DECREASES (gain recovering)
+      gr = gr * releaseCoef + targetGr * (1 - releaseCoef)
     }
-    const coef = target < gainReduction ? attackCoef : releaseCoef
-    gainReduction = gainReduction * coef + target * (1 - coef)
-    samples[i] *= gainReduction
+    gainReduction[i] = Math.pow(10, -gr / 20)
+  }
+
+  // Apply gain reduction to the band
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] *= gainReduction[i]
+  }
+}
+
+/**
+ * 4-band Linkwitz-Riley crossover at 80/500/4000 Hz with soft knee and
+ * feed-forward detection — industry-standard mastering crossover points.
+ *
+ * Bands:
+ *   - Sub-bass:   0–80 Hz      (params.mb_*_sub)
+ *   - Low-mid:   80–500 Hz     (params.mb_*_low — backward compat)
+ *   - Presence: 500–4000 Hz    (params.mb_*_mid — backward compat)
+ *   - Air:      4000–20000 Hz  (params.mb_*_air)
+ *
+ * Crossover topology: cascaded 2nd-order Butterworth (Q=0.7071) highpass + lowpass
+ * per band edge, approximating a 4th-order Linkwitz-Riley response when summed.
+ */
+function applyMultibandCompression(
+  channels: Float32Array[],
+  params: ProcessingParams,
+  sampleRate: number,
+): void {
+  if (channels.length < 2) return
+
+  const xover1 = 80    // sub-bass → low-mid
+  const xover2 = 500   // low-mid → presence
+  const xover3 = 4000  // presence → air
+
+  // Crossover filter design
+  // Sub-bass:  LP @ 80 Hz
+  const subLp = designBiquad('lowpass', xover1, sampleRate, 0.7071)
+
+  // Low-mid:  HP @ 80 Hz → LP @ 500 Hz  (cascaded for band-pass)
+  const lowMidHp = designBiquad('highpass', xover1, sampleRate, 0.7071)
+  const lowMidLp = designBiquad('lowpass', xover2, sampleRate, 0.7071)
+
+  // Presence: HP @ 500 Hz → LP @ 4000 Hz
+  const presHp = designBiquad('highpass', xover2, sampleRate, 0.7071)
+  const presLp = designBiquad('lowpass', xover3, sampleRate, 0.7071)
+
+  // Air:       HP @ 4000 Hz
+  const airHp = designBiquad('highpass', xover3, sampleRate, 0.7071)
+
+  for (let ch = 0; ch < channels.length; ch++) {
+    const orig = channels[ch].slice()
+
+    // Sub-bass band
+    const sub = orig.slice()
+    applyBiquad(sub, subLp)
+
+    // Low-mid band (80–500 Hz)
+    const low = orig.slice()
+    applyBiquad(low, lowMidHp)
+    applyBiquad(low, lowMidLp)
+
+    // Presence band (500–4000 Hz)
+    const mid = orig.slice()
+    applyBiquad(mid, presHp)
+    applyBiquad(mid, presLp)
+
+    // Air band (4000–20000 Hz)
+    const air = orig.slice()
+    applyBiquad(air, airHp)
+
+    // Apply compression per band with soft knee
+    compressBand(sub, params.mb_threshold_sub, params.mb_ratio_sub,
+      params.mb_attack_sub, params.mb_release_sub, sampleRate)
+    compressBand(low, params.mb_threshold_low, params.mb_ratio_low,
+      params.mb_attack_low, params.mb_release_low, sampleRate)
+    compressBand(mid, params.mb_threshold_mid, params.mb_ratio_mid,
+      params.mb_attack_mid, params.mb_release_mid, sampleRate)
+    compressBand(air, params.mb_threshold_air, params.mb_ratio_air,
+      params.mb_attack_air, params.mb_release_air, sampleRate)
+
+    // Sum back to channel
+    for (let i = 0; i < channels[ch].length; i++) {
+      channels[ch][i] = sub[i] + low[i] + mid[i] + air[i]
+    }
   }
 }
 

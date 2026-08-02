@@ -32,6 +32,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { PaymentIsolation, isBetaMode, type PaymentMethod } from '@/lib/rain/payment-isolation'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
 import { formatZar } from '@/lib/rain/sa-regional'
+import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -94,7 +95,7 @@ export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
 //   body.action === 'create' or absent → create a new payment session
 // ---------------------------------------------------------------------------
 
-export async function POST(req: NextRequest): Promise<NextResponse> {
+export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => {
   const origin = req.headers.get('origin')
 
   // ── Same-origin check ──────────────────────────────────────────────────
@@ -387,7 +388,7 @@ async function handleConfirm(
     },
     { status: 200, headers: corsHeaders(origin) },
   )
-}
+})
 
 // ---------------------------------------------------------------------------
 // GET — Check payment status (idempotent read-only)

@@ -710,15 +710,15 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   },
   jazz: {
     // Gentle — slow attack, medium release for natural feel
-    mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0,
-    mb_release_low: 180.0, mb_release_high: 70.0,
+    mb_attack_sub: 8.0, mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_attack_air: 5.0,
+    mb_release_sub: 140.0, mb_release_low: 180.0, mb_release_high: 70.0, mb_release_air: 55.0,
     mid_gain: 0.0,
   },
   amapiano: {
     // Deep, log-drum-forward: fast low attack for tight kick, slow mid for
     // shaker/groove presence, wide stereo for synth pads + keys
-    mb_attack_low: 1.5, mb_attack_mid: 12.0, mb_attack_high: 5.0,
-    mb_release_low: 55.0, mb_release_high: 45.0,
+    mb_attack_sub: 1.0, mb_attack_low: 1.5, mb_attack_mid: 12.0, mb_attack_high: 5.0, mb_attack_air: 3.0,
+    mb_release_sub: 40.0, mb_release_low: 55.0, mb_release_high: 45.0, mb_release_air: 35.0,
     mid_gain: 0.0, // wide mix — don't center-bias
     stereo_width: 1.25, // wide synth pads and stereo log drums
     analog_saturation: true,
@@ -728,16 +728,16 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   gospel: {
     // Vocal-forward: strong center for choir/lead, moderate compression
     // with long release for sustained notes and dynamic builds
-    mb_attack_low: 6.0, mb_attack_mid: 10.0, mb_attack_high: 5.0,
-    mb_release_low: 150.0, mb_release_high: 60.0,
+    mb_attack_sub: 4.0, mb_attack_low: 6.0, mb_attack_mid: 10.0, mb_attack_high: 5.0, mb_attack_air: 3.0,
+    mb_release_sub: 120.0, mb_release_low: 150.0, mb_release_high: 60.0, mb_release_air: 45.0,
     mid_gain: 1.5, // center emphasis for choir + lead vocals
     stereo_width: 1.1, // slightly wider for organ/piano
   },
   afrobeats: {
     // Percussive + melodic: tight kick via fast low attack, wide mid for
     // layered percussion, warm saturation for vintage afro-groove
-    mb_attack_low: 2.0, mb_attack_mid: 6.0, mb_attack_high: 3.0,
-    mb_release_low: 70.0, mb_release_high: 40.0,
+    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 6.0, mb_attack_high: 3.0, mb_attack_air: 2.0,
+    mb_release_sub: 55.0, mb_release_low: 70.0, mb_release_high: 40.0, mb_release_air: 30.0,
     mid_gain: -0.5, // de-emphasize center for wide percussion field
     stereo_width: 1.2,
     analog_saturation: true,
@@ -747,8 +747,8 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   afro_house: {
     // Driving 4/4: tight all-band attack, punchy mid for percussive
     // layers, clean highs for shakers and rides
-    mb_attack_low: 2.0, mb_attack_mid: 4.0, mb_attack_high: 2.0,
-    mb_release_low: 80.0, mb_release_high: 35.0,
+    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 4.0, mb_attack_high: 2.0, mb_attack_air: 1.5,
+    mb_release_sub: 60.0, mb_release_low: 80.0, mb_release_high: 35.0, mb_release_air: 28.0,
     mid_gain: -1.0, // wide soundstage for house
     stereo_width: 1.3,
     analog_saturation: true,
@@ -758,8 +758,8 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   gqom: {
     // Minimal, raw, bass-heavy: fast low attack with high ratio for
     // crushing sub-bass, slow high attack to preserve raw percussion edge
-    mb_attack_low: 1.0, mb_attack_mid: 3.0, mb_attack_high: 15.0,
-    mb_release_low: 40.0, mb_release_high: 25.0,
+    mb_attack_sub: 0.8, mb_attack_low: 1.0, mb_attack_mid: 3.0, mb_attack_high: 15.0, mb_attack_air: 10.0,
+    mb_release_sub: 30.0, mb_release_low: 40.0, mb_release_high: 25.0, mb_release_air: 20.0,
     mid_gain: -0.5,
     stereo_width: 1.15,
     analog_saturation: false, // keep it raw and digital
@@ -767,37 +767,37 @@ const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   metal: {
     // Aggressive, fast: tight attack across all bands for palm-muted
     // precision, fast release for clarity in dense arrangements
-    mb_attack_low: 2.0, mb_attack_mid: 3.0, mb_attack_high: 1.5,
-    mb_release_low: 50.0, mb_release_high: 25.0,
+    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 3.0, mb_attack_high: 1.5, mb_attack_air: 1.0,
+    mb_release_sub: 40.0, mb_release_low: 50.0, mb_release_high: 25.0, mb_release_air: 20.0,
     mid_gain: -2.0, // push guitars to sides, leave kick/snare center
   },
   rnb: {
     // Smooth + punchy: moderate attack, vocal-forward mid, clean highs
-    mb_attack_low: 4.0, mb_attack_mid: 8.0, mb_attack_high: 3.0,
-    mb_release_low: 100.0, mb_release_high: 50.0,
+    mb_attack_sub: 3.0, mb_attack_low: 4.0, mb_attack_mid: 8.0, mb_attack_high: 3.0, mb_attack_air: 2.5,
+    mb_release_sub: 80.0, mb_release_low: 100.0, mb_release_high: 50.0, mb_release_air: 40.0,
     mid_gain: 1.0, // vocal emphasis
     stereo_width: 1.15,
   },
   country: {
     // Natural, acoustic-forward: slow attack, moderate ratio for
     // transparent dynamics — preserves guitar picking and vocal nuance
-    mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0,
-    mb_release_low: 200.0, mb_release_high: 80.0,
+    mb_attack_sub: 8.0, mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_attack_air: 5.0,
+    mb_release_sub: 150.0, mb_release_low: 200.0, mb_release_high: 80.0, mb_release_air: 60.0,
     mid_gain: 0.5,
   },
   reggae: {
     // Bass-forward dub: slow low attack for sub weight, fast high for
     // clean skank guitar and hi-hat clarity
-    mb_attack_low: 8.0, mb_attack_mid: 12.0, mb_attack_high: 4.0,
-    mb_release_low: 150.0, mb_release_high: 45.0,
+    mb_attack_sub: 6.0, mb_attack_low: 8.0, mb_attack_mid: 12.0, mb_attack_high: 4.0, mb_attack_air: 3.0,
+    mb_release_sub: 120.0, mb_release_low: 150.0, mb_release_high: 45.0, mb_release_air: 35.0,
     mid_gain: 0.0,
     stereo_width: 1.2,
   },
   ambient: {
     // No compression — max dynamics preservation. Slow attack + low
     // ratio = near-transparent; wide stereo for pads and drones
-    mb_attack_low: 20.0, mb_attack_mid: 25.0, mb_attack_high: 15.0,
-    mb_release_low: 300.0, mb_release_high: 120.0,
+    mb_attack_sub: 15.0, mb_attack_low: 20.0, mb_attack_mid: 25.0, mb_attack_high: 15.0, mb_attack_air: 10.0,
+    mb_release_sub: 250.0, mb_release_low: 300.0, mb_release_high: 120.0, mb_release_air: 90.0,
     mid_gain: 0.0,
     stereo_width: 1.4,
   },
@@ -836,7 +836,7 @@ const PLATFORM_TARGET_MAP: Record<string, { targetLufs: number; truePeakCeiling:
  * Apply 7 macro controls → derived ProcessingParams fields.
  * Mapping per RAIN V6 spec:
  *  - BRIGHTEN (0..10): high-shelf @ 8 kHz 0→+4 dB; air peak @ 16 kHz 0→+3 dB
- *  - GLUE: multiband ratios 1:1→4:1; lower thresholds
+ *  - GLUE: multiband ratios 1:1→4.5:1 (sub), 1:1→4:1 (low/mid), 1:1→3.5:1 (high/air)
  *  - WIDTH: stereo_width 0.7→1.5 (bass mono < 200 Hz always)
  *  - PUNCH: mid-band attack 1→15 ms, release 80→30 ms
  *  - WARMTH: low-shelf @ 200 Hz 0→+3 dB; saturation_drive 0→0.5

@@ -161,6 +161,16 @@ export function SignInModal({ onClose }: SignInModalProps) {
               </button>
               <button
                 type="button"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent('rain:forgot-password-open'))
+                }}
+                disabled={submitting}
+                className="text-[11px] text-muted-foreground hover:text-[#AAFF00] transition-colors"
+              >
+                Forgot password?
+              </button>
+              <button
+                type="button"
                 onClick={onClose}
                 disabled={submitting}
                 className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"

@@ -1,21 +1,21 @@
 /**
- * RAIN V6 — Groove + Emotional Intelligence Engine
+ * RAIN V6 - Groove + Emotional Intelligence Engine
  *
- * This module brings "feel" to the mastering pipeline — the missing piece
+ * This module brings "feel" to the mastering pipeline - the missing piece
  * between technical correctness and musical excellence.
  *
  * ## Groove Intelligence (rhythmic feel)
- *   1. Tempo Detection — BPM from onset analysis (spectral flux + autocorrelation)
- *   2. Groove Quantization — straight/swing/shuffle/half-time/double-time via IOI analysis
- *   3. Groove-Preserving Multiband Compression — attack/release locked to musical values
- *   4. Transient Enhancement — genre-aware beat emphasis (kick on 1&3, snare on 2&4 etc.)
- *   5. Dynamics Map — per-bar energy contour, section boundary detection
+ *   1. Tempo Detection - BPM from onset analysis (spectral flux + autocorrelation)
+ *   2. Groove Quantization - straight/swing/shuffle/half-time/double-time via IOI analysis
+ *   3. Groove-Preserving Multiband Compression - attack/release locked to musical values
+ *   4. Transient Enhancement - genre-aware beat emphasis (kick on 1&3, snare on 2&4 etc.)
+ *   5. Dynamics Map - per-bar energy contour, section boundary detection
  *
  * ## Emotional Intelligence
- *   6. Valence/Arousal Estimation — simplified MERT-style from spectral features
- *   7. Emotion-Preserving Settings — genre settings tempered by detected emotion
- *   8. Tension Arc Detection — build-ups, drops, releases from dynamics map
- *   9. Section-Aware Processing — different processing per section type
+ *   6. Valence/Arousal Estimation - simplified MERT-style from spectral features
+ *   7. Emotion-Preserving Settings - genre settings tempered by detected emotion
+ *   8. Tension Arc Detection - build-ups, drops, releases from dynamics map
+ *   9. Section-Aware Processing - different processing per section type
  *
  * 100% TypeScript, browser-compatible, no external dependencies beyond the
  * Web Audio API. Uses Float32Array operations throughout. All spectral
@@ -75,7 +75,7 @@ export interface GrooveProfile {
   swingRatio: number
   /** Time signature numerator (4 = 4/4, 3 = 3/4, etc.). */
   timeSignature: number
-  /** Per-bar energy contour — start time + mean RMS per bar. */
+  /** Per-bar energy contour - start time + mean RMS per bar. */
   barEnergies: Array<{ startS: number; energyDb: number; transientCount: number }>
   /** Detected musical sections. */
   sections: Section[]
@@ -89,9 +89,9 @@ export interface GrooveProfile {
     eighth: number
     quarter: number
   }
-  /** Groove-aware attack time (ms) per band — derived from BPM + groove type. */
+  /** Groove-aware attack time (ms) per band - derived from BPM + groove type. */
   grooveAttackMs: { low: number; mid: number; high: number }
-  /** Groove-aware release time (ms) per band — locked to subdivision. */
+  /** Groove-aware release time (ms) per band - locked to subdivision. */
   grooveReleaseMs: { low: number; mid: number; high: number }
 }
 
@@ -131,10 +131,10 @@ export interface GrooveEmotionProfile {
  * These are merged into the base ProcessingParams to add feel-aware settings.
  */
 export interface GrooveEmotionOverrides {
-  /** Override multiband attack times (ms) with groove-locked values. */
-  mb_attack_override?: { low: number; mid: number; high: number }
-  /** Override multiband release times (ms) with groove-locked values. */
-  mb_release_override?: { low: number; mid: number; high: number }
+  /** Override multiband attack times (ms) with groove-locked values (4-band). */
+  mb_attack_override?: { sub: number; low: number; mid: number; high: number; air: number }
+  /** Override multiband release times (ms) with groove-locked values (4-band). */
+  mb_release_override?: { sub: number; low: number; mid: number; high: number; air: number }
   /** Emotion-tempered EQ gain adjustments (added to base eq_gains). */
   eq_emotion_temper: number[]
   /** Emotion-tempered stereo width multiplier. */
@@ -179,7 +179,7 @@ const ENERGY_DROP_THRESHOLD = 8 // dB drop = section boundary candidate
 const TRANSIENT_CHANGE_THRESHOLD = 0.5 // factor change in transient density
 
 // ---------------------------------------------------------------------------
-// 1. TEMPO DETECTION — onset analysis via spectral flux + autocorrelation
+// 1. TEMPO DETECTION - onset analysis via spectral flux + autocorrelation
 // ---------------------------------------------------------------------------
 
 /**
@@ -307,7 +307,7 @@ export function detectBpm(
 }
 
 // ---------------------------------------------------------------------------
-// 2. GROOVE QUANTIZATION — IOI analysis for groove classification
+// 2. GROOVE QUANTIZATION - IOI analysis for groove classification
 // ---------------------------------------------------------------------------
 
 /**
@@ -453,7 +453,7 @@ export function classifyGroove(
 }
 
 // ---------------------------------------------------------------------------
-// 3. GROOVE-PRESERVING MULTIBAND COMPRESSION — musical time constants
+// 3. GROOVE-PRESERVING MULTIBAND COMPRESSION (4-band) — musical time constants
 // ---------------------------------------------------------------------------
 
 /**
@@ -516,7 +516,7 @@ export function computeGrooveTimeConstants(
       releaseMid = sub.quarter * 1000 * 1.1
       break
     case 'shuffle':
-      // Shuffle: triplet-based — lock to triplet eighth
+      // Shuffle: triplet-based - lock to triplet eighth
       attackMid = (sub.quarter / 3) * 1000 // triplet eighth
       releaseLow = (sub.quarter / 3 * 2) * 1000 // two triplet eighths
       releaseMid = sub.quarter * 1000 * 1.2
@@ -565,7 +565,7 @@ export function computeGrooveTimeConstants(
 }
 
 // ---------------------------------------------------------------------------
-// 4. TRANSIENT ENHANCEMENT — genre-aware beat emphasis
+// 4. TRANSIENT ENHANCEMENT - genre-aware beat emphasis
 // ---------------------------------------------------------------------------
 
 /**
@@ -600,7 +600,7 @@ const GENRE_BEAT_RULES: Record<string, {
 
 /**
  * Classify beat position for a given onset time within a bar.
- * Bar is divided into 16th-note slots (0–15).
+ * Bar is divided into 16th-note slots (0-15).
  */
 export function classifyBeatPosition(
   onsetTimeS: number,
@@ -675,11 +675,11 @@ export function computeTransientEnhancement(
 
   switch (beatPosition) {
     case 'downbeat':
-      // Kick emphasis — enhance if it's already prominent
+      // Kick emphasis - enhance if it's already prominent
       if (relativeEnergy > 1.2) return 1.0 + 0.15 * Math.min(1, relativeEnergy - 1)
       return 1.05 // gentle boost if kick is weak
     case 'backbeat':
-      // Snare emphasis — enhance the backbeat
+      // Snare emphasis - enhance the backbeat
       if (relativeEnergy > 1.0) return 1.0 + 0.12 * Math.min(1, relativeEnergy - 1)
       return 1.03
     case 'offbeat':
@@ -697,7 +697,7 @@ export function computeTransientEnhancement(
 }
 
 // ---------------------------------------------------------------------------
-// 5. DYNAMICS MAP — per-bar energy contour + section detection
+// 5. DYNAMICS MAP - per-bar energy contour + section detection
 // ---------------------------------------------------------------------------
 
 /**
@@ -896,7 +896,7 @@ function classifySection(
 }
 
 // ---------------------------------------------------------------------------
-// 6. VALENCE / AROUSAL ESTIMATION — simplified MERT-style
+// 6. VALENCE / AROUSAL ESTIMATION - simplified MERT-style
 // ---------------------------------------------------------------------------
 
 /**
@@ -936,7 +936,7 @@ export function estimateValenceArousal(
 
   // --- Major/minor key energy ratio ---
   // Simplified: check energy in major 3rd (4 semitones) vs minor 3rd (3 semitones)
-  // We use the spectral flatness as a proxy — more tonal = less flat
+  // We use the spectral flatness as a proxy - more tonal = less flat
   const tonality = spectralFeatures.flatness < 0.3 ? 1 - spectralFeatures.flatness * 3 : 0
 
   // --- VALENCE computation ---
@@ -1053,7 +1053,7 @@ export function computeEmotionTemper(
 
   // Low arousal + low valence → warmth boost
   if (arousal < 0 && valence < 0) {
-    eqTemper[0] = -valence * 1.0  // 60 Hz — add warmth for sad/calm
+    eqTemper[0] = -valence * 1.0  // 60 Hz - add warmth for sad/calm
     eqTemper[1] = -valence * 0.8  // 200 Hz
   }
 
@@ -1225,10 +1225,10 @@ export function buildTensionArc(
 /**
  * Generate section-specific processing hints.
  *
- * Verses: clarity/detail — slightly brighter, moderate width, light compression
- * Choruses: power/density — wider, more compression, saturation
- * Bridges: space/atmosphere — extra width, less compression, more reverb-feel
- * Drops: maximum impact — extra compression, width, sub emphasis
+ * Verses: clarity/detail - slightly brighter, moderate width, light compression
+ * Choruses: power/density - wider, more compression, saturation
+ * Bridges: space/atmosphere - extra width, less compression, more reverb-feel
+ * Drops: maximum impact - extra compression, width, sub emphasis
  */
 export function buildSectionHints(
   sections: Section[],
@@ -1494,7 +1494,7 @@ export function estimateEmotion(
 
 /**
  * Build GrooveEmotionOverrides from groove and emotion profiles.
- * This is the integration point — produces ProcessingParams overrides
+ * This is the integration point - produces ProcessingParams overrides
  * that can be merged into the base processing pipeline.
  *
  * @param genre - Genre slug (e.g., 'pop', 'rock', 'amapiano')

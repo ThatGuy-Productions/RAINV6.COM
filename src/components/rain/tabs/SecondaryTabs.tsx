@@ -628,91 +628,9 @@ function SpatialInfo({ label, value }: { label: string; value: string }) {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Pitch Correction Tab
-// ---------------------------------------------------------------------------
+// Pitch tab removed — non-functional (CREPE/PSOLA not implemented). Will return in V7 with real DSP.
 
-export function PitchTab() {
-  const [scale, setScale] = useState('C_major')
-  const [strength, setStrength] = useState(50)
-  const [formant, setFormant] = useState(0)
-  const [retune, setRetune] = useState(20)
-
-  return (
-    <div className="space-y-4">
-      <div className="rain-panel rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-0.5">
-              Pitch Correction & Formant
-            </div>
-            <div className="text-sm font-semibold">CREPE fundamental · PSOLA time-stretch · formant preservation</div>
-          </div>
-          <Music2 className="w-5 h-5 text-rain-accent" />
-        </div>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-4">
-        <div className="rain-panel rounded-lg p-4 space-y-3">
-          <div className="text-sm font-semibold">Correction Settings</div>
-          <div>
-            <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block mb-1">Scale</label>
-            <select
-              value={scale}
-              onChange={(e) => setScale(e.target.value)}
-              className="w-full bg-rain-surface-2 border border-rain-border rounded-md px-3 py-1.5 text-sm"
-            >
-              <option value="C_major">C Major</option>
-              <option value="A_minor">A Minor</option>
-              <option value="G_major">G Major</option>
-              <option value="E_minor">E Minor</option>
-              <option value="chromatic">Chromatic (free)</option>
-              <option value="D_major">D Major</option>
-              <option value="B_minor">B Minor</option>
-            </select>
-          </div>
-          <Slider label="Correction strength" value={strength} min={0} max={100} onChange={setStrength} unit="%" />
-          <Slider label="Retune speed" value={retune} min={0} max={100} onChange={setRetune} unit="ms" />
-          <Slider label="Formant shift" value={formant} min={-12} max={12} onChange={setFormant} unit=" st" />
-        </div>
-
-        <div className="rain-panel rounded-lg p-4">
-          <div className="text-sm font-semibold mb-3">Pitch Curve (real-time)</div>
-          <svg viewBox="0 0 300 140" className="w-full h-32">
-            {/* Grid */}
-            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => (
-              <line key={i} x1={0} y1={(i / 11) * 140} x2={300} y2={(i / 11) * 140} stroke="rgba(170, 255, 0, 0.05)" strokeWidth={1} />
-            ))}
-            {/* Snapped pitch */}
-            <polyline
-              points="0,90 30,90 30,70 70,70 70,50 110,50 110,90 150,90 150,40 190,40 190,60 230,60 230,80 270,80 270,90 300,90"
-              fill="none"
-              stroke="#AAFF00"
-              strokeWidth={2}
-              style={{ filter: 'drop-shadow(0 0 4px #AAFF00)' }}
-            />
-            {/* Original pitch */}
-            <polyline
-              points="0,85 20,92 40,68 60,75 80,55 100,48 120,90 140,82 160,45 180,38 200,62 220,55 240,78 260,85 280,88 300,85"
-              fill="none"
-              stroke="rgba(170, 255, 0, 0.3)"
-              strokeWidth={1}
-              strokeDasharray="2 2"
-            />
-            {/* Note labels */}
-            {['C', 'D', 'E', 'F', 'G', 'A', 'B', 'C', 'D', 'E', 'F', 'G'].map((n, i) => (
-              <text key={i} x={2} y={(i / 11) * 140 + 12} fill="rgba(170, 255, 0, 0.3)" fontSize="8" fontFamily="monospace">{n}</text>
-            ))}
-          </svg>
-          <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground mt-2">
-            <span><span className="text-rain-accent">─</span> Corrected</span>
-            <span><span className="text-rain-accent">┄</span> Original</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
+// Pitch tab removed — non-functional (CREPE/PSOLA not implemented). Will return in V7 with real DSP.
 
 function Slider({ label, value, min, max, onChange, unit }: { label: string; value: number; min: number; max: number; onChange: (v: number) => void; unit: string }) {
   return (
