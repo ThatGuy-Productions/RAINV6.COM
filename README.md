@@ -4,7 +4,7 @@
 
 **ThatGuy Productions · ARCOVEL Technologies International**
 
-> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/64-bit precision. No uploads. No server-side processing. No account required.
+> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/32-bit float. No uploads. No server-side processing. No account required.
 
 ---
 
@@ -61,7 +61,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 | UI | React 19 · Tailwind CSS 4 · shadcn/ui (Radix) |
 | DSP | TypeScript Web Audio API — all processing in-browser, 48 kHz |
 | AI/ML | RainNet v2 ONNX → 46 ProcessingParams per render |
-| Provenance | Ed25519 signatures · C2PA v2.2 manifest · Chain-of-custody |
+| Provenance | Ed25519 signatures · C2PA v2.2-style manifest (JSON) · Chain-of-custody |
 | Distribution | DDEX ERN 4.3.2 · LabelGrid API · DistroKid browser automation |
 | Payments | PayFast (ZA) · Ozow (ZA) · Stripe (INTL) — R0.00 during BETA |
 | Security | scrypt auth · timing-safe compares · SHA-256 hashing · httpOnly cookies |
@@ -72,7 +72,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 
 | Stage | Name | What Happens |
 |---|---|---|
-| 1 | Format Normalization | Resample to 48 kHz, 64-bit float stereo |
+| 1 | Format Normalization | Resample to 48 kHz, 32-bit float stereo |
 | 2 | Signal Analysis | ITU-R BS.1770-4 LUFS, true peak (4× oversampled), RMS, crest factor, LRA |
 | 3 | Loudness Survey | Pre-master LUFS + true peak baselines |
 | 4 | AI Inference | RainNet v2 ONNX → 46 ProcessingParams (falls back to heuristics) |
@@ -85,7 +85,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 | 11 | Loudness Targeting | LUFS-based gain compensation to platform target |
 | 12 | True-Peak Limiting | Closed-loop ISP protection (limit → measure dBTP → re-limit) |
 | 13 | QC Validation | Final re-analysis + corrective re-limit if ceiling exceeded |
-| 14 | Provenance Signature | Ed25519 cert + C2PA manifest embedding |
+| 14 | Provenance Signature | Ed25519 cert + C2PA v2.2-style manifest (JSON) embedding |
 | 15 | Output Packing | AudioBuffer build, TPDF dither, 24-bit/48 kHz WAV + 320 kbps MP3 |
 | 16 | Distribution Readiness | Final LUFS/TP gate → `_distributionReady` flag |
 
@@ -106,14 +106,14 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 - **18-point QC engine** — LUFS, true peak, LRA, crest factor, stereo width, phase, sibilance, clipping, and more
 
 ### Distribution
-- **DDEX ERN 4.3.2** — Single + multi-track (album/EP) XML packaging with AI disclosure per EU AI Act Article 50
+- **DDEX ERN 4.3.2** — Single-track XML packaging with AI disclosure per EU AI Act Article 50
 - **LabelGrid API** — Enterprise delivery path (requires API key)
 - **DistroKid browser automation** — Free beta distribution via Playwright-driven Chromium upload (no API key needed)
 - **DistroKid pricing** — Real-time ZAR pricing with RAIN = DK + 20% markup
 
 ### Security & Provenance
 - **Ed25519 RAIN-CERT** — Every render carries a cryptographic provenance certificate
-- **C2PA v2.2** — Content authenticity manifest embedded in exports
+- **C2PA v2.2-style manifest (JSON)** — Content authenticity structural mimic embedded in exports
 - **scrypt auth** — N=16384, timing-safe compares, SHA-256 token hashing
 - **Payment isolation** — Per-session UUIDv7, one-time tokens, zero cross-contamination
 
@@ -206,6 +206,7 @@ rain-beta/
 - **Payment isolation** — per-session UUIDv7, one-time tokens, no cross-user contamination
 - **Rate limiting** — token bucket (3 attempts/minute per session)
 - **BETA mode** — all payments R0.00, payment infrastructure verified but inactive
+- **Fingerprint** — custom 32×8 spectral hash, not Chromaprint/AcoustID-compatible (planned for near-term upgrade)
 
 ---
 
