@@ -1,0 +1,1 @@
+node_modules .next .git .gitignore .env .env.local .env.*.local README.md PRODUCTION_READYNESS_REPORT.md bun.lock package-lock.json npm-debug.log download/ .zscripts/ agent-ctx/

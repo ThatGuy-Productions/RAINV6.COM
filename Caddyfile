@@ -1,23 +1,28 @@
-:81 {
-	@transform_port_query {
-		query XTransformPort=*
-	}
-
-	handle @transform_port_query {
-		reverse_proxy localhost:{query.XTransformPort} {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
-
-	handle {
-		reverse_proxy localhost:3000 {
-			header_up Host {host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
-			header_up X-Real-IP {remote_host}
-		}
-	}
+{
+	auto_https off
 }
+rainv6.com, www.rainv6.com {
+	reverse_proxy localhost:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+	encode gzip zstd
+	@transform_port_query { query XTransformPort=* }
+	handle @transform_port_query {
+		reverse_proxy localhost:{query.XTransformPort} { header_up Host {host} header_up X-Forwarded-For {remote_host} header_up X-Forwarded-Proto {scheme} }
+	}
+	@static { path *.js *.css *.png *.jpg *.jpeg *.gif *.svg *.woff *.woff2 *.ttf *.eot *.ico *.json }
+	header @static Cache-Control "public, max-age=31536000, immutable"
+	header { X-Frame-Options "DENY" X-Content-Type-Options "nosniff" Referrer-Policy "strict-origin-when-cross-origin" Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" }
+	log { output file /var/log/caddy/access.log format json }
+}
+
+# SEC-M1 — Upload size enforcement at reverse proxy (uncomment for production)
+# handle /api/rain/source {
+#     request_body {
+#         max_size 500MB
+#     }
+#     reverse_proxy localhost:3000
+# }
