@@ -2,46 +2,6 @@ import { NextResponse } from 'next/server'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
 import type { NextRequest } from 'next/server'
 
-// ─── Rate Limiting Store (in-memory, per-process) ────────────────────────
-interface RateLimitEntry {
-  count: number
-  resetAt: number
-}
-
-const rateLimitStore = new Map<string, RateLimitEntry>()
-
-// Clean up expired entries every 60 seconds
-if (typeof globalThis !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now()
-    for (const [key, entry] of rateLimitStore) {
-      if (now > entry.resetAt) rateLimitStore.delete(key)
-    }
-  }, 60_000).unref?.()
-}
-
-function checkRateLimit(
-  key: string,
-  maxRequests: number,
-  windowMs: number,
-): { allowed: boolean; remaining: number; resetAt: number } {
-  const now = Date.now()
-  const entry = rateLimitStore.get(key)
-
-  if (!entry || now > entry.resetAt) {
-    const resetAt = now + windowMs
-    rateLimitStore.set(key, { count: 1, resetAt })
-    return { allowed: true, remaining: maxRequests - 1, resetAt }
-  }
-
-  if (entry.count >= maxRequests) {
-    return { allowed: false, remaining: 0, resetAt: entry.resetAt }
-  }
-
-  entry.count++
-  return { allowed: true, remaining: maxRequests - entry.count, resetAt: entry.resetAt }
-}
-
 // ─── Rate Limit Configuration ────────────────────────────────────────────
 const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/auth/login': { max: 5, windowMs: 60_000 },       // 5 req/min
@@ -169,20 +129,16 @@ export function middleware(request: NextRequest) {
   // ── 3. Rate limiting for API routes ──
   for (const [path, config] of Object.entries(RATE_LIMITS)) {
     if (pathname.startsWith(path)) {
-      // Use IP + path as rate limit key
-      const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-        || request.headers.get('x-real-ip')
-        || 'unknown'
-      const key = `${ip}:${path}`
-
-      const result = checkRateLimit(key, config.max, config.windowMs)
+      // Use the shared limiter helper so middleware and route handlers have one API.
+      // The helper keys by route prefix + client IP and applies a token bucket.
+      const result = checkRateLimit(request, path, config.max)
       response.headers.set('X-RateLimit-Remaining', String(result.remaining))
-      response.headers.set('X-RateLimit-Reset', String(result.resetAt))
+      response.headers.set('X-RateLimit-Reset', String(Math.ceil((Date.now() + 60_000) / 1000)))
 
-      if (!result.allowed) {
+      if (!result.ok) {
         return NextResponse.json(
-          { ok: false, error: 'Rate limit exceeded. Please try again later.', retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) },
-          { status: 429, headers: { 'Retry-After': String(Math.ceil((result.resetAt - Date.now()) / 1000)) } },
+          { ok: false, error: 'Rate limit exceeded. Please try again later.', retryAfter: result.retryAfter },
+          { status: 429, headers: { 'Retry-After': String(result.retryAfter) } },
         )
       }
       break
