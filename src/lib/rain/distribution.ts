@@ -1172,6 +1172,7 @@ export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult>
     const fd = new FormData()
     fd.append('jobId', job.id)
     fd.append('manifest', JSON.stringify(job.manifest))
+    fd.append('packageSha256', job.packageSha256)
     fd.append('package', new Blob([pkg.buffer as ArrayBuffer], { type: 'application/zip' }), `${job.manifest.releaseId}.zip`)
 
     const resp = await fetch('/api/rain/distribute', {
