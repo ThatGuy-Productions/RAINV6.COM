@@ -4,6 +4,16 @@ import { buildDistributionPackage } from '../../src/lib/rain/distribution'
 import { hashFloat32Channels } from '../../src/lib/rain/provenance'
 import type { ProvenanceCertificate } from '../../src/lib/rain/types'
 
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function sha256Base64(bytes: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return btoa(String.fromCharCode(...digest))
+}
+
 function makeAudioBuffer(seconds = 1, sampleRate = 48000): AudioBuffer {
   const length = Math.floor(seconds * sampleRate)
   const channels = [new Float32Array(length), new Float32Array(length)]
@@ -110,10 +120,16 @@ describe('Distribution package integration', () => {
       const bytes = zip[asset.filename]
       expect(bytes).toBeDefined()
       expect(bytes.byteLength).toBe(asset.sizeBytes)
+      expect(await sha256Hex(bytes)).toBe(asset.sha256)
+      expect(checksums).toContain(`${asset.sha256}  ${asset.filename}`)
     }
 
-    const wav = zip[embeddedManifest.assets.find((asset: { mimeType: string }) => asset.mimeType === 'audio/wav').filename]
-    const mp3 = zip[embeddedManifest.assets.find((asset: { mimeType: string }) => asset.mimeType === 'audio/mpeg').filename]
+    const wavAsset = embeddedManifest.assets.find((asset: { mimeType: string }) => asset.mimeType === 'audio/wav')
+    const mp3Asset = embeddedManifest.assets.find((asset: { mimeType: string }) => asset.mimeType === 'audio/mpeg')
+    const wav = zip[wavAsset.filename]
+    const mp3 = zip[mp3Asset.filename]
+    const ern = new TextDecoder().decode(zip['ern.xml'])
+    expect(ern).toContain(`<HashSumValue>${await sha256Base64(wav)}</HashSumValue>`)
     expect(Buffer.from(wav).includes(Buffer.from(certificate.signature))).toBe(true)
     expect(Buffer.from(mp3).includes(Buffer.from(certificate.signature))).toBe(true)
   })
