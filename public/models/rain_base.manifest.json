@@ -5,10 +5,30 @@
   "createdAt": "2026-07-31T00:00:00Z",
   "checksums": {
     "sha256": "PLACEHOLDER-compute-cli-sha256sum-public-models-rain_base-onnx",
-    "sha384": "PLACEHOLDER-compute-cli-sha384sum-public-models-rain_base-onnx"
+    "sha384": "PLACEHOLDER-compute-cli-sha384sum-public-models-rain_base-onnx",
+    "sha256ExternalData": "PLACEHOLDER-compute-cli-sha256sum-public-models-rain_base-onnx-data"
   },
   "onnxRuntimeVersion": "1.20.0",
-  "inputSpec": { "format": "Float32Array", "shape": [-1, 48000, 1], "sampleRate": 48000 },
-  "outputSpec": { "stems": 12, "format": "Float32Array" },
-  "dspStageMapping": ["stem-separation", "eq", "multiband-compression", "loudness", "limiting", "export"]
+  "inputSpec": {
+    "format": "Float32Array",
+    "shape": [
+      -1,
+      48000,
+      1
+    ],
+    "sampleRate": 48000
+  },
+  "outputSpec": {
+    "stems": 12,
+    "format": "Float32Array"
+  },
+  "dspStageMapping": [
+    "stem-separation",
+    "eq",
+    "multiband-compression",
+    "loudness",
+    "limiting",
+    "export"
+  ],
+  "externalDataFile": "rain_base.onnx.data"
 }
