@@ -1,16 +1,16 @@
 # RAIN V6.COM — Full-Stack Engineering Fix Plan
 
 Status: Engineering plan and release-gate specification
-Prepared: 2026-10-27
+Prepared: 2026-10-28
 Target branch: codex/bring-code-to-readme-2026-10-27
 Base branch: release-candidate
 Authority: the README/product specification is the intended target. This plan does not lower requirements to match incomplete code.
 
 ## Executive decision
 
-Do not merge or call this stack production-ready until the P0 gates below are evidenced. Work in small, reviewable commits on the existing recovery branch/PR. Keep the live beta and commercial launch distinct. Preserve browser-local audio processing where intended, while using the server for identity, entitlements, durable records, payment verification, quotas and audit events.
+Do not merge or call this stack production-ready until the P0 gates below are evidenced. Work in small, reviewable commits on the existing recovery branch/PR. Treat the current live beta as a reference deployment that will be retired after the replacement beta passes acceptance. The repository is being repaired to build the replacement beta. Keep beta capabilities distinct from commercial distribution. Preserve browser-local audio processing where intended, while using the server for identity, entitlements, durable records, payment verification, quotas and audit events.
 
-The order is deliberate: establish reproducible builds and a trustworthy database first; then persistent identity and projects; then entitlement/accounting and payment; then audio/export integrity; then AI/stems/spatial; then provenance and distribution; finally deployment, privacy, monitoring and release evidence.
+The order is deliberate: establish reproducible builds and a trustworthy database first; then persistent identity and projects; then entitlement/accounting and payment; then audio/export integrity; then AI/stems/spatial; then provenance and distribution; finally deployment, privacy, monitoring and release evidence. The new beta must preserve the documented 16-stage sequential quality-gated pipeline: every stage's output is checked against stage-appropriate acceptance criteria before the next stage may execute. A failed gate must block progression and produce a truthful failure/recovery state. Verify whether this is implemented in the repository; do not infer runtime enforcement from UI labels or static reference assets. The captured live-beta site is a product reference only and will be retired after the replacement is independently validated.
 
 ## Product rules to implement
 
@@ -54,7 +54,7 @@ Acceptance: a new user can return after closing the browser and after a deployme
 ### W2 — Entitlement ledger and beta allowance (P0 before payment)
 - Add durable server-side records for entitlement state, free credits, successful uses/exports, quota period, payment references, provider event IDs and state transitions. Use transactions and unique idempotency keys.
 - Centralize entitlement evaluation in one server-side policy function. Every gated API action and UI preflight must share this policy; client counters are advisory only.
-- Implement two free use credits after the credit unit is confirmed. Reserve/consume atomically to prevent concurrent tabs double-spending or bypassing the gate. Release reservations on failed operations.
+- Implement two free full-capability renders, each including one successful export, as a one-time per-account allowance. Reserve/consume atomically to prevent concurrent tabs double-spending or bypassing the gate. Release reservations on failed operations.
 - Count the 30-export monthly fair-use limit only for successfully finalized output files. Persist the selected boundary/timezone; prevent retries and duplicate callbacks from double-counting.
 - Design anonymous-to-account linking so users cannot reset or arbitrarily combine allowances by changing IDs. Rate-limit and protect linking.
 - Until real payment verification and entitlements are complete, show checkout unavailable; never imply payment was taken.
@@ -82,7 +82,7 @@ Acceptance: one verified sandbox payment creates exactly one entitlement; forged
 Acceptance: integration tests compare UI/admin metrics to durable seeded rows; failed writes show missing/unavailable, not false success; duplicates are deduplicated.
 
 ### W5 — Audio pipeline and export correctness (P0)
-- Trace all 16 documented stages from action to output bytes. Record executed/skipped/fallback/error state, parameters and timing. Never mark an unexecuted stage complete.
+- Trace all 16 documented stages from action to output bytes. Validate audio quality after every stage before permitting progression; a failed gate must block the next stage. Record executed/skipped/fallback/error state, validation metrics, acceptance thresholds, parameters and timing. Never mark an unexecuted stage complete.
 - Test supported formats, sample rates, mono/stereo, silence, clipped input, short/long input, invalid samples, malformed files and aborts.
 - Validate resampling, channel routing, LUFS/true peak, loudness target, limiter convergence, dither, bit depth, clipping, encoder failures and metadata.
 - Independently decode generated WAV/MP3 and verify duration, sample rate, channel count, bit depth/bitrate, finite samples, loudness and peak tolerances.
@@ -90,7 +90,7 @@ Acceptance: integration tests compare UI/admin metrics to durable seeded rows; f
 - Finalize export atomically: encoding succeeds, validation passes, then record/quota commits once. Partial/failed exports do not count.
 - Maintain browser-first target; desktop software is Enterprise-only at commercial launch. Do not claim local processing if an integration uploads audio.
 
-Acceptance: reproducible browser tests prove real output for each supported export path, DSP tolerances, truthful stage reporting and correct quota accounting.
+Acceptance: reproducible browser tests prove real output for each supported export path, DSP tolerances, truthful stage reporting and correct quota accounting. Include fault-injection tests demonstrating that a failed stage-level quality gate prevents the following stage from running.
 
 ### W6 — RainNet inference/model integrity (P1 feature-claim blocker)
 - Verify actual model files/LFS objects and SHA-256 manifests in build and deployment.
@@ -161,7 +161,7 @@ Acceptance: test users migrate beta → paid beta → commercial tiers without i
 ### P0 — No merge/release until passed
 1. Clean reproducible build and test suite.
 2. Persistent account/session/project data verified against actual deployment DB.
-3. Server-authoritative entitlement ledger and two-credit policy; exact credit unit documented.
+3. Server-authoritative entitlement ledger: two one-time free full-capability renders (one export each), then verified R49 unlock; paid beta 1,500 credits/month at 25 credits/render and a separate hard cap of 30 successful exports/month.
 4. Verified provider payment and durable entitlement before live charging.
 5. Successful exports durably recorded, idempotent and tied to actual output.
 6. Admin/funder metrics derived from verified records and distinguish missing history from zero.
@@ -196,6 +196,13 @@ Acceptance: test users migrate beta → paid beta → commercial tiers without i
 ## Required evidence pack
 
 For each gate preserve commit SHA, command/test name, environment, pass/fail, logs/artifacts, fixtures, unresolved limitations and verifier for any deployment/provider configuration. Never include credentials, private user data or user audio.
+
+## Replacement-beta transition
+
+- Build the replacement beta from this repository on a separate deployment; do not use the retired beta as the production dependency or assume captured compiled assets are reusable source.
+- Use `RAINV6PAGES.zip` and `RAINV6BETA.zip` as reference evidence for interface and intended behaviour. Compiled assets can reveal visible labels and bundled client logic, but cannot alone prove backend behaviour or every runtime failure path.
+- Maintain a migration/cutover checklist: independent staging URL, environment/secrets validation, DB migration and backup/restore rehearsal, browser/device compatibility, account and entitlement tests, pipeline fault injection, export/provenance verification, monitoring, rollback plan, then controlled launch. Retire the existing site only after acceptance evidence is signed off and the replacement is stable.
+- Distribution integrations are a commercial-release feature. Beta must create and validate the master package with metadata, embedded certificate/signature/fingerprint as supported, and optional sidecar evidence; it must not claim external distributor delivery. A proof lock means tamper detection and verifiable evidence, not making alteration physically impossible. Validate evidence against exact exported bytes and describe each hash's scope accurately.
 
 ## Current confidence and limitations
 
