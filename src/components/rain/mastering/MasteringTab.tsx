@@ -184,7 +184,7 @@ export function MasteringTab() {
     setIsProcessing(true)
     renderStartTime.current = Date.now()
     // BETA-ANALYTICS: fire-and-forget — don't gate the render on this.
-    void ensureBackendSession()
+    const backendSessionPromise = ensureBackendSession()
 
     // Clear stale stem results from a previous render or manual Stems-tab run.
     // Automatic neural separation is disabled until a verified model is bundled.
@@ -262,7 +262,7 @@ export function MasteringTab() {
       // itself remains in-browser; users reselect the source file when they
       // return. Do not let a failed save interrupt mastering or export.
       void (async () => {
-        const persistentSessionId = await ensureBackendSession()
+        const persistentSessionId = await backendSessionPromise
         if (!persistentSessionId) return
         const current = useSessionStore.getState()
         const response = await fetch('/api/rain/session', {
