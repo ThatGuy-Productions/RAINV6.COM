@@ -77,7 +77,13 @@ if [ -f "./next-service-dist/server.js" ]; then
             exit 1
             ;;
     esac
-    echo "Ensure `prisma migrate deploy` has completed successfully before rollout."
+    echo "Applying versioned PostgreSQL migrations before starting the app..."
+    if [ ! -f "./node_modules/prisma/build/index.js" ] || [ ! -d "./prisma/migrations" ]; then
+        echo "ERROR: Prisma CLI/migrations are missing from the deployment package."
+        exit 1
+    fi
+    bun ./node_modules/prisma/build/index.js migrate deploy
+
 
     # Start Next.js in background
     bun server.js &
