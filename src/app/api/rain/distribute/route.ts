@@ -314,7 +314,29 @@ export const POST = withCsrf(async (req: NextRequest) => {
     )
   }
 
-  const apiUrl = process.env.LABELGRID_API_URL || 'https://api.labelgrid.com/v1/deliveries'
+  const apiUrl = process.env.LABELGRID_API_URL
+  if (!apiUrl) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: true, error: 'LABELGRID_API_URL is not configured. The package is validated but has not been submitted.' },
+      { status: 409 },
+    )
+  }
+  let providerUrl: URL
+  try {
+    providerUrl = new URL(apiUrl)
+  } catch {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'LABELGRID_API_URL is not a valid absolute URL.' },
+      { status: 500 },
+    )
+  }
+  if (process.env.NODE_ENV === 'production' && providerUrl.protocol !== 'https:') {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'LABELGRID_API_URL must use HTTPS in production.' },
+      { status: 500 },
+    )
+  }
+
   const outForm = new FormData()
   outForm.append('jobId', jobId)
   outForm.append('manifest', manifestText)
@@ -331,10 +353,30 @@ export const POST = withCsrf(async (req: NextRequest) => {
     })
 
     const respText = await providerResp.text()
-    if (providerResp.ok) {
+    let providerPayload: Record<string, unknown> | null = null
+    try {
+      const parsed = JSON.parse(respText)
+      if (parsed && typeof parsed === 'object') providerPayload = parsed as Record<string, unknown>
+    } catch {
+      // Plain-text 2xx responses can acknowledge submission, but do not prove
+      // that DSP stores received or published the release.
+    }
+    const providerStatus = typeof providerPayload?.status === 'string'
+      ? providerPayload.status.toLowerCase()
+      : ''
+    const providerExplicitFailure =
+      providerPayload?.ok === false ||
+      providerPayload?.success === false ||
+      ['failed', 'error', 'rejected', 'invalid'].includes(providerStatus)
+
+    if (providerResp.ok && !providerExplicitFailure) {
+      const status = ['delivered', 'complete', 'completed', 'published'].includes(providerStatus)
+        ? 'delivered'
+        : 'submitted'
       return NextResponse.json({
         ok: true,
-        providerResponse: respText.slice(0, 4096) || `HTTP ${providerResp.status}`,
+        status,
+        providerResponse: respText.slice(0, 4096) || `HTTP ${providerResp.status} — accepted for submission; delivery not confirmed`,
         packageSha256: actualPackageSha256,
       })
     }
@@ -343,10 +385,10 @@ export const POST = withCsrf(async (req: NextRequest) => {
       {
         ok: false,
         requiresCredentials: false,
-        error: `LabelGrid returned HTTP ${providerResp.status}: ${respText.slice(0, 1024)}`,
+        error: `LabelGrid returned HTTP ${providerResp.status}${providerExplicitFailure ? ' with a failure status' : ''}: ${respText.slice(0, 1024)}`,
         providerResponse: respText.slice(0, 4096),
       },
-      { status: 502 },
+      { status: providerResp.ok ? 502 : 502 },
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Network error during provider fetch'
