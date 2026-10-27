@@ -488,7 +488,7 @@ export function MasteringTab() {
                 </div>
               </div>
               <div className="text-[10px] font-mono text-muted-foreground/70">
-                Creator-tier feature
+                Available to all beta users
               </div>
             </div>
 
@@ -631,7 +631,7 @@ export function MasteringTab() {
                   onClick={() => setShowReport(true)}
                   disabled={!hasProcessed}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 transition-colors text-sm disabled:opacity-50"
-                  title="Generate an LLM mastering report from this render — Independent tier"
+                  title="Generate an AI mastering report — included in the free beta"
                 >
                   <FileText className="w-4 h-4 text-cyan-400" />
                   Mastering Report
