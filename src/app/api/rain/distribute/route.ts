@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { unzipSync } from 'fflate'
+import { verifyProvenance } from '@/lib/rain/provenance'
+import type { ProvenanceCertificate } from '@/lib/rain/types'
 import { NextRequest, NextResponse } from 'next/server'
 import { withCsrf } from '@/lib/rain/csrf'
 import { validateIsrc, validateUpc } from '@/lib/rain/metadata-validation'
@@ -15,6 +17,7 @@ interface ReleaseManifestInput {
   artist?: unknown
   genre?: unknown
   releaseDate?: unknown
+  provenance?: unknown
   ddexVersion?: unknown
   assets?: unknown
 }
@@ -86,6 +89,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
     !manifest.genre.trim() ||
     typeof manifest.releaseDate !== 'string' ||
     !/^\d{4}-\d{2}-\d{2}$/.test(manifest.releaseDate) ||
+    !manifest.provenance || typeof manifest.provenance !== 'object' ||
     manifest.ddexVersion !== '4.3.2' ||
     typeof manifest.isrc !== 'string' ||
     !validateIsrc(manifest.isrc) ||
@@ -97,6 +101,23 @@ export const POST = withCsrf(async (req: NextRequest) => {
   ) {
     return NextResponse.json(
       { ok: false, requiresCredentials: false, error: 'Manifest validation failed: require real release metadata, valid registered identifiers, DDEX ERN 4.3.2, and asset records' },
+      { status: 422 },
+    )
+  }
+
+  const certificate = manifest.provenance as ProvenanceCertificate
+  if (
+    typeof certificate.certId !== 'string' ||
+    typeof certificate.signature !== 'string' ||
+    !/^[a-f0-9]{128}$/i.test(certificate.signature) ||
+    typeof certificate.inputHash !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(certificate.inputHash) ||
+    typeof certificate.outputHash !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(certificate.outputHash) ||
+    !await verifyProvenance(certificate)
+  ) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'RAIN-CERT signature or hash validation failed' },
       { status: 422 },
     )
   }
@@ -185,7 +206,30 @@ export const POST = withCsrf(async (req: NextRequest) => {
   }
 
   const digestOf = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
-  const embeddedAssetsValid = (manifest.assets as Array<{ filename: string; sizeBytes: number; sha256: string }>).every((asset) => {
+  const assetRecords = manifest.assets as Array<{ filename: string; mimeType: string; sizeBytes: number; sha256: string }>
+  const wavAsset = assetRecords.find((asset) => asset.mimeType === 'audio/wav')
+  const mp3Asset = assetRecords.find((asset) => asset.mimeType === 'audio/mpeg')
+  const containsBytes = (haystack: Uint8Array, value: string) => {
+    const source = Buffer.from(haystack.buffer, haystack.byteOffset, haystack.byteLength)
+    return source.includes(Buffer.from(value, 'utf8'))
+  }
+  const wavBytes = wavAsset ? zipEntries[wavAsset.filename] : undefined
+  const mp3Bytes = mp3Asset ? zipEntries[mp3Asset.filename] : undefined
+  if (
+    !wavBytes ||
+    !mp3Bytes ||
+    !containsBytes(wavBytes, certificate.certId) ||
+    !containsBytes(wavBytes, certificate.signature) ||
+    !containsBytes(mp3Bytes, certificate.certId) ||
+    !containsBytes(mp3Bytes, certificate.signature)
+  ) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'WAV and MP3 must contain the verified RAIN-CERT identifier and signature bytes' },
+      { status: 422 },
+    )
+  }
+
+  const embeddedAssetsValid = assetRecords.every((asset) => {
     const bytes = zipEntries[asset.filename]
     if (!bytes || bytes.byteLength !== asset.sizeBytes) return false
     const digest = digestOf(bytes)
