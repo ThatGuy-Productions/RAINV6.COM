@@ -380,7 +380,7 @@ const EXPECTED_RAINNET_INPUTS = ['mel', 'artist_vec', 'genre_id', 'platform_id',
 const EXPECTED_RAINNET_OUTPUT = 'processing_params'
 
 /** Check the loaded graph's runtime signature before it can be used. */
-export function hasExpectedRainNetSignature(inputNames: string[], outputNames: string[]): boolean {
+export function hasExpectedRainNetSignature(inputNames: readonly string[], outputNames: readonly string[]): boolean {
   return inputNames.length === EXPECTED_RAINNET_INPUTS.length &&
     EXPECTED_RAINNET_INPUTS.every(name => inputNames.includes(name)) &&
     outputNames.length === 1 &&
