@@ -43,14 +43,48 @@ describe.skipIf(!enabled)('persistent account and project storage (PostgreSQL in
           metadata: JSON.stringify({ format: 'wav24', testFixture: true }),
         },
       })
+      const payment = await db.payment.create({
+        data: {
+          userId,
+          provider: 'integration-test',
+          providerPaymentId: `payment-${suffix}`,
+          providerEventId: `provider-event-${suffix}`,
+          idempotencyKey: `payment-idempotency-${suffix}`,
+          amountCents: 4900,
+          currency: 'ZAR',
+          purpose: 'beta_unlock',
+          status: 'verified',
+          verifiedAt: new Date(),
+        },
+      })
+      const entitlement = await db.entitlement.create({
+        data: {
+          userId,
+          sourcePaymentId: payment.id,
+          kind: 'beta_r49_unlock',
+          status: 'active',
+        },
+      })
+      const usage = await db.usageRecord.create({
+        data: {
+          userId,
+          kind: 'use_credit',
+          status: 'completed',
+          idempotencyKey: `usage-idempotency-${suffix}`,
+          completedAt: new Date(),
+        },
+      })
 
       // A second independent connection proves these are durable database
       // rows, not just React state or an in-memory request/session object.
-      const [persistedAccount, persistedToken, persistedProject, persistedEvent] = await Promise.all([
+      const [persistedAccount, persistedToken, persistedProject, persistedEvent, persistedPayment, persistedEntitlement, persistedUsage] = await Promise.all([
         verifier!.account.findUnique({ where: { email } }),
         verifier!.authToken.findFirst({ where: { userId } }),
         verifier!.session.findUnique({ where: { id: project.id } }),
         verifier!.event.findFirst({ where: { userId, type: 'export_completed' } }),
+        verifier!.payment.findUnique({ where: { id: payment.id } }),
+        verifier!.entitlement.findUnique({ where: { id: entitlement.id } }),
+        verifier!.usageRecord.findUnique({ where: { id: usage.id } }),
       ])
 
       expect(persistedAccount?.id).toBe(userId)
@@ -61,8 +95,15 @@ describe.skipIf(!enabled)('persistent account and project storage (PostgreSQL in
       expect(JSON.parse(persistedProject?.renderSettings ?? '{}').targetLufs).toBe(-14)
       expect(persistedEvent?.userId).toBe(userId)
       expect(JSON.parse(persistedEvent?.metadata ?? '{}').format).toBe('wav24')
+      expect(persistedPayment?.amountCents).toBe(4900)
+      expect(persistedPayment?.status).toBe('verified')
+      expect(persistedEntitlement?.sourcePaymentId).toBe(payment.id)
+      expect(persistedEntitlement?.kind).toBe('beta_r49_unlock')
+      expect(persistedUsage?.kind).toBe('use_credit')
+      expect(persistedUsage?.status).toBe('completed')
     } finally {
       if (userId) {
+        await db.usageRecord.deleteMany({ where: { userId } }).catch(() => {})
         await db.event.deleteMany({ where: { userId } }).catch(() => {})
         await db.account.delete({ where: { id: userId } }).catch(() => {})
       }
