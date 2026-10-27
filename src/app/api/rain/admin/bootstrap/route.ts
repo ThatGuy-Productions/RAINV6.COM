@@ -24,8 +24,8 @@ export const POST = withCsrf(async (req: NextRequest) => {
   const rl = await checkRateLimit(req, 'bootstrap', 3)
   if (!rl.ok) {
     return NextResponse.json(
-      { error: 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+      { error: rl.unavailable ? 'Rate limiting service unavailable' : 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
+      { status: rl.unavailable ? 503 : 429, headers: { 'Retry-After': String(rl.retryAfter) } },
     )
   }
 
