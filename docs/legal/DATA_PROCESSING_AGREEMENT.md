@@ -13,6 +13,8 @@ license: "Proprietary"
 
 **Last Updated:** 31 July 2026
 
+> **Draft status:** This document contains legacy beta statements that are being reconciled with persistent account and project metadata storage. It is not ready to be relied upon as a final DPA until hosting/sub-processor details, retention/deletion, data-subject request handling, and legal review are complete.
+
 ## 1. Introduction
 
 This Data Processing Agreement ("DPA") forms part of the RAIN V6 Beta Terms of Service and Privacy Policy. It defines the roles, responsibilities, and obligations of the parties with respect to the processing of personal data (as defined by the Protection of Personal Information Act, 2013 ("POPIA") and applicable data protection laws).
@@ -214,17 +216,17 @@ For formal audit requests beyond source code inspection, please contact **legal@
 
 ### 7.4 Limitations
 
-Given the client-side-only architecture of RAIN V6 Beta, traditional data processor audits (physical site visits, server log reviews, database inspections) are not applicable, as no user data exists on RAIN-controlled infrastructure.
+Because RAIN supports persistent accounts and server-side project metadata, database, access-control, backup, retention, and security-log audits may be relevant. Audit procedures and access scope must be agreed and documented before this DPA is finalized.
 
 ## 8. Data Retention and Deletion
 
 ### 8.1 Processor Obligations
 
-The Data Processor (RAIN) retains **no user data** and therefore has no data to delete upon termination of the processing relationship.
+RAIN may retain account, authentication, saved-project metadata, render, and operational event records in PostgreSQL. The exact retention schedule, account deletion process, and handling of backups must be finalized before this DPA is treated as effective.
 
 ### 8.2 Controller Control
 
-All data is retained exclusively on the Data Controller's device. The Data Controller may delete any or all locally stored data at any time through:
+Audio, AIE voice vectors, and provenance private keys remain local under the current browser-processing design. Account and saved-project metadata may be stored server-side. Local data can be deleted through:
 
 - The "Clear Analytics" function in the RAIN interface
 - The "Reset Identity" function in the RAIN interface
@@ -237,11 +239,7 @@ RAIN will provide reasonable assistance to the Data Controller for data deletion
 
 ### 9.1 No Transfers Occur
 
-No personal data is transferred internationally by the Data Processor, because:
-
-- All processing occurs on the Data Controller's device
-- No user data is collected by or transmitted to RAIN servers
-- RAIN servers serve only static public assets
+The location of server-side account and project records depends on the configured PostgreSQL hosting provider. The hosting region, any international transfers, and applicable safeguards must be identified and disclosed before account persistence is enabled in production.
 
 ### 9.2 User-Initiated Transfers
 
@@ -251,12 +249,12 @@ If the Data Controller chooses to use RAIN in a jurisdiction different from wher
 
 ### 10.1 Data Subject Requests
 
-The Data Controller is responsible for responding to data subject requests. As no personal data is held by the Data Processor, RAIN does not process data subject requests on behalf of the Data Controller.
+The parties' responsibilities for data-subject access, correction, deletion, and portability requests must account for server-side account and project metadata. The operational request process and response timelines must be confirmed before this DPA is finalized.
 
 Should RAIN receive a data subject request directly, we will:
 
 1. Acknowledge receipt within 72 hours
-2. Inform the data subject that RAIN holds no personal data about them
+2. Verify whether RAIN holds account, authentication, saved-project, or operational event data about the data subject
 3. Direct the data subject to the Data Controller if applicable
 4. Provide reasonable cooperation to the Data Controller upon request
 
@@ -266,7 +264,7 @@ Upon request, RAIN will provide the Data Controller with information reasonably 
 
 - Description of processing operations (as detailed in this DPA)
 - Security measures (as detailed in Section 5)
-- Confirmation of the absence of sub-processors
+- The confirmed hosting provider, sub-processor list, and data-location/transfer safeguards
 
 ### 10.3 Prior Consultation
 
@@ -274,7 +272,7 @@ Should a Data Controller be required to consult with a supervisory authority reg
 
 ## 11. Confidentiality
 
-RAIN personnel with access to application code and infrastructure are bound by confidentiality obligations. However, as no user data is accessible on RAIN infrastructure, the practical scope of this confidentiality obligation with respect to user data is inherently limited.
+Personnel with privileged access to application infrastructure or the PostgreSQL service must be subject to confidentiality obligations and least-privilege access controls. Actual access logging and operational controls must be verified before production launch.
 
 ## 12. Liability
 
@@ -282,7 +280,7 @@ The liability provisions of the RAIN V6 Beta Terms of Service (Section 8: Limita
 
 - RAIN's total aggregate liability under this DPA shall not exceed R0.00 (ZAR)
 - RAIN shall not be liable for indirect, incidental, or consequential damages
-- These limitations reflect the zero-cost, zero-data-collection nature of the Beta service
+- These draft provisions must be reviewed for consistency with the actual data-processing model and applicable law before publication
 
 ## 13. Term and Termination
 
