@@ -85,7 +85,8 @@ export function DistributeTab() {
   }, [refreshJobs])
 
   const handleGenerateIdentifiers = () => {
-    setMetadata({ isrc: generateIsrc(), upc: generateUpc() })
+    const localSessionId = crypto.randomUUID()
+    setMetadata({ isrc: generateIsrc(localSessionId), upc: generateUpc(localSessionId) })
   }
 
   // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected
