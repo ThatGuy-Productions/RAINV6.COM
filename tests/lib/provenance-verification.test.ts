@@ -34,9 +34,38 @@ async function signedCertificate(): Promise<ProvenanceCertificate> {
   } as ProvenanceCertificate
 }
 
+async function legacySignedCertificate(): Promise<ProvenanceCertificate> {
+  const manifest = {
+    version: '2.2',
+    claimGenerator: 'RAIN/6.0.0-legacy-test',
+    actions: [],
+    assertions: [{ label: 'org.rain.cert.level', data: { level: 'RAIN-CERT-1', algorithm: 'Ed25519' } }],
+  }
+  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  const jwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
+  const outputHash = '12'.repeat(32)
+  const message = new TextEncoder().encode(outputHash + JSON.stringify(manifest))
+  const signatureBytes = new Uint8Array(await crypto.subtle.sign('Ed25519', pair.privateKey, message))
+  return {
+    certId: 'RAIN-CERT-LEGACY',
+    inputHash: '34'.repeat(32),
+    outputHash,
+    wasmHash: 'legacy-engine',
+    signedAt: '2026-10-01T00:00:00.000Z',
+    algorithm: 'Ed25519',
+    publicKey: btoa(JSON.stringify(jwk)),
+    signature: Array.from(signatureBytes, byte => byte.toString(16).padStart(2, '0')).join(''),
+    manifest,
+  } as ProvenanceCertificate
+}
+
 describe('RAIN-CERT independent signature verification', () => {
   it('accepts a valid Ed25519 signature from the embedded public key', async () => {
     expect(await verifyProvenance(await signedCertificate())).toBe(true)
+  })
+
+  it('continues to verify legacy certificates using the previous signed payload', async () => {
+    expect(await verifyProvenance(await legacySignedCertificate())).toBe(true)
   })
 
   it('rejects a modified manifest', async () => {
