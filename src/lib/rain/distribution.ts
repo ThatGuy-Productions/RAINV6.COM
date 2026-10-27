@@ -665,6 +665,8 @@ export function validateDdex(xml: string): DdexValidationResult {
   if (isrc && !validateIsrc(isrc)) errors.push(`Invalid ISRC format: ${isrc}`)
   const upc = tagText('ICPN')
   if (upc && !validateUpc(upc)) errors.push(`Invalid UPC/EAN check digit in ICPN: ${upc}`)
+  const hashSum = tagText('HashSumValue')
+  if (hashSum && !/^[A-Za-z0-9+/]{43}=$/.test(hashSum)) errors.push('SHA-256 HashSumValue must be 32-byte Base64, not hexadecimal.')
 
   return { ok: errors.length === 0, errors }
 }
