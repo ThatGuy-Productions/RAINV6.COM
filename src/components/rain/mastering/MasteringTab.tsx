@@ -33,6 +33,7 @@ import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
 import { getAnonId } from '@/lib/rain/anon-id'
 import { useAuth } from '@/components/rain/admin/AuthContext'
+import { checkBetaExportAllowance, recordLocalBetaExport } from '@/lib/rain/beta-export-quota'
 
 export function MasteringTab() {
   const fileName = useSessionStore((s) => s.fileName)
@@ -454,6 +455,23 @@ export function MasteringTab() {
   }
 
   const handleExport = async () => {
+    // This quick WAV path must obey the same two-export beta allowance as
+    // ExportTab; otherwise it would silently bypass the conversion experiment.
+    try {
+      const allowance = await checkBetaExportAllowance()
+      if (!allowance.allowed) {
+        void fetch('/api/rain/beta-access/interest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'beta_paywall_shown', anonId: getAnonId() }),
+        }).catch(() => {})
+        window.dispatchEvent(new CustomEvent('rain:beta-unlock-open'))
+        return
+      }
+    } catch (error) {
+      notifyError('Export allowance unavailable', error instanceof Error ? error.message : 'Please retry.')
+      return
+    }
     // P3-ANALYTICS: measure real export wall-clock time + actual byte count
     // and persist them via recordExportDetails (which writes a row to the
     // `exports` IndexedDB store AND bumps the cumulative exportCount /
@@ -469,6 +487,7 @@ export function MasteringTab() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+      recordLocalBetaExport()
       const exportMs = Date.now() - exportStart
       const fileState = useSessionStore.getState()
       void recordExportDetails({
