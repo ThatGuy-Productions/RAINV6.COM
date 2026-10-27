@@ -230,6 +230,9 @@ export interface FunnelStats {
   aieComputations: number
   aieExports: number
   visibleStudioHours: number
+  audioHoursProcessed: number
+  renderHours: number
+  exportHours: number
 }
 
 /** Distinct-identity counts at each funnel step — for a drop-off chart.
@@ -253,7 +256,7 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     return { total: userIds.size + anonIds.size, anonymous: anonIds.size }
   }
 
-  const [signups, sessions, renders, exports, paywallShown, checkoutStarted, aieComputations, aieExports, heartbeats] = await Promise.all([
+  const [signups, sessions, renders, exports, paywallShown, checkoutStarted, aieComputations, aieExports, heartbeats, durationRows] = await Promise.all([
     countDistinct('signup'),
     countDistinct('session_created'),
     countDistinct('render_completed'),
@@ -263,6 +266,7 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     db.event.count({ where: { type: 'aie_vector_computed' } }),
     db.event.count({ where: { type: 'aie_vector_exported' } }),
     db.event.findMany({ where: { type: 'studio_heartbeat' }, select: { metadata: true } }),
+    db.event.findMany({ where: { type: { in: ['render_completed', 'export_completed'] } }, select: { type: true, metadata: true } }),
   ])
   const activeSeconds = heartbeats.reduce((sum, row) => {
     try {
@@ -275,6 +279,26 @@ export async function getFunnelStats(): Promise<FunnelStats> {
       return sum
     }
   }, 0)
+  let audioSeconds = 0
+  let renderMs = 0
+  let exportMs = 0
+  for (const row of durationRows) {
+    try {
+      const metadata = row.metadata ? JSON.parse(row.metadata) as { audioDurationSec?: unknown; renderTimeMs?: unknown } : {}
+      if (row.type === 'render_completed') {
+        if (typeof metadata.audioDurationSec === 'number' && Number.isFinite(metadata.audioDurationSec)) {
+          audioSeconds += Math.max(0, Math.min(24 * 60 * 60, metadata.audioDurationSec))
+        }
+        if (typeof metadata.renderTimeMs === 'number' && Number.isFinite(metadata.renderTimeMs)) {
+          renderMs += Math.max(0, Math.min(24 * 60 * 60 * 1000, metadata.renderTimeMs))
+        }
+      } else if (row.type === 'export_completed' && typeof metadata.renderTimeMs === 'number' && Number.isFinite(metadata.renderTimeMs)) {
+        exportMs += Math.max(0, Math.min(24 * 60 * 60 * 1000, metadata.renderTimeMs))
+      }
+    } catch {
+      // Ignore malformed historical metadata rather than inventing values.
+    }
+  }
 
   return {
     signups: signups.total,
@@ -289,6 +313,9 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     aieComputations,
     aieExports,
     visibleStudioHours: Math.round((activeSeconds / 3600) * 100) / 100,
+    audioHoursProcessed: Math.round((audioSeconds / 3600) * 100) / 100,
+    renderHours: Math.round((renderMs / 3_600_000) * 100) / 100,
+    exportHours: Math.round((exportMs / 3_600_000) * 100) / 100,
   }
 }
 
