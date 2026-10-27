@@ -117,7 +117,7 @@ User Audio File
 - **Node.js** ≥ 22.0 (for Prisma)
 - **Git LFS** (for ONNX model files)
 - **Playwright** (optional — for DistroKid browser automation)
-- **PostgreSQL 18** (optional — SQLite works for local dev)
+- **PostgreSQL** (required for account, saved-work, session, render, and event persistence)
 
 ### Initial Setup
 
@@ -135,7 +135,7 @@ bun install
 # Setup database
 cp .env.example .env.local     # Edit DATABASE_URL for your setup
 bun run db:generate            # Generate Prisma client
-bun run db:push                # Push schema to database
+bun run db:migrate:deploy      # Apply versioned migrations
 
 # Install Playwright (optional)
 npx playwright install chromium
@@ -147,8 +147,7 @@ bun run dev                    # → http://localhost:3000
 ### .env.local Reference
 
 ```env
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/rainv6"
-# or for SQLite: "file:./db/dev.db"
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/rainv6?schema=public"
 
 # Optional: Only needed for enterprise LabelGrid distribution
 LABELGRID_API_KEY=
@@ -174,7 +173,7 @@ STRIPE_WEBHOOK_SECRET=
 | `bun run lint` | ESLint checks |
 | `bun test` | Run all tests |
 | `bun run db:generate` | Generate Prisma client |
-| `bun run db:push` | Push schema to database |
+| `bun run db:migrate:deploy` | Apply committed migrations without dropping/recreating existing tables |
 | `bun run db:studio` | Open Prisma Studio (GUI) |
 | `tsc --noEmit` | Independent type-check gate |
 
@@ -601,7 +600,7 @@ model Feedback {
 
 ```bash
 bun run db:generate     # Generate Prisma client from schema
-bun run db:push         # Push schema to database (no migrations)
+bun run db:migrate:deploy  # Apply versioned migrations
 bun run db:migrate      # Create + apply migration (for production)
 bun run db:studio       # Visual database browser
 ```
