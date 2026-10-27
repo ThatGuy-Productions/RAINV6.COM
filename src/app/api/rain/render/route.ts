@@ -66,13 +66,13 @@ export async function POST(req: NextRequest) {
   // Anonymous path: fire the Event so the funnel captures this render/export,
   // but don't create a Render row (it requires a userId FK).
   if (!user) {
-    void trackEvent({
+    const telemetryRecorded = await trackEvent({
       userId: null,
       anonId,
       type: eventType,
       metadata: { sessionId: null, format, anonymous: true },
     })
-    return NextResponse.json({ ok: true, renderId: null, anonymous: true }, { status: 200 })
+    return NextResponse.json({ ok: true, renderId: null, anonymous: true, telemetryRecorded }, { status: 200 })
   }
 
   try {
@@ -97,14 +97,14 @@ export async function POST(req: NextRequest) {
       renderId = row.id
     }
 
-    void trackEvent({
+    const telemetryRecorded = await trackEvent({
       userId: user.id,
       anonId,
       type: eventType,
       metadata: { sessionId, format, renderId },
     })
 
-    return NextResponse.json({ ok: true, renderId, anonymous: false }, { status: 201 })
+    return NextResponse.json({ ok: true, renderId, anonymous: false, telemetryRecorded }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/render] failed:', err)
     // Never let an analytics write block the user's actual export/download.
