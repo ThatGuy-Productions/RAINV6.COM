@@ -21,6 +21,9 @@ function sha256(bytes: Uint8Array): string {
 async function verify(manifestFile: string): Promise<void> {
   const manifestPath = join(modelDir, manifestFile)
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as ModelManifest
+  if (manifest.externalDataFile !== `${manifest.modelName}.data`) {
+    throw new Error(`${manifestFile}: external data file does not match model name`)
+  }
 
   for (const [assetName, expected] of [
     [manifest.modelName, manifest.checksums?.sha256],
