@@ -256,13 +256,13 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     return { total: userIds.size + anonIds.size, anonymous: anonIds.size }
   }
 
-  const [signups, sessions, renders, exports, paywallShown, checkoutStarted, aieComputations, aieExports, heartbeats, durationRows] = await Promise.all([
+  const [signups, sessions, renders, exports, paywall, checkout, aieComputations, aieExports, heartbeats, durationRows] = await Promise.all([
     countDistinct('signup'),
     countDistinct('session_created'),
     countDistinct('render_completed'),
     countDistinct('export_completed'),
-    db.event.count({ where: { type: 'beta_paywall_shown' } }),
-    db.event.count({ where: { type: 'beta_checkout_started' } }),
+    countDistinct('beta_paywall_shown'),
+    countDistinct('beta_checkout_started'),
     db.event.count({ where: { type: 'aie_vector_computed' } }),
     db.event.count({ where: { type: 'aie_vector_exported' } }),
     db.event.findMany({ where: { type: 'studio_heartbeat' }, select: { metadata: true } }),
@@ -308,8 +308,8 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     anonymousSessions: sessions.anonymous,
     anonymousRenders: renders.anonymous,
     anonymousExports: exports.anonymous,
-    paywallShown,
-    checkoutStarted,
+    paywallShown: paywall.total,
+    checkoutStarted: checkout.total,
     aieComputations,
     aieExports,
     visibleStudioHours: Math.round((activeSeconds / 3600) * 100) / 100,
