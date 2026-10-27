@@ -26,7 +26,7 @@ async function verify(manifestFile: string): Promise<void> {
     [manifest.modelName, manifest.checksums?.sha256],
     [manifest.externalDataFile, manifest.checksums?.sha256ExternalData],
   ] as const) {
-    if (!assetName || !/^[a-f0-9]{64}$/i.test(expected ?? '')) {
+    if (!assetName || typeof expected !== 'string' || !/^[a-f0-9]{64}$/i.test(expected)) {
       throw new Error(`${manifestFile}: missing or malformed SHA-256 for ${assetName || 'unnamed asset'}`)
     }
 
