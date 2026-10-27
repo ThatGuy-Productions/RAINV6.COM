@@ -32,12 +32,19 @@ interface TrackEventInput {
   metadata?: Record<string, unknown>
 }
 
-/** Log one event. Call this from the actual code paths — see integration
- *  notes at the bottom of this file. Never throws; analytics must not be
- *  able to break the product. */
-export async function trackEvent({ userId, anonId, type, metadata }: TrackEventInput): Promise<boolean> {
+type EventStore = {
+  event: { create: (args: { data: { userId: string | null; anonId: string | null; type: EventType; metadata: string | null } }) => Promise<unknown> }
+  account: { update: (args: { where: { id: string }; data: { lastActiveAt: Date } }) => Promise<unknown> }
+}
+
+/** Persist an event using an injectable store so success/failure semantics
+ * can be tested without a live database. */
+export async function persistEvent(
+  store: EventStore,
+  { userId, anonId, type, metadata }: TrackEventInput,
+): Promise<boolean> {
   try {
-    await db.event.create({
+    await store.event.create({
       data: {
         userId: userId ?? null,
         anonId: anonId ?? null,
@@ -54,7 +61,7 @@ export async function trackEvent({ userId, anonId, type, metadata }: TrackEventI
   // lastActiveAt denormalization must not turn a successfully stored event
   // into a reported telemetry failure.
   if (userId) {
-    await db.account.update({
+    await store.account.update({
       where: { id: userId },
       data: { lastActiveAt: new Date() },
     }).catch((err) => {
@@ -62,6 +69,12 @@ export async function trackEvent({ userId, anonId, type, metadata }: TrackEventI
     })
   }
   return true
+}
+
+/** Log one event. Never throws: telemetry must not break the product.
+ * Returns true only when the event row itself was successfully written. */
+export async function trackEvent(input: TrackEventInput): Promise<boolean> {
+  return persistEvent(db, input)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
