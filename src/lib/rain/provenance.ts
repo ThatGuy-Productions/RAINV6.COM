@@ -16,8 +16,10 @@ const KEY_STORE = 'rain-cert-keys'
 const KEY_NAME = 'rain-ed25519-primary'
 
 interface StoredKeys {
-  publicKey: JsonWebKey
-  privateKey: JsonWebKey
+  // Store CryptoKey objects directly. In particular, never serialize the
+  // private key to JWK: IndexedDB is origin-scoped storage, not a secret vault.
+  publicKey: CryptoKey
+  privateKey: CryptoKey
   createdAt: string
 }
 
@@ -63,17 +65,29 @@ async function loadKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey
           resolve(null)
           return
         }
-        const publicKey = await crypto.subtle.importKey(
-          'jwk', stored.publicKey,
-          { name: 'Ed25519' },
-          true, ['verify'],
-        )
-        const privateKey = await crypto.subtle.importKey(
-          'jwk', stored.privateKey,
-          { name: 'Ed25519' },
-          false, ['sign'],
-        )
-        resolve({ publicKey, privateKey })
+
+        // Older builds persisted private JWK material. Do not re-import or
+        // continue using that extractable secret: return null so the caller
+        // rotates it to a non-extractable key pair.
+        if (
+          typeof CryptoKey === 'undefined' ||
+          !(stored.publicKey instanceof CryptoKey) ||
+          !(stored.privateKey instanceof CryptoKey)
+        ) {
+          resolve(null)
+          return
+        }
+        if (
+          stored.publicKey.algorithm.name !== 'Ed25519' ||
+          stored.privateKey.algorithm.name !== 'Ed25519' ||
+          !stored.publicKey.usages.includes('verify') ||
+          !stored.privateKey.usages.includes('sign') ||
+          stored.privateKey.extractable
+        ) {
+          resolve(null)
+          return
+        }
+        resolve({ publicKey: stored.publicKey, privateKey: stored.privateKey })
       }
       req.onerror = () => reject(req.error)
     }))
@@ -83,9 +97,10 @@ async function loadKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey
 }
 
 async function saveKeys(publicKey: CryptoKey, privateKey: CryptoKey): Promise<void> {
-  const pubJwk = await crypto.subtle.exportKey('jwk', publicKey)
-  const privJwk = await crypto.subtle.exportKey('jwk', privateKey)
-  const stored: StoredKeys = { publicKey: pubJwk, privateKey: privJwk, createdAt: new Date().toISOString() }
+  if (privateKey.extractable) {
+    throw new Error('RAIN-CERT private key must be non-extractable')
+  }
+  const stored: StoredKeys = { publicKey, privateKey, createdAt: new Date().toISOString() }
   return withDb((db) => new Promise((resolve, reject) => {
     const tx = db.transaction('keys', 'readwrite')
     tx.objectStore('keys').put(stored, KEY_NAME)
@@ -97,7 +112,10 @@ async function saveKeys(publicKey: CryptoKey, privateKey: CryptoKey): Promise<vo
 async function getOrCreateKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey }> {
   const existing = await loadKeys()
   if (existing) return existing
-  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  // For asymmetric WebCrypto keys, the public key remains exportable while
+  // the private key is non-extractable. Persist the CryptoKey objects rather
+  // than exporting private JWK bytes into origin-readable IndexedDB.
+  const pair = await crypto.subtle.generateKey('Ed25519', false, ['sign', 'verify'])
   await saveKeys(pair.publicKey, pair.privateKey)
   return pair
 }
