@@ -1613,59 +1613,55 @@ function applyMultibandCompression(
 ): void {
   if (channels.length < 2) return
 
-  const xover1 = 80    // sub-bass → low-mid
-  const xover2 = 500   // low-mid → presence
-  const xover3 = 4000  // presence → air
+  // The canonical ProcessingParams schema defines three bands. Use a
+  // complementary low/mid/high split instead of referring to nonexistent
+  // sub/air parameters (which previously caused compile errors and would
+  // have made the advertised processing path impossible to run).
+  const lowLp = designBiquad('lowpass', 200, sampleRate, 0.7071)
+  const midHp = designBiquad('highpass', 200, sampleRate, 0.7071)
+  const midLp = designBiquad('lowpass', 4000, sampleRate, 0.7071)
+  const highHp = designBiquad('highpass', 4000, sampleRate, 0.7071)
 
-  // Crossover filter design
-  // Sub-bass:  LP @ 80 Hz
-  const subLp = designBiquad('lowpass', xover1, sampleRate, 0.7071)
+  for (const channel of channels) {
+    const original = channel.slice()
 
-  // Low-mid:  HP @ 80 Hz → LP @ 500 Hz  (cascaded for band-pass)
-  const lowMidHp = designBiquad('highpass', xover1, sampleRate, 0.7071)
-  const lowMidLp = designBiquad('lowpass', xover2, sampleRate, 0.7071)
+    const low = original.slice()
+    applyBiquad(low, lowLp)
 
-  // Presence: HP @ 500 Hz → LP @ 4000 Hz
-  const presHp = designBiquad('highpass', xover2, sampleRate, 0.7071)
-  const presLp = designBiquad('lowpass', xover3, sampleRate, 0.7071)
+    const mid = original.slice()
+    applyBiquad(mid, midHp)
+    applyBiquad(mid, midLp)
 
-  // Air:       HP @ 4000 Hz
-  const airHp = designBiquad('highpass', xover3, sampleRate, 0.7071)
+    const high = original.slice()
+    applyBiquad(high, highHp)
 
-  for (let ch = 0; ch < channels.length; ch++) {
-    const orig = channels[ch].slice()
+    compressBand(
+      low,
+      params.mb_threshold_low,
+      params.mb_ratio_low,
+      params.mb_attack_low,
+      params.mb_release_low,
+      sampleRate,
+    )
+    compressBand(
+      mid,
+      params.mb_threshold_mid,
+      params.mb_ratio_mid,
+      params.mb_attack_mid,
+      params.mb_release_mid,
+      sampleRate,
+    )
+    compressBand(
+      high,
+      params.mb_threshold_high,
+      params.mb_ratio_high,
+      params.mb_attack_high,
+      params.mb_release_high,
+      sampleRate,
+    )
 
-    // Sub-bass band
-    const sub = orig.slice()
-    applyBiquad(sub, subLp)
-
-    // Low-mid band (80–500 Hz)
-    const low = orig.slice()
-    applyBiquad(low, lowMidHp)
-    applyBiquad(low, lowMidLp)
-
-    // Presence band (500–4000 Hz)
-    const mid = orig.slice()
-    applyBiquad(mid, presHp)
-    applyBiquad(mid, presLp)
-
-    // Air band (4000–20000 Hz)
-    const air = orig.slice()
-    applyBiquad(air, airHp)
-
-    // Apply compression per band with soft knee
-    compressBand(sub, params.mb_threshold_sub, params.mb_ratio_sub,
-      params.mb_attack_sub, params.mb_release_sub, sampleRate)
-    compressBand(low, params.mb_threshold_low, params.mb_ratio_low,
-      params.mb_attack_low, params.mb_release_low, sampleRate)
-    compressBand(mid, params.mb_threshold_mid, params.mb_ratio_mid,
-      params.mb_attack_mid, params.mb_release_mid, sampleRate)
-    compressBand(air, params.mb_threshold_air, params.mb_ratio_air,
-      params.mb_attack_air, params.mb_release_air, sampleRate)
-
-    // Sum back to channel
-    for (let i = 0; i < channels[ch].length; i++) {
-      channels[ch][i] = sub[i] + low[i] + mid[i] + air[i]
+    for (let i = 0; i < channel.length; i++) {
+      channel[i] = low[i] + mid[i] + high[i]
     }
   }
 }
