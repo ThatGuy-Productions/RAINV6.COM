@@ -278,16 +278,20 @@ export function MasteringTab() {
         loudnessLufs?: number
         truePeakDbfs?: number
         renderTimeMs?: number
+        audioDurationSec?: number
       },
     ) => {
       try {
-        await fetch('/api/rain/render', {
+        const response = await fetch('/api/rain/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind, sessionId: backendSessionId.current, anonId: getAnonId(), ...details }),
         })
+        const result = await response.json().catch(() => ({})) as { telemetryRecorded?: boolean }
+        return response.ok && result.telemetryRecorded === true
       } catch (e) {
         console.warn(`[analytics] reportRenderEvent(${kind}) failed:`, e)
+        return false
       }
     },
     [],
@@ -485,6 +489,7 @@ export function MasteringTab() {
         loudnessLufs: result.analysis.lufs,
         truePeakDbfs: result.analysis.truePeak,
         renderTimeMs: renderDuration,
+        audioDurationSec: useSessionStore.getState().fileDuration || 0,
       })
 
       // Trigger completion celebration
@@ -575,10 +580,15 @@ export function MasteringTab() {
       // BETA-ANALYTICS: this is the event that counts as "activation" —
       // signup -> completed export. rainCert is set in the store by
       // handleRender above, so outputHash is the real RAIN-CERT hash.
-      void reportRenderEvent('export', {
+      const telemetryRecorded = await reportRenderEvent('export', {
         format: 'wav24',
         outputFileHash: rainCert?.outputHash,
+        renderTimeMs: exportMs,
+        audioDurationSec: fileState.fileDuration || 0,
       })
+      if (!telemetryRecorded) {
+        notifyError('Export completed, usage record pending', 'The download succeeded, but its durable usage event could not be confirmed.')
+      }
     } catch (e) {
       console.error('[RAIN export] error:', e)
       notifyError('Export failed', e instanceof Error ? e.message : 'Could not export WAV file')
