@@ -385,143 +385,202 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
   const messageId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
     ? crypto.randomUUID()
     : `rain-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const threadId = `rain-${meta.isrc || 'release'}-${messageId}`
   const created = new Date().toISOString()
-  const title = escapeXml(meta.title || 'Untitled')
-  const artist = escapeXml(meta.artist || 'Unknown Artist')
-  const album = meta.album ? escapeXml(meta.album) : ''
-  const genre = meta.genre ? escapeXml(meta.genre) : ''
+  const title = escapeXml(meta.title || '')
+  const artist = escapeXml(meta.artist || '')
+  const label = escapeXml(meta.label || '')
+  const genre = escapeXml(meta.genre || '')
   const genreSub = meta.genreSubgenre ? escapeXml(meta.genreSubgenre) : ''
-  const year = escapeXml(meta.year || String(new Date().getFullYear()))
-  const releaseDate = meta.releaseDate || new Date().toISOString().slice(0, 10)
-  const originalReleaseDate = meta.originalReleaseDate
-    ? escapeXml(meta.originalReleaseDate)
-    : ''
+  const year = (meta.year || meta.releaseDate?.slice(0, 4) || String(new Date().getFullYear())).slice(0, 4)
+  const releaseDate = meta.releaseDate || ''
   const duration = isoDurationFromSeconds(meta.durationSeconds)
+  const language = meta.language === 'eng' ? 'en' : (meta.language || 'en')
+  const parentalWarning = meta.explicitLyrics === 'explicit'
+    ? 'Explicit'
+    : meta.explicitLyrics === 'clean'
+      ? 'ExplicitContentEdited'
+      : 'NotExplicit'
 
-  // ---- TASK B enrichment: P-line / C-line / language / explicit / territories ----
-  const pLineBlock = meta.pLine
-    ? `    <PLine>${escapeXml(meta.pLine)}</PLine>`
+  const aiValue = (value: string | undefined): 'None' | 'Partly' | 'All' => {
+    if (value === 'generated') return 'All'
+    if (value === 'assisted') return 'Partly'
+    return 'None'
+  }
+  const aiRank = { None: 0, Partly: 1, All: 2 } as const
+  const highestAi = (values: Array<'None' | 'Partly' | 'All'>): 'None' | 'Partly' | 'All' =>
+    values.reduce((best, value) => aiRank[value] > aiRank[best] ? value : best, 'None')
+  const trackContainsAI = highestAi([
+    aiValue(meta.aiDisclosure?.vocals),
+    aiValue(meta.aiDisclosure?.instrumentation),
+    aiValue(meta.aiDisclosure?.composition),
+  ])
+  const releaseContainsAI = highestAi([
+    trackContainsAI,
+    aiValue(meta.aiDisclosure?.mixing),
+    aiValue(meta.aiDisclosure?.mastering),
+    aiValue(meta.aiDisclosure?.artwork),
+  ])
+
+  const pLineYear = meta.pLine?.match(/^\d{4}/)?.[0] ?? year
+  const pLineText = meta.pLine?.replace(/^\d{4}\s*/, '') || label
+  const cLineYear = meta.cLine?.match(/^\d{4}/)?.[0] ?? year
+  const cLineText = meta.cLine?.replace(/^\d{4}\s*/, '') || artist
+  const pLineBlock = meta.pLine || label
+    ? `<PLine><Year>${pLineYear}</Year><PLineText>${escapeXml(pLineText)}</PLineText></PLine>`
     : ''
-  const cLineBlock = meta.cLine
-    ? `    <CLine>${escapeXml(meta.cLine)}</CLine>`
+  const cLineBlock = meta.cLine || artist
+    ? `<CLine><Year>${cLineYear}</Year><CLineText>${escapeXml(cLineText)}</CLineText></CLine>`
     : ''
-  const releaseTypeBlock = meta.releaseType
-    ? `    <ReleaseType>${meta.releaseType}</ReleaseType>`
+  const releaseType = ({
+    single: 'Single',
+    ep: 'EP',
+    album: 'Album',
+    compilation: 'Compilation',
+  } as const)[meta.releaseType ?? 'single']
+
+  const sender = meta.senderDpid
+    ? `<MessageSender><PartyId>${escapeXml(meta.senderDpid)}</PartyId><PartyName LanguageAndScriptCode="en"><FullName>${label}</FullName></PartyName></MessageSender>`
     : ''
-  const labelBlock = meta.label
-    ? `    <LabelName>${escapeXml(meta.label)}</LabelName>`
-    : ''
-  const distributorBlock = meta.distributor
-    ? `    <DistributorName>${escapeXml(meta.distributor)}</DistributorName>`
-    : ''
-  const iswcBlock = meta.iswc
-    ? `      <ISWC>${escapeXml(meta.iswc)}</ISWC>`
-    : ''
-  const languageBlock = meta.language
-    ? `    <LanguageOfPerformance>${escapeXml(meta.language)}</LanguageOfPerformance>`
-    : ''
-  const explicitBlock = meta.explicitLyrics
-    ? `    <ParentalWarningType>${meta.explicitLyrics === 'explicit' ? 'Explicit' : meta.explicitLyrics === 'clean' ? 'Cleaned' : 'NotExplicit'}</ParentalWarningType>`
-    : ''
-  const territoriesBlock = meta.territories && meta.territories.length > 0
-    ? `    <TerritoryCode>${meta.territories.map(escapeXml).join('</TerritoryCode>\n    <TerritoryCode>')}</TerritoryCode>`
-    : ''
-  const publisherBlock = meta.publisher
-    ? `    <Publisher><PartyName><FullName>${escapeXml(meta.publisher)}</FullName></PartyName>${meta.pro ? `<PRO>${escapeXml(meta.pro)}</PRO>` : ''}</Publisher>`
-    : ''
-  const masterOwnerBlock = meta.masterOwner
-    ? `    <MasterOwner>${escapeXml(meta.masterOwner)}</MasterOwner>`
+  const recipient = meta.recipientDpid
+    ? `<MessageRecipient><PartyId>${escapeXml(meta.recipientDpid)}</PartyId><PartyName LanguageAndScriptCode="en"><FullName>LabelGrid</FullName></PartyName></MessageRecipient>`
     : ''
 
-  // ---- Contributors block (TASK B enrichment) ----
-  // Each contributor becomes a <ResourceContributor> with a <Role> + IPI/ISNI.
-  const contributorsBlock = (meta.contributors && meta.contributors.length > 0)
-    ? meta.contributors
-        .map((c) => {
-          const ipi = c.ipi ? `\n        <IPI>${escapeXml(c.ipi)}</IPI>` : ''
-          const isni = c.isni ? `\n        <ISNI>${escapeXml(c.isni)}</ISNI>` : ''
-          const share = typeof c.share === 'number' && !Number.isNaN(c.share)
-            ? `\n        <Share>${c.share}</Share>`
-            : ''
-          return `      <ResourceContributor>\n        <PartyName><FullName>${escapeXml(c.name || '')}</FullName></PartyName>\n        <Role>${escapeXml(c.role)}</Role>${ipi}${isni}${share}\n      </ResourceContributor>`
-        })
-        .join('\n')
+  const audio = meta.audioResource
+  const audioDetails = audio
+    ? `<TechnicalDetails>
+        <TechnicalResourceDetailsReference>T1</TechnicalResourceDetailsReference>
+        <DeliveryFile>
+          <Type>AudioFile</Type>
+          <AudioCodecType UserDefinedValue="WAV">UserDefined</AudioCodecType>
+          <NumberOfChannels>${audio.channels}</NumberOfChannels>
+          <SamplingRate>${audio.sampleRate}</SamplingRate>
+          <BitsPerSample>${audio.bitDepth}</BitsPerSample>
+          <File>
+            <URI>${escapeXml(audio.filename)}</URI>
+            <HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${audio.sha256}</HashSumValue></HashSum>
+          </File>
+        </DeliveryFile>
+      </TechnicalDetails>`
     : ''
 
-  const disclosureFields = ['vocals', 'instrumentation', 'composition', 'mixing', 'mastering']
-  const disclosureBlock = disclosureFields
-    .map((f) => `      <${f}>${meta.aiDisclosure?.[f] ?? 'none'}</${f}>`)
-    .join('\n')
+  const artwork = meta.artworkResource
+  const artworkXml = artwork
+    ? `<Image>
+        <ResourceReference>A2</ResourceReference>
+        <Type>FrontCoverImage</Type>
+        <ResourceId><ProprietaryId Namespace="RAINV6">${escapeXml(artwork.filename)}</ProprietaryId></ResourceId>
+        <ContainsAI>${aiValue(meta.aiDisclosure?.artwork)}</ContainsAI>
+        <TechnicalDetails>
+          <TechnicalResourceDetailsReference>T2</TechnicalResourceDetailsReference>
+          <ImageCodecType>${artwork.format === 'image/jpeg' ? 'JPEG' : 'PNG'}</ImageCodecType>
+          <ImageHeight>${artwork.height}</ImageHeight>
+          <ImageWidth>${artwork.width}</ImageWidth>
+          <File><URI>${escapeXml(artwork.filename)}</URI><HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${artwork.sha256}</HashSumValue></HashSum></File>
+        </TechnicalDetails>
+      </Image>`
+    : ''
 
-  const dsps = meta.targetDsps && meta.targetDsps.length > 0
-    ? meta.targetDsps
-    : ['spotify', 'apple_music', 'youtube', 'tidal']
-  const dealBlock = dsps
-    .map((slug) => {
-      const label = meta.dspLabels?.[slug]
-        ? escapeXml(meta.dspLabels[slug])
-        : escapeXml(slug)
-      return `    <Deal>\n      <DSPName>${label}</DSPName>\n      <CommercialModel>PayAsYouGo</CommercialModel>\n    </Deal>`
-    })
-    .join('\n')
+  const contributorParties = (meta.contributors ?? []).map((contributor, index) => {
+    const ref = `P_CONTRIB_${index + 1}`
+    return `<Party><PartyReference>${ref}</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${escapeXml(contributor.name)}</FullName></PartyName>${contributor.ipi ? `<PartyId><IpiNameNumber>${escapeXml(contributor.ipi)}</IpiNameNumber></PartyId>` : ''}${contributor.isni ? `<PartyId><ISNI>${escapeXml(contributor.isni)}</ISNI></PartyId>` : ''}</Party>`
+  }).join('\n')
+  const contributorXml = (meta.contributors ?? []).map((contributor, index) => {
+    const roleMap: Record<string, string> = {
+      producer: 'StudioProducer',
+      'studio producer': 'StudioProducer',
+      songwriter: 'ComposerLyricist',
+      composer: 'ComposerLyricist',
+      lyricist: 'ComposerLyricist',
+      'mixing engineer': 'MixingEngineer',
+      'mastering engineer': 'MasteringEngineer',
+      performer: 'Performer',
+      vocalist: 'Vocalist',
+    }
+    const rawRole = contributor.role.toLowerCase().trim()
+    const role = roleMap[rawRole] ?? 'UserDefined'
+    const roleValue = role === 'UserDefined'
+      ? `<Value UserDefinedValue="${escapeXml(contributor.role)}">UserDefined</Value>`
+      : `<Value>${role}</Value>`
+    return `<Contributor SequenceNumber="${index + 1}"><ContributorPartyReference>P_CONTRIB_${index + 1}</ContributorPartyReference><Role>${roleValue}</Role><AiContribution>None</AiContribution></Contributor>`
+  }).join('\n')
 
-  // Build optional blocks as a single string for clean insertion.
-  const optionalReleaseBlocks = [
-    releaseTypeBlock,
-    pLineBlock,
-    cLineBlock,
-    labelBlock,
-    distributorBlock,
-    languageBlock,
-    explicitBlock,
-    publisherBlock,
-    masterOwnerBlock,
-    territoriesBlock,
-    originalReleaseDate ? `    <OriginalReleaseDate>${originalReleaseDate}</OriginalReleaseDate>` : '',
-    genreSub ? `    <SubGenre>${genreSub}</SubGenre>` : '',
-  ].filter(Boolean).join('\n')
+  const territoryCodes = (meta.territories?.length ? meta.territories : ['WORLDWIDE'])
+    .map((territory) => territory.toUpperCase() === 'WORLDWIDE' ? '<TerritoryCode>Worldwide</TerritoryCode>' : `<TerritoryCode>${escapeXml(territory.toUpperCase())}</TerritoryCode>`)
+    .join('')
+  const dealFor = (releaseReference: string) => `<ReleaseDeal><DealReleaseReference>${releaseReference}</DealReleaseReference><Deal><DealTerms>${territoryCodes}<ValidityPeriod><StartDate>${releaseDate}</StartDate></ValidityPeriod><CommercialModelType>SubscriptionModel</CommercialModelType><UseType>UserMakeAvailableLabelProvided</UseType></DealTerms></Deal></ReleaseDeal>`
+
+  const releaseResourceItems = [
+    '<ResourceGroupContentItem><SequenceNumber>1</SequenceNumber><ReleaseResourceReference>A1</ReleaseResourceReference></ResourceGroupContentItem>',
+    artwork ? '<ResourceGroupContentItem><SequenceNumber>2</SequenceNumber><ReleaseResourceReference>A2</ReleaseResourceReference></ResourceGroupContentItem>' : '',
+  ].filter(Boolean).join('')
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ern:NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/43" xmlns="http://ddex.net/xml/ern/43" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" LanguageAndScriptCode="en">
+<NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/432" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://ddex.net/xml/ern/432 http://ddex.net/xml/ern/432/release-notification.xsd" AvsVersionId="4" LanguageAndScriptCode="en">
   <MessageHeader>
+    <MessageThreadId>${threadId}</MessageThreadId>
     <MessageId>${messageId}</MessageId>
+    ${sender}
+    ${recipient}
     <MessageCreatedDateTime>${created}</MessageCreatedDateTime>
-    <MessageSender>
-      <PartyName><FullName>RAIN V6 Studio</FullName></PartyName>
-    </MessageSender>
   </MessageHeader>
+  <PartyList>
+    <Party><PartyReference>P_LABEL</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${label}</FullName></PartyName></Party>
+    <Party><PartyReference>P_ARTIST</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${artist}</FullName></PartyName></Party>
+    ${contributorParties}
+  </PartyList>
   <ResourceList>
     <SoundRecording>
       <ResourceReference>A1</ResourceReference>
-      <ISRC>${meta.isrc}</ISRC>
-${iswcBlock}
-      <ReferenceTitle>${title}</ReferenceTitle>
+      <Type>MusicalWorkSoundRecording</Type>
+      <SoundRecordingEdition>
+        <ResourceId><ISRC>${escapeXml(meta.isrc)}</ISRC></ResourceId>
+        ${pLineBlock}
+        ${audioDetails}
+      </SoundRecordingEdition>
+      ${meta.iswc ? `<WorkId><ISWC>${escapeXml(meta.iswc)}</ISWC></WorkId>` : ''}
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <DisplayArtistName ApplicableTerritoryCode="Worldwide">${artist}</DisplayArtistName>
       <Duration>${duration}</Duration>
-${contributorsBlock ? `      <ResourceContributorList>\n${contributorsBlock}\n      </ResourceContributorList>` : ''}
+      <ParentalWarningType>${parentalWarning}</ParentalWarningType>
+      <ContainsAI>${trackContainsAI}</ContainsAI>
+      <LanguageOfPerformance>${escapeXml(language)}</LanguageOfPerformance>
     </SoundRecording>
+    ${artworkXml}
   </ResourceList>
-  <Release>
-    <ReleaseId>
-      <ISRC>${meta.isrc}</ISRC>
-      <UPC>${meta.upc}</UPC>
-    </ReleaseId>
-    <ReferenceTitle>${title}</ReferenceTitle>
-    <DisplayArtist>
-      <PartyName>
-        <FullName>${artist}</FullName>
-      </PartyName>
-    </DisplayArtist>
-${album ? `    <ReleaseDetails><DisplayTitleText>${album}</DisplayTitleText></ReleaseDetails>\n` : ''}    <Genre>${genre}</Genre>
-    <YearOfOriginalRelease>${year}</YearOfOriginalRelease>
-    <ReleaseDate>${releaseDate}</ReleaseDate>
-${optionalReleaseBlocks ? optionalReleaseBlocks + '\n' : ''}    <AIInvolvement>
-${disclosureBlock}
-    </AIInvolvement>
-  </Release>
+  <ReleaseList>
+    <Release>
+      <ReleaseReference>R0</ReleaseReference>
+      <ReleaseType>${releaseType}</ReleaseType>
+      <ReleaseId><ICPN>${escapeXml(meta.upc)}</ICPN></ReleaseId>
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <DisplayArtist SequenceNumber="1"><ArtistPartyReference>P_ARTIST</ArtistPartyReference><DisplayArtistRole>MainArtist</DisplayArtistRole></DisplayArtist>
+      ${meta.contributors?.length ? contributorXml : ''}
+      <ReleaseLabelReference>P_LABEL</ReleaseLabelReference>
+      ${pLineBlock}
+      ${cLineBlock}
+      <DisplayGenre><GenreText>${genre}</GenreText>${genreSub ? `<SubGenre>${genreSub}</SubGenre>` : ''}</DisplayGenre>
+      <OriginalReleaseDate>${releaseDate}</OriginalReleaseDate>
+      <ParentalWarningType>${parentalWarning}</ParentalWarningType>
+      <ResourceGroup><SequenceNumber>1</SequenceNumber>${releaseResourceItems}</ResourceGroup>
+      <ContainsAI>${releaseContainsAI}</ContainsAI>
+    </Release>
+    <TrackRelease>
+      <ReleaseReference>RT1</ReleaseReference>
+      <ReleaseId><ISRC>${escapeXml(meta.isrc)}</ISRC></ReleaseId>
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <ReleaseResourceReference>A1</ReleaseResourceReference>
+      <ReleaseLabelReference>P_LABEL</ReleaseLabelReference>
+    </TrackRelease>
+  </ReleaseList>
   <DealList>
-${dealBlock}
+    ${dealFor('R0')}
+    ${dealFor('RT1')}
   </DealList>
-</ern:NewReleaseMessage>`
+</NewReleaseMessage>`
 }
 
 // ---------------------------------------------------------------------------
