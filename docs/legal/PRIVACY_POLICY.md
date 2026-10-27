@@ -239,7 +239,7 @@ RAIN V6 is not directed at individuals under the age of 18. We do not knowingly 
 
 ## 10. International Data Transfers
 
-### 10.1 No Transfers Occur
+### 10.1 Hosting Region and International Transfers
 
 Audio processing remains browser-local, but account and operational records are stored in the configured PostgreSQL hosting environment. The hosting region and any cross-border transfers must be confirmed and disclosed before production account persistence is enabled.
 
