@@ -18,7 +18,7 @@ bun test             # Run 100+ test suite
 npx playwright install chromium  # Optional: browser-based DistroKid delivery
 ```
 
-**Prerequisites:** Bun ≥1.2, Node ≥22. PostgreSQL not required for free beta (SQLite fallback via Prisma).
+**Prerequisites:** Bun ≥1.2, Node ≥22, and PostgreSQL for durable accounts, saved projects, sessions, renders, and future usage evidence. Production does not support a packaged SQLite snapshot.
 
 ---
 
@@ -57,7 +57,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 | Framework | Next.js 16 (App Router) |
 | Runtime | Bun 1.2+ |
 | Language | TypeScript (strict) |
-| Database | SQLite (dev) / PostgreSQL 18 (prod) via Prisma 6 |
+| Database | PostgreSQL via Prisma 6; versioned migrations are applied before serving traffic |
 | UI | React 19 · Tailwind CSS 4 · shadcn/ui (Radix) |
 | DSP | TypeScript Web Audio API — all processing in-browser, 48 kHz |
 | AI/ML | RainNet v2 ONNX → 46 ProcessingParams per render |
@@ -284,7 +284,7 @@ tsc --noEmit           # Independent type-check gate (CI also runs this)
 ### Production launch
 - [ ] C++/WASM DSP engine (64-bit float spec compliance)
 - [ ] GPU-accelerated stem separation (remove 60s limit)
-- [ ] PostgreSQL 18 production deployment
+- [ ] Configure the production PostgreSQL service, credentials, backups, monitoring, and restore test
 - [ ] Redis/Upstash rate limiting (multi-instance scaling)
 - [ ] Activate payment tiers (R551.99–R1,978.80/year)
 
