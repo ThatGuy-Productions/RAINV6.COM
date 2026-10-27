@@ -22,7 +22,7 @@ const paid = (monthlyCreditsUsed: number, successfulExportsThisMonth: number) =>
 })
 
 describe('beta entitlement policy', () => {
-  test('defines the confirmed beta allowances', () => {
+  test('defines confirmed allowances', () => {
     expect(BETA_FREE_RENDER_ALLOWANCE).toBe(2)
     expect(BETA_MONTHLY_CREDIT_ALLOWANCE).toBe(1500)
     expect(BETA_CREDITS_PER_RENDER).toBe(25)
@@ -40,7 +40,7 @@ describe('beta entitlement policy', () => {
   })
 
   test('paid beta permits renders within monthly credits and export cap', () => {
-    expect(paid(25 * 10, 10)).toMatchObject({
+    expect(paid(250, 10)).toMatchObject({
       canStartFullCapabilityRender: true,
       canExport: true,
       monthlyCreditsRemaining: 1250,
