@@ -96,7 +96,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
   const renderSettings = parseProjectJson(body.renderSettings)
   const inputFileHash = typeof body.inputFileHash === 'string' ? body.inputFileHash : null
 
-  if (inputMetadata === undefined || renderSettings === undefined) {
+  if ((body.inputMetadata !== undefined && inputMetadata === undefined) || (body.renderSettings !== undefined && renderSettings === undefined)) {
     return NextResponse.json({ error: 'Project metadata/settings must be valid JSON and no larger than 256 KB each.' }, { status: 400 })
   }
   if (inputFileHash && !/^[a-f0-9]{64}$/i.test(inputFileHash)) {
