@@ -55,10 +55,25 @@ const ALLOWED_ORIGINS = [
 function isSameOrigin(req: NextRequest): boolean {
   const origin = req.headers.get('origin')
   if (!origin) {
-    // Allow requests without origin header (server-to-server, direct API calls)
+    // Origin-less requests are allowed through this check only; the CSRF
+    // wrapper and payment token/session checks remain mandatory.
     return true
   }
-  return ALLOWED_ORIGINS.some((allowed) => origin === allowed || allowed.startsWith(origin))
+
+  let requestOrigin: string
+  try {
+    requestOrigin = new URL(origin).origin
+  } catch {
+    return false
+  }
+
+  return ALLOWED_ORIGINS.some((allowed) => {
+    try {
+      return new URL(allowed).origin === requestOrigin
+    } catch {
+      return false
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
