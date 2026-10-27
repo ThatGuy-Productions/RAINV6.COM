@@ -27,16 +27,9 @@ const LLM_MAX_TOKENS_ASSIST = 600
  * The LLM is instructed to respond with JSON only. We parse defensively and
  * fall back to a heuristic suggestion if parsing fails.
  *
- * TIER GATE (Wave 3 P2-2): requires `creator` tier. The AI Co-Master is a
- * paid feature. Identity is read from the optional `x-user-id` request
- * header. If absent, the caller is treated as the anonymous Casual tier
- * and the request is rejected with HTTP 403. Existing client callers
- * (AssistantPanel.tsx) send no `x-user-id` header today — they will
- * receive a 403 until a real auth flow is wired (NextAuth credentials
- * provider is installed but not yet configured). This is the expected
- * behavior per the P2 spec. To unlock the endpoint during local dev,
- * seed an Account row with `tier = 'creator'` and send its id in the
- * `x-user-id` header.
+ * BETA ACCESS POLICY: the AI Co-Master Engineer is available to all users
+ * during the full-capability free beta. Do not require a paid-tier account or
+ * trust an x-user-id header for product access. Rate limiting still applies.
  */
 export async function POST(req: NextRequest) {
   try {
