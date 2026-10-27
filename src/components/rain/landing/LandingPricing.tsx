@@ -24,7 +24,7 @@ export function LandingPricing({ onLaunch }: PricingProps) {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-rain-border bg-rain-surface-2/60 text-xs font-mono uppercase tracking-wider mb-6"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-rain-accent rain-pulse" />
-            <span className="text-rain-accent">Free Public Beta — No Credit Card Required</span>
+            <span className="text-rain-accent">Free Beta — 2 Exports Included</span>
           </motion.div>
           <motion.h2
             initial={false}
@@ -32,7 +32,7 @@ export function LandingPricing({ onLaunch }: PricingProps) {
             viewport={{ once: true }}
             className="text-4xl md:text-5xl font-bold tracking-tight mb-4"
           >
-            Full capability.<br /><span className="rain-gradient-text-lime">Completely free.</span>
+            Full capability.<br /><span className="rain-gradient-text-lime">Try it, then unlock.</span>
           </motion.h2>
           <motion.p
             initial={false}
