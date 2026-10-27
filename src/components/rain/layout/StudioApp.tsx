@@ -57,6 +57,9 @@ export function StudioApp({ onExit }: StudioAppProps) {
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false)
   // Reset password modal state.
   const [resetPasswordOpen, setResetPasswordOpen] = useState(false)
+  const [betaUnlockOpen, setBetaUnlockOpen] = useState(false)
+  const [betaInterestRecorded, setBetaInterestRecorded] = useState(false)
+  const [betaInterestBusy, setBetaInterestBusy] = useState(false)
   // Reset token (set from forgot password flow or URL).
   const [resetToken, setResetToken] = useState('')
   // What's New changelog panel state.
@@ -78,6 +81,7 @@ export function StudioApp({ onExit }: StudioAppProps) {
     const openSignUp = () => setSignUpOpen(true)
     const openSignIn = () => setSignInOpen(true)
     const openForgotPassword = () => setForgotPasswordOpen(true)
+    const openBetaUnlock = () => { setBetaUnlockOpen(true); setBetaInterestRecorded(false) }
     const openResetPassword = (e: Event) => {
       const token = (e as CustomEvent).detail?.token ?? ''
       setResetToken(token)
@@ -90,6 +94,7 @@ export function StudioApp({ onExit }: StudioAppProps) {
     window.addEventListener('rain:signin-open', openSignIn)
     window.addEventListener('rain:forgot-password-open', openForgotPassword)
     window.addEventListener('rain:reset-password-open', openResetPassword)
+    window.addEventListener('rain:beta-unlock-open', openBetaUnlock)
     window.addEventListener('rain:whatsnew-open', openWhatsNew)
     return () => {
       window.removeEventListener('rain:admin-door-open', openDoor)
@@ -98,6 +103,7 @@ export function StudioApp({ onExit }: StudioAppProps) {
       window.removeEventListener('rain:signin-open', openSignIn)
       window.removeEventListener('rain:forgot-password-open', openForgotPassword)
       window.removeEventListener('rain:reset-password-open', openResetPassword)
+      window.removeEventListener('rain:beta-unlock-open', openBetaUnlock)
       window.removeEventListener('rain:whatsnew-open', openWhatsNew)
     }
   }, [])
@@ -215,7 +221,46 @@ export function StudioApp({ onExit }: StudioAppProps) {
           }}
         />
       )}
-      {/* Free Beta Feedback Widget */}
+      {betaUnlockOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="beta-unlock-title">
+          <div className="w-full max-w-md rounded-2xl border border-rain-border bg-background p-6 shadow-2xl">
+            <div className="mb-2 text-xs font-mono uppercase tracking-widest text-rain-accent">RAIN V6 · Free Beta</div>
+            <h2 id="beta-unlock-title" className="mb-3 text-2xl font-bold">Your two free exports are used</h2>
+            <p className="mb-3 text-sm text-muted-foreground">Every product capability remains available during beta. Continued exporting is planned as a one-time R49.00 unlock.</p>
+            <p className="mb-5 rounded-lg border border-rain-border bg-rain-surface-2 p-3 text-xs text-muted-foreground">Secure checkout is not connected yet, so no payment can be taken and this screen does not unlock exports. We are recording genuine interest only; paid conversion will be counted only after a verified payment-provider confirmation.</p>
+            {betaInterestRecorded ? (
+              <div className="mb-4 text-sm text-rain-accent">Interest recorded. No payment was taken.</div>
+            ) : (
+              <button
+                type="button"
+                disabled={betaInterestBusy}
+                onClick={async () => {
+                  setBetaInterestBusy(true)
+                  try {
+                    const response = await fetch('/api/rain/beta-access/interest', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ event: 'beta_checkout_started', anonId: getAnonId() }),
+                    })
+                    if (!response.ok) throw new Error('Could not record interest. Please try again.')
+                    setBetaInterestRecorded(true)
+                  } catch (error) {
+                    window.dispatchEvent(new CustomEvent('rain:toast', { detail: { type: 'error', message: error instanceof Error ? error.message : 'Please try again.' } }))
+                  } finally {
+                    setBetaInterestBusy(false)
+                  }
+                }}
+                className="mb-3 w-full rounded-lg bg-rain-accent px-4 py-3 font-semibold text-black disabled:opacity-50"
+              >
+                {betaInterestBusy ? 'Recording…' : 'Register interest in R49 unlock'}
+              </button>
+            )}
+            <button type="button" onClick={() => setBetaUnlockOpen(false)} className="w-full rounded-lg border border-rain-border px-4 py-2 text-sm">Close</button>
+          </div>
+        </div>
+      )}
+
+            {/* Free Beta Feedback Widget */}
       <FeedbackModal />
       {/* What's New changelog panel — opened by the notifications bell */}
       <WhatsNewPanel open={whatsNewOpen} onClose={() => setWhatsNewOpen(false)} />
