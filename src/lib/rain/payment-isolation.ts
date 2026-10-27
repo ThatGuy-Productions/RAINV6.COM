@@ -649,7 +649,7 @@ export class PaymentIsolation {
     // ── Rate limit check ────────────────────────────────────────────────
     const rateCheck = await checkRateLimit(req, `payment:${userSessionId}`, PAYMENT_RATE_LIMIT_RPM)
     if (!rateCheck.ok) {
-      return { error: 'Too many payment attempts. Please wait.', retryAfter: rateCheck.retryAfter }
+      return { error: rateCheck.unavailable ? 'Rate limiting service unavailable' : 'Too many payment attempts. Please wait.', retryAfter: rateCheck.retryAfter, unavailable: rateCheck.unavailable }
     }
 
     const now = Date.now()
