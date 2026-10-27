@@ -55,7 +55,8 @@ export async function POST(req: NextRequest) {
   const outputFileHash = typeof body.outputFileHash === 'string' ? body.outputFileHash : undefined
   const loudnessLufs = typeof body.loudnessLufs === 'number' ? body.loudnessLufs : undefined
   const truePeakDbfs = typeof body.truePeakDbfs === 'number' ? body.truePeakDbfs : undefined
-  const renderTimeMs = typeof body.renderTimeMs === 'number' ? body.renderTimeMs : undefined
+  const renderTimeMs = typeof body.renderTimeMs === 'number' && Number.isFinite(body.renderTimeMs) ? Math.max(0, Math.min(body.renderTimeMs, 24 * 60 * 60 * 1000)) : undefined
+  const audioDurationSec = typeof body.audioDurationSec === 'number' && Number.isFinite(body.audioDurationSec) ? Math.max(0, Math.min(body.audioDurationSec, 24 * 60 * 60)) : undefined
   const anonId =
     typeof body.anonId === 'string' && body.anonId.length > 0
       ? body.anonId.slice(0, 128)
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
       userId: null,
       anonId,
       type: eventType,
-      metadata: { sessionId: null, format, anonymous: true },
+      metadata: { sessionId: null, format, renderTimeMs, audioDurationSec, anonymous: true },
     })
     return NextResponse.json({ ok: true, renderId: null, anonymous: true, telemetryRecorded }, { status: 200 })
   }
@@ -101,7 +102,7 @@ export async function POST(req: NextRequest) {
       userId: user.id,
       anonId,
       type: eventType,
-      metadata: { sessionId, format, renderId },
+      metadata: { sessionId, format, renderId, renderTimeMs, audioDurationSec },
     })
 
     return NextResponse.json({ ok: true, renderId, anonymous: false, telemetryRecorded }, { status: 201 })
