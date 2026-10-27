@@ -1328,11 +1328,11 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
                     <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.aieExports}</div>
                   </div>
                   <div className="rounded-lg border border-rain-border/50 p-3">
-                    <div className="text-[10px] text-muted-foreground">Unlock paywalls shown</div>
+                    <div className="text-[10px] text-muted-foreground">Users shown unlock paywall</div>
                     <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.paywallShown}</div>
                   </div>
                   <div className="rounded-lg border border-rain-border/50 p-3">
-                    <div className="text-[10px] text-muted-foreground">Checkout intent</div>
+                    <div className="text-[10px] text-muted-foreground">Users expressing checkout intent</div>
                     <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.checkoutStarted}</div>
                   </div>
                 </div>
