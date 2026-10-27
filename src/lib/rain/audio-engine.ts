@@ -627,11 +627,9 @@ class RainAudioEngine {
    * Render the master through the full 16-stage pipeline (in-browser, deterministic).
    * Returns the processed AudioBuffer ready for preview & export.
    *
-   * @param onStemsReady Optional callback fired after Stage 7 with the BS-RoFormer
-   *                     4-pass separation results (12 StemResults). Only fires
-   *                     when the loaded audio is <= 60s (the BS-RoFormer cap);
-   *                     for longer audio the user must run separation manually
-   *                     from the Stems tab.
+   * Neural source separation is intentionally skipped until a licensed,
+   * verified BS-RoFormer model is bundled. The Stems tab currently supports
+   * importing and mixing externally separated stems.
    */
   async render(
     macros: MacroValues,
