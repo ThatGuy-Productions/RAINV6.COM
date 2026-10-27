@@ -1275,29 +1275,14 @@ class RainAudioEngine {
   getParams(): ProcessingParams | null { return this.params }
 
   // -------------------------------------------------------------------------
-  // Stem separation — BS-RoFormer 4-pass cascade per tech spec.
-  // Uses the loaded inputBuffer. See src/lib/rain/stems.ts for the engine.
+  // Neural stem separation — unavailable until a licensed model is bundled.
+  // The legacy DSP approximation remains isolated in stems.ts for evaluation.
   // -------------------------------------------------------------------------
 
   /**
-   * Run real BS-RoFormer 4-pass source separation on the loaded input audio.
-   * Returns 12 StemResults with actual stereo channels + measured RMS/peak.
-   *
-   * Pipeline per tech spec (Pasted Content_1783542076605.txt):
-   *   Pass 1: BS-RoFormer       → vocals, drums, bass, guitar, piano, other
-   *   Pass 2: MelBand RoFormer  → lead vocals, backing vocals
-   *   Pass 3: Spectral split    → kick, snare, hats, percussion
-   *   Pass 4: Dereverb          → ambience + dry other
-   *
-   * Used by the Stems tab for explicit "Run Separation" / "Re-run" clicks.
-   * The render() pipeline also runs this internally at Stage 7 (for audio
-   * <= 60s) and emits results via the onStemsReady callback — so the Stems
-   * tab is usually already populated by the time the user opens it.
-   *
-   * @param onProgress Optional (stageName, pct) callback — fires from real
-   *                   DSP stages, never from a setTimeout placeholder.
-   * @param signal     Optional AbortSignal — checked between every pass
-   *                   and every chunk within a pass.
+   * Explicitly fails rather than presenting DSP-derived approximations as
+   * verified neural source separation. Importing/mixing user-provided stems
+   * remains available in the Stems tab.
    */
   async separateStems(
     onProgress?: (stage: string, pct: number) => void,
