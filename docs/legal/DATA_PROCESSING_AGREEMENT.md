@@ -51,15 +51,11 @@ As the Data Processor, we:
 - Do not determine the purposes or means of processing
 - Do not sell, share, or otherwise commercialise any personal data
 
-### 2.3 The Critical Distinction
+### 2.3 Browser Processing and Account Persistence
 
-**IMPORTANT:** During the Beta phase, RAIN operates entirely in the user's browser. The Data Processor (RAIN) does not receive, access, store, or have the ability to access any user data processed through the Service. All "processing" occurs exclusively on the Data Controller's own device. This creates a unique scenario where:
+RAIN performs source-audio processing in the browser by default. However, the service also supports persistent accounts and may store account email, optional display name, salted password hashes, authentication-token hashes/expiry, saved project metadata/settings, render records, and limited operational event metadata in PostgreSQL. Authentication records may include user-agent and IP metadata for security. Source audio and AIE voice vectors remain browser-local under the account/project persistence design described here.
 
-- The Data Controller maintains full physical and logical control over all data
-- The Data Processor provides only the software tools (delivered as static web assets) that run on the Data Controller's device
-- The Data Processor has **zero access** to processed data at any point
-
-This DPA addresses the legal framework for this relationship, which is characterised by the absence of server-side data processing.
+This means RAIN does process a limited category of personal/account data on its servers; statements elsewhere in this DPA that claim zero server-side data or stateless operation must be read as superseded by this section and must be reconciled before the policy is published as final. The database hosting provider, hosting region, retention/deletion schedule, and sub-processor terms must be identified and reviewed before production account persistence is enabled.
 
 ## 3. Nature and Purpose of Processing
 
@@ -85,36 +81,29 @@ The only potential data subjects are the Users themselves. No personal data of o
 
 ### 3.3 Categories of Personal Data
 
-In the normal course of Beta operation, **no personal data is processed on RAIN's servers.** The following categories of data may exist **locally on the User's device:**
+In the normal course of account-enabled use, limited account/security data and saved project metadata/settings may be processed on RAIN's servers. The following categories remain browser-local unless a separate, explicitly disclosed feature changes this:
 
 | Data Category | Example | Server Access |
 |---------------|---------|---------------|
-| Audio content | Song recordings | None |
-| Audio metadata (embedded) | ID3 tags, RIFF INFO, BWF bext | None |
-| Artist information (metadata) | Artist name in DDEX fields | None |
-| ISRC/UPC identifiers | Locally-generated codes | None |
-| AIE voice vector | 64-dim float32 array | None |
-| Processing parameters | 46 canonical DSP params | None |
-| Anonymous session ID | UUIDv4 | None |
-| UI preferences | Theme, language selection | None |
+| Source audio | Song recordings | None through the account/project persistence API |
+| Embedded audio metadata | ID3 tags, RIFF INFO, BWF bext | Not uploaded with saved project metadata |
+| AIE voice vector | 64-dim float32 array | None; remains browser-local |
+| Provenance private key | IndexedDB key | None; remains browser-local |
+| UI preferences | Theme, language selection | Local unless explicitly included in saved project settings |
+| Account data | Email, optional name, salted password hash | Stored in PostgreSQL |
+| Authentication metadata | Token hash, expiry, user-agent, IP metadata | Stored in PostgreSQL |
+| Saved project metadata | Project name, processing settings, input hash | Stored in PostgreSQL for signed-in users |
+| Operational events | Signup/login/session/render/export/AIE event types and limited metadata | Stored where the relevant event path succeeds; not historical for periods before instrumentation |
 
 ## 4. Sub-Processors
 
-### 4.1 No Sub-Processors
+### 4.1 Hosting and Sub-Processors
 
-**RAIN V6 Beta engages NO sub-processors.** All processing occurs on the User's device using client-side web technologies:
-
-- Web Audio API (browser built-in)
-- WebAssembly (onnxruntime-web)
-- Web Crypto API (browser built-in)
-- IndexedDB API (browser built-in)
-- LocalStorage API (browser built-in)
-
-No third-party services process user data on our behalf. As a result, this DPA does not require a list of sub-processors and no sub-processor change notification process is needed.
+The browser uses built-in Web Audio, WebAssembly, Web Crypto, IndexedDB, and LocalStorage APIs for local processing. Persistent account data and saved project metadata require a PostgreSQL hosting provider. The production provider, hosting region, contractual data-protection terms, and any other sub-processors must be identified and listed here before production account persistence is enabled. Until that is completed, this DPA is a draft and must not be represented as a final account-data processing agreement.
 
 ### 4.2 Future Sub-Processors
 
-If RAIN introduces server-side processing in the future, we will:
+Before adding or changing server-side processing or sub-processors, we will:
 
 1. Update this DPA to include a sub-processor list
 2. Provide at least 30 days' notice before engaging any sub-processor
@@ -147,18 +136,18 @@ Static application files (HTML, JS, CSS, WASM, ONNX model) may be delivered via 
 | Measure | Description |
 |---------|-------------|
 | Client-side only processing | Audio never leaves the user's browser |
-| No persistent server storage | No user data stored on RAIN servers |
+| Durable account storage | PostgreSQL stores account, authentication, saved-project metadata, and limited event records when configured |
 | Browser security sandbox | Data isolated per-origin by browser policy |
 | Web Worker isolation | DSP runs in a separate thread, no DOM access |
-| Stateless architecture | No server-side sessions or user state |
+| Persistent account state | Authentication tokens, account records, saved project metadata, and event rows are stored server-side |
 | IndexedDB per-origin isolation | Data accessible only to RAIN application origin |
 
 ### 5.3 Organisational Measures
 
 | Measure | Description |
 |---------|-------------|
-| No data access | Zero server-side data collection eliminates the attack surface |
-| No employee access | No employee can access user data because no user data exists on servers |
+| Restricted data access | Limit server-side access to account, authentication, saved-project metadata, and event records; apply least privilege and audit access |
+| Operational access | Restrict and audit privileged access to server-side account and project metadata |
 | Least privilege | Code module design limits data access to specific processing stages |
 | Open source-available | Source code available for security audit |
 
