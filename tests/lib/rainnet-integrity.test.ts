@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { verifyModelManifest } from '../../src/lib/rain/rainnet-inference'
+import { createWithBackendFallback, verifyModelManifest } from '../../src/lib/rain/rainnet-inference'
 
 const originalFetch = globalThis.fetch
 
@@ -17,6 +17,39 @@ afterEach(() => {
 })
 
 describe('RainNet model integrity verification', () => {
+  it('falls back to WASM when WebGPU session creation fails', async () => {
+    const attempts: string[] = []
+    const result = await createWithBackendFallback(async backend => {
+      attempts.push(backend)
+      if (backend === 'webgpu') throw new Error('WebGPU unavailable')
+      return { ready: true }
+    })
+
+    expect(attempts).toEqual(['webgpu', 'wasm'])
+    expect(result.backend).toBe('wasm')
+    expect(result.session.ready).toBe(true)
+  })
+
+  it('does not try WASM when WebGPU session creation succeeds', async () => {
+    const attempts: string[] = []
+    const result = await createWithBackendFallback(async backend => {
+      attempts.push(backend)
+      return { ready: true }
+    })
+
+    expect(attempts).toEqual(['webgpu'])
+    expect(result.backend).toBe('webgpu')
+  })
+
+  it('reports both backend failures instead of claiming the model is available', async () => {
+    const attempts: string[] = []
+    await expect(createWithBackendFallback(async backend => {
+      attempts.push(backend)
+      throw new Error(`${backend} failed`)
+    })).rejects.toThrow('WebGPU and WASM session creation failed')
+    expect(attempts).toEqual(['webgpu', 'wasm'])
+  })
+
   it('rejects placeholder or malformed hashes before fetching model bytes', async () => {
     const manifest = {
       schemaVersion: 'rain-v1',
