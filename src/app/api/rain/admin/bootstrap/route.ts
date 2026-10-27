@@ -21,7 +21,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
   // Rate limit: 3 bootstrap attempts per minute per IP (conservative)
   // The existing rate limiter uses RPM (requests per minute).
   // 3 RPM = 3 attempts per minute, which is sufficient for a one-time endpoint.
-  const rl = checkRateLimit(req, 'bootstrap', 3)
+  const rl = await checkRateLimit(req, 'bootstrap', 3)
   if (!rl.ok) {
     return NextResponse.json(
       { error: 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
