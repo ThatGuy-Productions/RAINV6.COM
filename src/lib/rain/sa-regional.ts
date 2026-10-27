@@ -156,10 +156,20 @@ export const POPIA = {
 
   /** Default data retention periods (days) for operational data. */
   retention: {
+    /** Policy target: delete inactive accounts after 180 days, subject to legal holds. */
+    accountInactive: 180,
     /** Session/render data — 90 days after last activity. */
     sessionData: 90,
     /** Analytics/event logs — 365 days (for product metrics only). */
     analytics: 365,
+    /** Policy target: expire/revoke authentication tokens within 7 days. */
+    authTokens: 7,
+  } as const,
+
+  /** Legal bases recorded for the data-processing inventory; these are not a substitute for legal review. */
+  legalBases: {
+    consent: 'Optional feedback email and non-essential processing require informed, specific consent.',
+    contract: 'Account, session, and requested mastering/distribution operations are processed to provide the requested service.',
   } as const,
 
   /** Data processing locations */
