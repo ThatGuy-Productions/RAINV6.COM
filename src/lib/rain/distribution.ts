@@ -828,6 +828,9 @@ export async function buildDistributionPackage(
   ) {
     throw new Error('Release date must be a real calendar date in YYYY-MM-DD format.')
   }
+  if (!metadata.targetDsps?.length) {
+    throw new Error('Select at least one distribution target before building the package.')
+  }
   const dpidPattern = /^[A-Z0-9]{18}$/
   if (!dpidPattern.test(metadata.senderDpid) || !dpidPattern.test(metadata.recipientDpid)) {
     throw new Error('Official 18-character DDEX sender and recipient Party IDs are required. Configure the registered IDs before distribution.')
@@ -1293,7 +1296,8 @@ export type SubmitResult = SubmitResultOk | SubmitResultFail
  *        - If present → the server makes a real `fetch()` to
  *          `LABELGRID_API_URL` (default `https://api.labelgrid.com/v1/deliveries`)
  *          with `Authorization: Bearer <key>` and forwards the multipart body.
- *          2xx → `{ ok: true, providerResponse }`. Non-2xx →
+ *          2xx → `{ ok: true, status: 'submitted' }` unless the provider explicitly
+ *          confirms delivery. Non-2xx or explicit provider failure →
  *          `{ ok: false, error: <provider body>, requiresCredentials: false }`.
  *   4. The client updates the DeliveryJob status accordingly.
  *
