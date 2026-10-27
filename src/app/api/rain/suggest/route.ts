@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     // Rate limit: 15 requests/min per IP — slightly tighter than assist since
     // report generation is more expensive.
-    const rl = checkRateLimit(req, 'suggest', 15)
+    const rl = await checkRateLimit(req, 'suggest', 15)
     if (!rl.ok) {
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rl.retryAfter },
