@@ -1202,16 +1202,16 @@ Operator requirements:
 
 Changes made on this branch:
 - Added owner-scoped GET/POST/PUT support to `/api/rain/session`: signed-in users can list saved projects, retrieve one project, create a project record, and update its metadata/settings. The API rejects oversized/invalid JSON, checks ownership on reads/writes, and never uploads the source audio file.
-- Added a best-effort autosave after a successful mastering render, storing the project metadata and processing settings in the authenticated user's Session row. Source audio remains browser-local and must be reselected when returning.
+- Added debounced autosave while a signed-in user works, plus autosave after a successful render. A Saved Projects panel lists account-owned projects and restores metadata/macros/genre/platform/simple-mode settings. Source audio remains browser-local and must be reselected when returning.
 - Added `GET /api/rain/beta-access`, which counts recorded successful exports from the durable Event table and reports the two-export allowance plus the planned R49.00 amount.
-- Removed the sign-up-required-before-export gate. All users retain the product's available feature access; the export UI checks the two-free-export allowance before generating another export.
+- Removed the sign-up-required-before-export gate. All users retain the product's available feature access; both the main Export tab and the quick WAV export check the two-free-export allowance before generating another export. A browser-local counter is used conservatively if a durable event write fails; the gate remains a UX measure, not a security boundary.
 - Updated public pricing copy to describe two free exports followed by a R49.00 unlock.
 - Added a transparent unlock-interest modal and server-side `beta_paywall_shown` / `beta_checkout_started` events. The modal explicitly says checkout is not live and does not take payment.
 - Added conversion funnel event types. A client-side intent event can never mark an account as paid.
 
 Important limitations / blockers:
 - The repository schema has now been changed to PostgreSQL, a versioned initial migration has been added, CI runs against PostgreSQL, and `tests/integration/persistent-account.test.ts` verifies account, auth-token, project settings, and usage-event rows from a second independent database connection. This proves DB persistence when the integration test is enabled; it does not prove that the live deployment has a durable `DATABASE_URL`, applied migrations, backups, or a successful cross-deploy restart.
-- Saved project APIs and render-time autosave are not yet a complete restore workflow; the UI to browse a saved project, restore its settings, and ask the user to reselect the source audio still needs to be completed and tested.
+- A basic saved-project list and settings-restore UI is now present. Full browser end-to-end testing is still needed for sign-in, autosave during editing, cross-session list/load, and reselecting the matching source audio.
 - The two-export gate is currently a client UX gate because audio export is performed locally in the browser. It can be bypassed by a modified client and must not be described as tamper-proof enforcement.
 - No payment has been integrated or taken. The current payment engine is ephemeral and beta-mode zero-priced. Configure a real provider, verified callback/webhook, persistent entitlement/payment record, idempotency, refunds/failure handling, and tests before charging R49 or counting paid conversions.
 - AIE vector computation and signed-vector export now emit dedicated server events without uploading the vector or source audio. Admin funnel metrics include AIE counts, R49 paywall displays, checkout intent, and visible-studio-hour estimates. These are future measurements only after deployed database writes succeed; visible-tab hours are estimates, not verified human work.
