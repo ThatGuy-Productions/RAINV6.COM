@@ -182,6 +182,10 @@ export function DistributeTab() {
       notifyError('Metadata validation failed', metadataIssues.map((issue) => issue.message).join(' '))
       return
     }
+    if (!/^[A-Z0-9]{18}$/.test(process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '') || !/^[A-Z0-9]{18}$/.test(process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '')) {
+      notifyError('Official DDEX Party IDs required', 'Configure NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID and NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID with registered IDs before distribution.')
+      return
+    }
     if (!rainCert) {
       notifyError('RAIN-CERT required', 'Generate and verify provenance for the current master before building a distribution package.')
       return
