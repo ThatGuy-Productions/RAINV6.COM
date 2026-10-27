@@ -68,6 +68,7 @@ export function MasteringTab() {
   const setMacros = useSessionStore((s) => s.setMacros)
   const setMetadata = useSessionStore((s) => s.setMetadata)
   const { user } = useAuth()
+  const userId = user?.id
   const [savedProjects, setSavedProjects] = useState<Array<{ id: string; name: string; updatedAt: string; inputMetadata: string | null; renderSettings: string | null }>>([])
   const [savedProjectsLoading, setSavedProjectsLoading] = useState(false)
   const setMacroSource = useSessionStore((s) => s.setMacroSource)
@@ -101,7 +102,7 @@ export function MasteringTab() {
   // selected again by the user.
   useEffect(() => {
     let cancelled = false
-    if (!user) {
+    if (!userId) {
       setSavedProjects([])
       return
     }
@@ -117,7 +118,7 @@ export function MasteringTab() {
       })
       .finally(() => { if (!cancelled) setSavedProjectsLoading(false) })
     return () => { cancelled = true }
-  }, [user?.id])
+  }, [userId])
 
   const restoreProjectSettings = (project: (typeof savedProjects)[number]) => {
     try {
