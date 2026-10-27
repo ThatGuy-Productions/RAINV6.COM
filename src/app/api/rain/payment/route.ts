@@ -122,7 +122,7 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
   }
 
   // ── Global rate limit ──────────────────────────────────────────────────
-  const rateCheck = checkRateLimit(req, 'payment:global', 10)
+  const rateCheck = await checkRateLimit(req, 'payment:global', 10)
   if (!rateCheck.ok) {
     return NextResponse.json(
       { ok: false, error: 'Too many payment requests. Please wait.', retryAfter: rateCheck.retryAfter },
@@ -193,7 +193,7 @@ async function handleCreate(
   const provider = providerInput as PaymentMethod
 
   // ── Create isolated payment session ─────────────────────────────────────
-  const result = isolation.createSession(userSessionId, provider, amountCents, req)
+  const result = await isolation.createSession(userSessionId, provider, amountCents, req)
 
   if ('error' in result) {
     const status = result.retryAfter ? 429 : 400
