@@ -123,7 +123,8 @@ export type DeliveryJobStatus =
   | 'pending'        // Created locally, not yet packaged.
   | 'packaged'       // ZIP built + persisted; awaiting submission.
   | 'submitting'     // HTTP POST in flight.
-  | 'delivered'      // Provider returned 2xx.
+  | 'submitted'      // Provider accepted the package; final delivery not yet confirmed.
+  | 'delivered'      // Provider explicitly confirmed final delivery/completion.
   | 'failed'         // Provider returned non-2xx OR network error OR credentials missing.
 
 export interface DeliveryJob {
@@ -1264,6 +1265,7 @@ export async function deleteDeliveryJob(id: string): Promise<void> {
 
 export interface SubmitResultOk {
   ok: true
+  status: 'submitted' | 'delivered'
   providerResponse: string
 }
 export interface SubmitResultFail {
@@ -1330,17 +1332,24 @@ export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult>
     const body = await resp.json().catch(() => ({ error: 'Non-JSON provider response' })) as {
       ok?: boolean
       providerResponse?: string
+      status?: 'submitted' | 'delivered'
       error?: string
       requiresCredentials?: boolean
     }
 
     if (resp.ok && body.ok) {
+      const status = body.status === 'delivered' ? 'delivered' : 'submitted'
       await updateDeliveryJob(job.id, {
-        status: 'delivered',
-        deliveredAt: Date.now(),
-        providerResponse: body.providerResponse ?? 'Delivered',
+        status,
+        submittedAt: Date.now(),
+        ...(status === 'delivered' ? { deliveredAt: Date.now() } : {}),
+        providerResponse: body.providerResponse ?? 'Provider accepted submission; delivery not yet confirmed',
       })
-      return { ok: true, providerResponse: body.providerResponse ?? 'Delivered' }
+      return {
+        ok: true,
+        status,
+        providerResponse: body.providerResponse ?? 'Provider accepted submission; delivery not yet confirmed',
+      }
     }
 
     const requiresCredentials = body.requiresCredentials === true
