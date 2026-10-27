@@ -139,10 +139,7 @@ export function LandingHero({ onLaunch }: LandingHeroProps) {
             transition={{ duration: 0.7, delay: 0.12 }}
             className="text-base md:text-lg text-muted-foreground/80 max-w-xl leading-[1.75]"
           >
-            Studio-grade mastering, 12-stem separation, Dolby Atmos
-            binaural, RAIN-CERT provenance, and DDEX distribution — all
-            running on a deterministic in-browser DSP engine. Audio never
-            leaves your device on the free path.
+            Studio-grade browser mastering, stem import and mixing, experimental binaural spatial rendering, RAIN-CERT provenance, and distribution-package preparation. Neural stem separation and Dolby Atmos-certified output are gated until their required model and validation workflows are available. Audio stays in your browser on the local processing path.
           </motion.p>
 
           {/* ── Accent line — green sentence (promo render detail) ─ */}
