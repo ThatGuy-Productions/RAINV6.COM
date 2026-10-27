@@ -21,6 +21,7 @@ import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rai
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
   buildDistributionPackage,
+  buildDdexErnXml,
   deleteDeliveryJob,
   loadDeliveryJobs,
   persistDeliveryJob,
@@ -92,9 +93,9 @@ export function DistributeTab() {
     refreshJobs()
   }, [refreshJobs])
 
-  // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected
-  // platforms, and AI disclosure state. Memoised so the preview doesn't
-  // regenerate MessageId / MessageCreatedDateTime on every render.
+  // Preview only: a structurally complete DDEX ERN requires the actual rendered
+  // asset hashes and registered Party IDs. The package builder supplies those
+  // after encoding; this preview must not be treated as delivery-ready.
   const ddexXml = useMemo(() => {
     return buildDdexErnXml({
       title: metadata.title,
@@ -105,6 +106,8 @@ export function DistributeTab() {
       year: metadata.year,
       isrc: metadata.isrc,
       upc: metadata.upc,
+      senderDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '',
+      recipientDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '',
       iswc: metadata.iswc,
       releaseDate: metadata.releaseDate,
       originalReleaseDate: metadata.originalReleaseDate,
