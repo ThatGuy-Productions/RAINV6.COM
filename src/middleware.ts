@@ -198,11 +198,16 @@ function validateCsrf(request: NextRequest): boolean {
   const origin = request.headers.get('origin')
   if (!origin) return true // Allow same-origin requests without Origin header
 
-  // Check if origin matches the request host
+  // Check if origin matches the request host. Malformed Origin headers
+  // must be rejected rather than throwing out of middleware.
   const host = request.headers.get('host')
   if (origin && host) {
-    const originHost = new URL(origin).host
-    if (originHost === host) return true
+    try {
+      const parsedOrigin = new URL(origin)
+      if (parsedOrigin.origin === `${request.nextUrl.protocol}//${host}`) return true
+    } catch {
+      return false
+    }
   }
 
   return CSRF_ALLOWED_ORIGINS.has(origin)
