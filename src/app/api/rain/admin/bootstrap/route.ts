@@ -12,7 +12,7 @@ export const runtime = 'nodejs'
  * account and immediately issues a session (logs the caller in). Refuses
  * with 409 if any Enterprise account already exists — the door is one-time.
  *
- * SECURITY FIX (C1): Rate limited to 3 attempts per hour per IP to prevent
+ * SECURITY FIX (C1): Rate limited to 3 attempts per minute per IP to prevent
  * brute-force race-condition attacks.
  *
  * Body: { email, password, name? }
