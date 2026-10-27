@@ -4,17 +4,13 @@
  * RAIN V6 — Mastering Report Dialog (Wave 3 P2-3)
  *
  * Client-side dialog that calls /api/rain/suggest to fetch an LLM-generated
- * mastering report from the current session state (input analysis, output
- * analysis, macros, RAIN score). Handles the 403-tier-insufficient case by
- * showing an upgrade prompt instead of an error.
- *
- * The route is gated at the Independent tier (≥ $29/mo). The caller may
- * optionally send an `x-user-id` header — if absent, the route treats the
- * caller as Casual and returns 403, which we render as an upgrade prompt.
+ * mastering report from the current session state. The report and AIE are
+ * available to every user during the full-capability free beta. Admin security
+ * remains separate; product access must not depend on an x-user-id header.
  */
 
 import { useCallback, useState } from 'react'
-import { Copy, FileText, Loader2, Lock } from 'lucide-react'
+import { Copy, FileText, Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -26,7 +22,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/lib/rain/store'
 import { notifyError } from '@/lib/rain/notifications'
-import { PRICING_TIERS } from '@/lib/rain/constants'
 
 interface MasteringReportDialogProps {
   open: boolean
@@ -37,7 +32,6 @@ type State =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'report'; text: string }
-  | { kind: 'upgrade'; required: string; current: string }
   | { kind: 'error'; message: string }
 
 export function MasteringReportDialog({ open, onOpenChange }: MasteringReportDialogProps) {
@@ -62,10 +56,7 @@ export function MasteringReportDialog({ open, onOpenChange }: MasteringReportDia
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Optional identity header. In the sandbox there's no real auth, so
-          // we omit it; the route returns 403 and we render an upgrade prompt.
-          // To test the report end-to-end, seed an Independent-tier Account
-          // and set its id here via localStorage: `localStorage.getItem('rain:user-id')`.
+          // Beta report access is anonymous and must not require a paid-tier identity.
           ...(getDevUserIdHeader()),
         },
         body: JSON.stringify({
@@ -78,9 +69,8 @@ export function MasteringReportDialog({ open, onOpenChange }: MasteringReportDia
       if (res.status === 403) {
         const body = await res.json().catch(() => ({}))
         setState({
-          kind: 'upgrade',
-          required: String(body.required ?? 'independent'),
-          current: String(body.current ?? 'casual'),
+          kind: 'error',
+          message: typeof body.error === 'string' ? body.error : 'The report request was forbidden. Please retry or contact beta support.',
         })
         return
       }
@@ -174,9 +164,6 @@ export function MasteringReportDialog({ open, onOpenChange }: MasteringReportDia
             </div>
           )}
 
-          {state.kind === 'upgrade' && (
-            <UpgradePrompt required={state.required} current={state.current} />
-          )}
 
           {state.kind === 'error' && (
             <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-4 text-sm text-orange-300">
@@ -226,38 +213,6 @@ function Metric({ label, value }: { label: string; value: string | undefined }) 
       <span className="text-foreground font-bold tabular-nums">
         {value ?? '—'}
       </span>
-    </div>
-  )
-}
-
-function UpgradePrompt({ required, current }: { required: string; current: string }) {
-  const requiredTier = PRICING_TIERS.find((t) => t.slug === required)
-  return (
-    <div className="space-y-4 py-2">
-      <div className="flex items-start gap-3 rounded-md border border-rain-accent/30 bg-rain-accent/5 p-4">
-        <Lock className="w-5 h-5 text-rain-accent flex-shrink-0 mt-0.5" />
-        <div className="space-y-1.5">
-          <div className="text-sm font-semibold text-foreground">
-            {requiredTier ? requiredTier.name : required} tier required
-          </div>
-          <div className="text-xs text-muted-foreground">
-            The standalone Mastering Report is an Independent-tier feature (≥ $29/mo). Your
-            current tier is <span className="font-mono font-bold text-foreground">{current}</span>.
-            Upgrade to unlock LLM-generated mastering reports, the Artist Identity Engine, and
-            reference-track matching.
-          </div>
-          {requiredTier && (
-            <div className="text-[11px] font-mono text-muted-foreground/80 pt-1">
-              {requiredTier.name} · ${requiredTier.price}/{requiredTier.period} · {requiredTier.renders}
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="text-[11px] text-muted-foreground/70 leading-relaxed">
-        Note: in this sandbox no real auth flow is wired, so all callers are treated as Casual.
-        To preview the report end-to-end, seed an Independent-tier Account row and send its id in
-        the <code className="font-mono">x-user-id</code> request header.
-      </div>
     </div>
   )
 }
