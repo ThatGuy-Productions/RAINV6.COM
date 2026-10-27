@@ -269,8 +269,9 @@ export function MetadataForm() {
 
   // ---- Toolbar actions ----
   const handleGenerateIds = React.useCallback(() => {
-    update({ isrc: generateIsrc(), upc: generateUpc() })
-    notifyInfo('Identifiers generated', 'ISRC + UPC populated with valid check digits.')
+    const localSessionId = crypto.randomUUID()
+    update({ isrc: generateIsrc(localSessionId), upc: generateUpc(localSessionId) })
+    notifyWarning('Local test identifiers only', 'RAIN cannot register official ISRC/UPC codes. Replace these with identifiers issued to you by your rights/registration agencies before distribution.')
   }, [update])
 
   const handleSave = React.useCallback(() => {
@@ -621,13 +622,13 @@ export function MetadataForm() {
                   value={metadata.isrc}
                   onValueChange={(v) => update({ isrc: v })}
                   placeholder="US-XXX-YY-NNNNN"
-                  hint="ISO 3901 — CC-XXX-YY-NNNNN. Generate or paste existing."
+                  hint="Local test IDs are not registered and cannot be distributed. Enter your officially issued ISRC."
                   error={metadata.isrc && !validateIsrc(metadata.isrc) ? 'ISRC must match CC-XXX-YY-NNNNN.' : issueForField(issues, 'isrc')}
                   warning={!metadata.isrc ? 'Recommended — generate if you don\'t have one' : undefined}
                   suffix={
                     <button
                       type="button"
-                      onClick={() => update({ isrc: generateIsrc() })}
+                      onClick={() => update({ isrc: generateIsrc(crypto.randomUUID()) })}
                       className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
                     >
                       <Sparkles className="w-3 h-3 inline mr-1" />Gen
@@ -649,13 +650,13 @@ export function MetadataForm() {
                   value={metadata.upc}
                   onValueChange={(v) => update({ upc: v })}
                   placeholder="12-digit UPC"
-                  hint="EAN-13 minus the leading zero. Generate or paste existing."
+                  hint="RAIN cannot issue official UPCs. Enter your GS1-registered UPC/EAN before distribution."
                   error={metadata.upc && !validateUpc(metadata.upc) ? 'UPC must be 12 digits with valid check digit.' : issueForField(issues, 'upc')}
                   warning={!metadata.upc ? 'Recommended — generate if you don\'t have one' : undefined}
                   suffix={
                     <button
                       type="button"
-                      onClick={() => update({ upc: generateUpc() })}
+                      onClick={() => update({ upc: generateUpc(crypto.randomUUID()) })}
                       className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
                     >
                       <Sparkles className="w-3 h-3 inline mr-1" />Gen
