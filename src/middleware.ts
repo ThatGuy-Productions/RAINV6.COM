@@ -107,6 +107,8 @@ const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/auth/login': { max: 5, windowMs: 60_000 },       // 5 req/min
   '/api/rain/auth/register': { max: 3, windowMs: 60_000 },    // 3 req/min
   '/api/rain/auth/logout': { max: 10, windowMs: 60_000 },     // 10 req/min
+  '/api/rain/auth/forgot-password': { max: 3, windowMs: 60_000 }, // 3 req/min
+  '/api/rain/auth/reset-password': { max: 5, windowMs: 60_000 },  // 5 req/min
   '/api/rain/render': { max: 10, windowMs: 60_000 },          // 10 req/min
   '/api/rain/distribute': { max: 5, windowMs: 60_000 },       // 5 req/min
   '/api/rain/distribute/finalize': { max: 5, windowMs: 60_000 },
