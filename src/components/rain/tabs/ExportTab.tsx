@@ -156,7 +156,7 @@ export function ExportTab() {
     // The local encoder is not a security boundary, so this is a product UX
     // gate until checkout is provider-backed and verified.
     try {
-      const access = await fetch(`/api/rain/beta-access?anonId=${encodeURIComponent(getAnonId())}`, { cache: 'no-store' })
+      const access = await fetch(`/api/rain/beta-access?anonId=${encodeURIComponent(getAnonId() ?? '')}`, { cache: 'no-store' })
       if (!access.ok) throw new Error('Could not verify the beta export allowance.')
       const allowance = await access.json() as { unlockRequired?: boolean; exportsRemaining?: number }
       if (allowance.unlockRequired) {
