@@ -32,6 +32,7 @@ import { AiDisclosurePanel, type DisclosureState } from '@/components/rain/forms
 import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
 import { getAnonId } from '@/lib/rain/anon-id'
+import { useAuth } from '@/components/rain/admin/AuthContext'
 
 export function MasteringTab() {
   const fileName = useSessionStore((s) => s.fileName)
@@ -64,6 +65,10 @@ export function MasteringTab() {
   const setSimpleMode = useSessionStore((s) => s.setSimpleMode)
   const simpleIntensity = useSessionStore((s) => s.simpleIntensity)
   const setMacros = useSessionStore((s) => s.setMacros)
+  const setMetadata = useSessionStore((s) => s.setMetadata)
+  const { user } = useAuth()
+  const [savedProjects, setSavedProjects] = useState<Array<{ id: string; name: string; updatedAt: string; inputMetadata: string | null; renderSettings: string | null }>>([])
+  const [savedProjectsLoading, setSavedProjectsLoading] = useState(false)
   const setMacroSource = useSessionStore((s) => s.setMacroSource)
   const [showAssistant, setShowAssistant] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
@@ -89,6 +94,46 @@ export function MasteringTab() {
   // AUDIT2: track the AI-suggest visual-feedback timeout so we can clean it up
   // on unmount (otherwise a leak if the user navigates away within 1.5s of click).
   const aiSuggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Load durable project list when an account is signed in. Only project
+  // settings/metadata are restored; source audio remains local and must be
+  // selected again by the user.
+  useEffect(() => {
+    let cancelled = false
+    if (!user) {
+      setSavedProjects([])
+      return
+    }
+    setSavedProjectsLoading(true)
+    fetch('/api/rain/session', { cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) throw new Error('Saved projects unavailable')
+        return response.json() as Promise<{ projects?: Array<{ id: string; name: string; updatedAt: string; inputMetadata: string | null; renderSettings: string | null }> }>
+      })
+      .then(data => { if (!cancelled) setSavedProjects(data.projects ?? []) })
+      .catch(error => {
+        if (!cancelled) console.warn('[projects] list failed:', error)
+      })
+      .finally(() => { if (!cancelled) setSavedProjectsLoading(false) })
+    return () => { cancelled = true }
+  }, [user?.id])
+
+  const restoreProjectSettings = (project: (typeof savedProjects)[number]) => {
+    try {
+      const metadata = project.inputMetadata ? JSON.parse(project.inputMetadata) : null
+      const settings = project.renderSettings ? JSON.parse(project.renderSettings) : null
+      if (metadata && typeof metadata === 'object') setMetadata(metadata)
+      if (settings && typeof settings === 'object') {
+        if (settings.macros && typeof settings.macros === 'object') setMacros(settings.macros)
+        if (typeof settings.genre === 'string') setGenre(settings.genre)
+        if (typeof settings.platform === 'string') setPlatform(settings.platform)
+        if (typeof settings.simpleMode === 'boolean') setSimpleMode(settings.simpleMode)
+      }
+      notifySuccess('Project settings restored', 'Re-select the original audio file to render or export. Audio is not stored on the server.')
+    } catch {
+      notifyError('Could not restore project', 'The saved project settings are invalid or incomplete.')
+    }
+  }
 
   // Listen for 'rain:compare' custom event (keyboard shortcut 'C' integration)
   useEffect(() => {
@@ -457,6 +502,35 @@ export function MasteringTab() {
     <div className="grid lg:grid-cols-12 gap-4">
       {/* Left column — main workflow */}
       <div className="lg:col-span-8 space-y-4">
+        {user && (
+          <section className="rain-panel rounded-lg p-4" aria-label="Saved projects">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div>
+                <div className="text-sm font-semibold">Saved projects</div>
+                <div className="text-[10px] text-muted-foreground">Your settings and metadata, saved to your account</div>
+              </div>
+              <span className="text-[10px] font-mono text-muted-foreground">{savedProjects.length} saved</span>
+            </div>
+            {savedProjectsLoading ? (
+              <div className="text-xs text-muted-foreground">Loading saved projects…</div>
+            ) : savedProjects.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No saved projects yet. Complete a render while signed in to save its settings.</div>
+            ) : (
+              <div className="space-y-2">
+                {savedProjects.slice(0, 5).map(project => (
+                  <div key={project.id} className="flex items-center justify-between gap-3 rounded-md border border-rain-border/50 p-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">{project.name}</div>
+                      <div className="text-[10px] text-muted-foreground">Updated {new Date(project.updatedAt).toLocaleString()}</div>
+                    </div>
+                    <button type="button" onClick={() => restoreProjectSettings(project)} className="shrink-0 rounded border border-rain-border px-2 py-1 text-[10px] hover:border-rain-accent/60">Restore settings</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 text-[10px] text-muted-foreground/70">Source audio never leaves your browser and must be reselected when you return.</div>
+          </section>
+        )}
         <UploadZone />
 
         {fileName && (
