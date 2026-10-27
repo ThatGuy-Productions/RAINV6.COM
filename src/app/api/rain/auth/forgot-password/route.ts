@@ -79,10 +79,11 @@ export async function POST(req: NextRequest) {
       type: 'password_reset_requested' as any,
     })
 
-    // In BETA mode, return the raw token so the developer can test
+    // Expose the raw token only in non-production environments for local
+    // testing. Never return a password-reset secret from a production API.
     return NextResponse.json({
       ...UNAMBIGUOUS_RESPONSE,
-      token: rawToken, // BETA: remove before production
+      ...(process.env.NODE_ENV !== 'production' ? { token: rawToken } : {}),
     })
   } catch (err) {
     console.error('[auth] forgot-password error:', err)
