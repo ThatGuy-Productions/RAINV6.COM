@@ -108,6 +108,21 @@ export function StudioApp({ onExit }: StudioAppProps) {
     }
   }, [])
 
+  // Approximate active studio time only while this tab is visible. The server
+  // fixes each accepted heartbeat to 60 seconds and rate-limits it; this is a
+  // visible-tab estimate, not proof that a human was continuously working.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      fetch('/api/rain/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'studio_heartbeat', anonId: getAnonId() }),
+      }).catch(() => {})
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   // BETA-ANALYTICS: fire tab_viewed once per tab per browser session (not on
   // every re-render) — feeds getAverageFeatureDepth() in server-analytics.ts.
   // Best-effort: a failed beacon never affects the UI.
