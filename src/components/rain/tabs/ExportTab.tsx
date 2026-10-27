@@ -18,6 +18,7 @@ import { recordExportDetails } from '@/lib/rain/analytics'
 import type { ProvenanceCertificate } from '@/lib/rain/types'
 import { useAuth } from '@/components/rain/admin/AuthContext'
 import { getAnonId } from '@/lib/rain/anon-id'
+import { checkBetaExportAllowance, recordLocalBetaExport } from '@/lib/rain/beta-export-quota'
 
 // BETA-ANALYTICS: fires the server-side export_completed event (source of
 // truth for activation/retention — see server-analytics.ts). Separate from
@@ -154,15 +155,11 @@ export function ExportTab() {
   const handleExport = async () => {
     if (!hasProcessed) return
 
-    // BETA CONVERSION GATE: everyone gets the full product; the first two
-    // successful exports are free. Durable count comes from server events.
-    // The local encoder is not a security boundary, so this is a product UX
-    // gate until checkout is provider-backed and verified.
+    // All available product features stay open during beta. Only audio export
+    // count is limited after two successful exports.
     try {
-      const access = await fetch(`/api/rain/beta-access?anonId=${encodeURIComponent(getAnonId() ?? '')}`, { cache: 'no-store' })
-      if (!access.ok) throw new Error('Could not verify the beta export allowance.')
-      const allowance = await access.json() as { unlockRequired?: boolean; exportsRemaining?: number }
-      if (allowance.unlockRequired) {
+      const allowance = await checkBetaExportAllowance()
+      if (!allowance.allowed) {
         void fetch('/api/rain/beta-access/interest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -193,6 +190,7 @@ export function ExportTab() {
     const exportStart = Date.now()
     const fileState = useSessionStore.getState()
     const recordExport = async (format: string, blob: Blob, bitDepthOverride?: number) => {
+      recordLocalBetaExport()
       void recordExportDetails({
         timestamp: Date.now(),
         format,
