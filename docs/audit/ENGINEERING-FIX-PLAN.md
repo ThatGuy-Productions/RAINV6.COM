@@ -14,9 +14,9 @@ The order is deliberate: establish reproducible builds and a trustworthy databas
 
 ## Product rules to implement
 
-1. Beta users receive two free full-capability use credits.
-2. After those credits are consumed, gated use requires a verified R49.00 ZAR payment/unlock.
-3. Paid beta users retain full capability subject to a fair-use ceiling of 30 successful exports per defined monthly period.
+1. New beta users receive two free full-capability renders; each free render includes one exported file.
+2. After both free renders are completed, further full-capability use requires a verified R49.00 ZAR payment/unlock.
+3. Paid beta users receive 1,500 credits per monthly accounting period. Each completed render costs 25 credits (up to 60 render-equivalents), and a separate hard cap blocks exports after 30 successful files per month even if credits remain.
 4. At commercial launch, introduce the full tiered subscription model without changing account identity or losing eligible history.
 5. Prior session-only beta activity is unavailable. Historical accounts, hours, saved work, exports and AIE activity must be labelled unknown, not reconstructed or presented as measured zero.
 6. Audio stays in the browser unless a separately disclosed, explicit feature requires upload. Project persistence may save metadata/settings, but must clearly state when source audio must be reselected.
@@ -25,10 +25,10 @@ The order is deliberate: establish reproducible builds and a trustworthy databas
 
 ### Decisions to record before enabling paid traffic
 
-- Credit unit: the current code appears to count successful exports, while the product requirement says two full-capability use credits. Define whether one credit means one complete mastering run, one export, or one session. Do not silently conflate these.
+- Render accounting: each paid-beta render costs 25 credits, deducted only after a successful render; reserve credits during processing and release the reservation on failure/cancellation. Each of the two introductory free renders includes one export.
+- Export accounting: count successful, finalized output files separately from credits; failed/cancelled exports do not count and retries must be idempotent. Paid-beta exports are hard-capped at 30 per monthly period, regardless of remaining credits. Decide whether each format output counts separately (recommended: each separate output file counts).
+- Monthly boundary: reset the 1,500-credit allowance and 30-file allowance on the same documented monthly period; use UTC for storage and show the reset boundary in South African local time.
 - R49 duration/renewal: confirm once-off unlock versus recurring/monthly payment. Keep checkout disabled until explicit.
-- Monthly boundary: recommendation is calendar month in a documented timezone, with accounting in UTC and clear South African local-time display.
-- Export accounting: count only completed, valid output files; failed/cancelled exports do not count; retries are idempotent. Decide whether each format output counts separately.
 - Provider: select PayFast, Ozow or Stripe for the first live implementation; verify merchant access and sandbox credentials.
 
 ## Workstreams and dependency order
