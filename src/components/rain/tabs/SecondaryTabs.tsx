@@ -190,7 +190,7 @@ export function SpatialTab() {
     }
   }, [result, metadata, fileName, bedFormat])
 
-  // ----- Export Atmos package (full-source .zip: .spatial-bwf.wav + ADM XML sidecar
+  // ----- Export experimental ADM BWF spatial draft (.zip: .spatial-bwf.wav + XML sidecar
   //       + spatial.json + README.txt + MANIFEST.json with real SHA-256).
   const handleExportSpatialPackage = useCallback(async () => {
     if (!result) return
