@@ -124,6 +124,7 @@ export type DeliveryJobStatus =
   | 'packaged'       // ZIP built + persisted; awaiting submission.
   | 'submitting'     // HTTP POST in flight.
   | 'submitted'      // Provider accepted the package; final delivery not yet confirmed.
+  | 'pending_credentials' // Package is valid but provider endpoint/credentials are missing.
   | 'delivered'      // Provider explicitly confirmed final delivery/completion.
   | 'failed'         // Provider returned non-2xx OR network error OR credentials missing.
 
@@ -1355,7 +1356,7 @@ export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult>
     const requiresCredentials = body.requiresCredentials === true
     const errMsg = body.error ?? `Provider returned HTTP ${resp.status}`
     await updateDeliveryJob(job.id, {
-      status: 'failed',
+      status: requiresCredentials ? 'pending_credentials' : 'failed',
       error: errMsg,
       providerResponse: body.providerResponse,
     })
