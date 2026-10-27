@@ -200,6 +200,73 @@ export function MasteringTab() {
     }
   }, [fileName])
 
+  const persistProjectState = useCallback(async () => {
+    if (!userId || !fileName) return
+    const persistentSessionId = await ensureBackendSession()
+    if (!persistentSessionId) return
+    const state = useSessionStore.getState()
+    const response = await fetch('/api/rain/session', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: persistentSessionId,
+        name: state.fileName ?? 'Untitled',
+        inputMetadata: state.metadata,
+        renderSettings: {
+          macros: state.macros,
+          genre: state.genre,
+          platform: state.platform,
+          simpleMode: state.simpleMode,
+          simpleIntensity: state.simpleIntensity,
+          params: state.params,
+          rainScore: state.rainScore,
+          inputAnalysis: state.inputAnalysis,
+          outputAnalysis: state.outputAnalysis,
+          hasProcessed: state.hasProcessed,
+          savedAt: new Date().toISOString(),
+        },
+        status: state.hasProcessed ? 'rendered' : 'draft',
+      }),
+    })
+    if (!response.ok) console.warn('[projects] autosave failed:', response.status)
+  }, [userId, fileName, ensureBackendSession])
+
+  // Create an account-owned project as soon as a signed-in user loads a file,
+  // then debounce autosaves as metadata/macros/settings change. The audio
+  // buffer is intentionally excluded from the persisted payload.
+  useEffect(() => {
+    backendSessionId.current = null
+    backendSessionFileName.current = null
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId || !fileName) return
+    void persistProjectState().catch(error => console.warn('[projects] initial save failed:', error))
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = useSessionStore.subscribe((state, previous) => {
+      const changed =
+        state.fileName !== previous.fileName ||
+        state.metadata !== previous.metadata ||
+        state.macros !== previous.macros ||
+        state.genre !== previous.genre ||
+        state.platform !== previous.platform ||
+        state.simpleMode !== previous.simpleMode ||
+        state.simpleIntensity !== previous.simpleIntensity ||
+        state.params !== previous.params ||
+        state.rainScore !== previous.rainScore ||
+        state.hasProcessed !== previous.hasProcessed
+      if (!changed || !state.fileName) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        void persistProjectState().catch(error => console.warn('[projects] autosave failed:', error))
+      }, 900)
+    })
+    return () => {
+      unsubscribe()
+      if (timer) clearTimeout(timer)
+    }
+  }, [userId, fileName, persistProjectState])
+
   // BETA-ANALYTICS: fires a render_completed or export_completed ping.
   // Best-effort — failures are logged, never surfaced to the user.
   const reportRenderEvent = useCallback(
