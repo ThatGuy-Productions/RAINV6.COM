@@ -4,7 +4,7 @@
 
 **ThatGuy Productions · ARCOVEL Technologies International**
 
-> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/32-bit float. No uploads. No server-side processing. No account required.
+> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/32-bit float. No uploads for local mastering. Audio processing stays in the browser. An account is required for durable saved projects and payment-based entitlements; anonymous local use may be available subject to beta allowance.
 
 ---
 
@@ -63,7 +63,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 | AI/ML | RainNet v2 ONNX → 46 ProcessingParams per render |
 | Provenance | Ed25519 signatures · C2PA v2.2-style manifest (JSON) · Chain-of-custody |
 | Distribution | DDEX ERN 4.3.2 · LabelGrid API · DistroKid browser automation |
-| Payments | PayFast (ZA) · Ozow (ZA) · Stripe (INTL) — R0.00 during BETA |
+| Payments | Beta policy: 2 free full-capability use credits, then R49 unlock; paid beta fair-use limit of 30 successful exports/month. Checkout is not live until provider verification is implemented. |
 | Security | scrypt auth · timing-safe compares · SHA-256 hashing · httpOnly cookies |
 
 ---
@@ -118,7 +118,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 - **Payment isolation** — Per-session UUIDv7, one-time tokens, zero cross-contamination
 
 ### SA-First Design
-- **ZAR currency** — R0.00 during BETA, PayFast/Ozow ready for activation
+- **ZAR currency** — beta policy is two free full-capability use credits, then a R49 unlock; paid beta fair-use limit is 30 successful exports/month. Checkout remains disabled until a real provider and verified callbacks are implemented.
 - **SAMRO / CAPASSO / SAMPRA** — Performing rights organisations in metadata
 - **11 South African languages** — Afrikaans, Zulu, Xhosa, Tswana, Sotho, and more
 - **Amapiano / Gospel / Gqom** — Genre-specific DSP profiles with tape saturation, stereo width, and vocal emphasis
