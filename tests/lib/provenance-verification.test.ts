@@ -51,6 +51,21 @@ describe('RAIN-CERT independent signature verification', () => {
     expect(await verifyProvenance(cert)).toBe(false)
   })
 
+  it('rejects modified certificate metadata', async () => {
+    const fields: Array<'certId' | 'inputHash' | 'wasmHash' | 'signedAt' | 'algorithm'> = [
+      'certId', 'inputHash', 'wasmHash', 'signedAt', 'algorithm',
+    ]
+    for (const field of fields) {
+      const cert = await signedCertificate()
+      if (field === 'certId') cert.certId = 'RAIN-CERT-FORGED'
+      if (field === 'inputHash') cert.inputHash = '01'.repeat(32)
+      if (field === 'wasmHash') cert.wasmHash = 'forged-engine'
+      if (field === 'signedAt') cert.signedAt = '2020-01-01T00:00:00.000Z'
+      if (field === 'algorithm') cert.algorithm = 'RS256' as ProvenanceCertificate['algorithm']
+      expect(await verifyProvenance(cert)).toBe(false)
+    }
+  })
+
   it('rejects malformed signatures and public keys without throwing', async () => {
     const cert = await signedCertificate()
     cert.signature = 'not-hex'
