@@ -24,12 +24,12 @@ import { checkBetaExportAllowance, recordLocalBetaExport } from '@/lib/rain/beta
 // truth for activation/retention — see server-analytics.ts). Separate from
 // recordExportDetails above, which writes local IndexedDB telemetry for
 // this browser's own Analytics tab. Best-effort; never blocks the download.
-async function reportBetaExportEvent(format: string, outputFileHash: string | undefined): Promise<boolean> {
+async function reportBetaExportEvent(format: string, outputFileHash: string | undefined, metrics: { renderTimeMs?: number; audioDurationSec?: number }): Promise<boolean> {
   try {
     const response = await fetch('/api/rain/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId() }),
+      body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId(), ...metrics }),
     })
     const result = await response.json().catch(() => ({})) as { telemetryRecorded?: boolean }
     return response.ok && result.telemetryRecorded === true
@@ -201,7 +201,7 @@ export function ExportTab() {
         channels: fileState.fileChannels || 2,
         fileName: fileState.fileName ?? '(unknown)',
       }).catch((e) => console.warn('[analytics] recordExportDetails failed:', e))
-      const recorded = await reportBetaExportEvent(selectedFormat, rainCert?.outputHash)
+      const recorded = await reportBetaExportEvent(selectedFormat, rainCert?.outputHash, { renderTimeMs: Date.now() - exportStart, audioDurationSec: fileState.fileDuration || 0 })
       if (!recorded) notifyError('Export completed, usage record pending', 'Your download succeeded, but the beta usage counter could not be confirmed. Please keep this window open and retry before another export.')
     }
     try {
