@@ -1,108 +1,150 @@
+import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { withCsrf } from '@/lib/rain/csrf'
+import { validateIsrc, validateUpc } from '@/lib/rain/metadata-validation'
 
 export const runtime = 'nodejs'
-// Forwarding a multi-MB ZIP can take a while against the provider; allow up to
-// 60 s. The Edge runtime has a 30 s ceiling for some providers, so we stay on
-// Node.
 export const maxDuration = 60
+
+interface ReleaseManifestInput {
+  releaseId?: unknown
+  isrc?: unknown
+  upc?: unknown
+  title?: unknown
+  artist?: unknown
+  ddexVersion?: unknown
+  assets?: unknown
+}
 
 /**
  * POST /api/rain/distribute
  *
- * Real DSP aggregator delivery integration.
- *
- * Body (multipart/form-data):
- *   - `jobId`      — DeliveryJob id (string)
- *   - `manifest`   — JSON-stringified ReleaseManifest
- *   - `package`    — the ZIP Blob (application/zip) containing ern.xml +
- *                    manifest.json + checksums.txt + assets/ + artwork/
- *
- * Server-side credentials (read from process.env — never exposed to the
- * browser):
- *   - `LABELGRID_API_KEY` — bearer token for the LabelGrid REST API.
- *   - `LABELGRID_API_URL` — base URL (optional; defaults to
- *                            https://api.labelgrid.com/v1/deliveries).
- *
- * Behaviour:
- *   • If `LABELGRID_API_KEY` is missing → HTTP 409 with
- *     `{ ok: false, requiresCredentials: true, error: '...' }`. The package
- *     IS built and IS ready for delivery; the operator just hasn't supplied
- *     credentials yet. This is the honest path — the route never reports
- *     success unless the provider returned 2xx.
- *   • If present → forward the multipart body to LabelGrid with
- *     `Authorization: Bearer <key>`. 2xx → 200 with provider response body.
- *     Non-2xx → 502 with the provider's error message.
- *
- * Honesty note: LabelGrid's public API contract is not standardised in the
- * spec; the integration uses the conventional REST shape
- * (`POST /v1/deliveries` with a multipart upload + Bearer auth). If
- * LabelGrid changes their endpoint shape, set `LABELGRID_API_URL` to the new
- * endpoint and the integration will follow without code changes.
+ * Validates the submitted manifest and exact ZIP bytes before forwarding them
+ * to LabelGrid. Provider success is reported only after a real 2xx response.
+ * The client-supplied package SHA-256 binds the locally built package to the
+ * exact bytes submitted; it is not a substitute for the client's internal
+ * asset-hash validation or an independent provider receipt.
  */
 export const POST = withCsrf(async (req: NextRequest) => {
-  const apiKey = process.env.LABELGRID_API_KEY
-  const apiUrl = process.env.LABELGRID_API_URL || 'https://api.labelgrid.com/v1/deliveries'
-
-  if (!apiKey) {
-    return NextResponse.json(
-      {
-        ok: false,
-        requiresCredentials: true,
-        error:
-          'LABELGRID_API_KEY env var not set — package is built but not submitted. ' +
-          'Set the env var (and optionally LABELGRID_API_URL) in .env and restart the dev ' +
-          'server to enable real delivery.',
-      },
-      { status: 409 },
-    )
-  }
-
   let form: FormData
   try {
     form = await req.formData()
-  } catch (e) {
+  } catch (error) {
     return NextResponse.json(
-      {
-        ok: false,
-        requiresCredentials: false,
-        error: `Invalid multipart body: ${e instanceof Error ? e.message : 'parse error'}`,
-      },
+      { ok: false, requiresCredentials: false, error: `Invalid multipart body: ${error instanceof Error ? error.message : 'parse error'}` },
       { status: 400 },
     )
   }
 
   const jobId = form.get('jobId')
-  const manifest = form.get('manifest')
+  const manifestText = form.get('manifest')
   const pkg = form.get('package')
-  if (typeof jobId !== 'string' || typeof manifest !== 'string' || !(pkg instanceof Blob)) {
+  const packageSha256 = form.get('packageSha256')
+
+  if (
+    typeof jobId !== 'string' ||
+    !jobId.trim() ||
+    typeof manifestText !== 'string' ||
+    !(pkg instanceof Blob) ||
+    typeof packageSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(packageSha256)
+  ) {
     return NextResponse.json(
-      {
-        ok: false,
-        requiresCredentials: false,
-        error: 'Missing required multipart fields (jobId, manifest, package)',
-      },
+      { ok: false, requiresCredentials: false, error: 'Missing or invalid multipart fields (jobId, manifest, package, packageSha256)' },
       { status: 400 },
     )
   }
 
-  // Forward the multipart payload to the provider. We rebuild the FormData
-  // because the incoming Blob may have been consumed by the Next.js body
-  // parser; rebuilding also lets us normalise the filename.
+  let manifest: ReleaseManifestInput
+  try {
+    manifest = JSON.parse(manifestText) as ReleaseManifestInput
+  } catch {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Manifest is not valid JSON' },
+      { status: 400 },
+    )
+  }
+
+  if (
+    typeof manifest.releaseId !== 'string' ||
+    !manifest.releaseId.trim() ||
+    typeof manifest.title !== 'string' ||
+    !manifest.title.trim() ||
+    typeof manifest.artist !== 'string' ||
+    !manifest.artist.trim() ||
+    manifest.ddexVersion !== '4.3.2' ||
+    typeof manifest.isrc !== 'string' ||
+    !validateIsrc(manifest.isrc) ||
+    manifest.isrc.replace(/[-\\s]/g, '').toUpperCase().startsWith('US2XX') ||
+    typeof manifest.upc !== 'string' ||
+    !validateUpc(manifest.upc) ||
+    !Array.isArray(manifest.assets) ||
+    manifest.assets.length === 0
+  ) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Manifest validation failed: require real release metadata, valid registered identifiers, DDEX ERN 4.3.2, and asset records' },
+      { status: 422 },
+    )
+  }
+
+  const assetsValid = manifest.assets.every((asset) => {
+    if (!asset || typeof asset !== 'object') return false
+    const item = asset as Record<string, unknown>
+    return (
+      typeof item.filename === 'string' &&
+      item.filename.length > 0 &&
+      !item.filename.startsWith('/') &&
+      !item.filename.split('/').includes('..') &&
+      typeof item.mimeType === 'string' &&
+      typeof item.sizeBytes === 'number' &&
+      Number.isSafeInteger(item.sizeBytes) &&
+      item.sizeBytes >= 0 &&
+      typeof item.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/i.test(item.sha256)
+    )
+  })
+  if (!assetsValid) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Manifest contains invalid asset records or hashes' },
+      { status: 422 },
+    )
+  }
+
+  const packageBytes = Buffer.from(await pkg.arrayBuffer())
+  const actualPackageSha256 = createHash('sha256').update(packageBytes).digest('hex')
+  if (actualPackageSha256 !== packageSha256.toLowerCase()) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Package SHA-256 does not match the submitted ZIP bytes' },
+      { status: 422 },
+    )
+  }
+
+  const apiKey = process.env.LABELGRID_API_KEY
+  if (!apiKey) {
+    return NextResponse.json(
+      {
+        ok: false,
+        requiresCredentials: true,
+        error: 'LABELGRID_API_KEY is not configured. The package was validated but has not been submitted.',
+      },
+      { status: 409 },
+    )
+  }
+
+  const apiUrl = process.env.LABELGRID_API_URL || 'https://api.labelgrid.com/v1/deliveries'
   const outForm = new FormData()
   outForm.append('jobId', jobId)
-  outForm.append('manifest', manifest)
-  outForm.append('package', pkg, `${jobId}.zip`)
+  outForm.append('manifest', manifestText)
+  outForm.append('packageSha256', actualPackageSha256)
+  outForm.append('package', new Blob([packageBytes], { type: 'application/zip' }), `${jobId}.zip`)
 
   try {
     const providerResp = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { Authorization: `Bearer ${apiKey}` },
       body: outForm,
-      // 50 s ceiling — leaves headroom under the route's 60 s maxDuration.
       signal: AbortSignal.timeout(50_000),
+      cache: 'no-store',
     })
 
     const respText = await providerResp.text()
@@ -110,8 +152,10 @@ export const POST = withCsrf(async (req: NextRequest) => {
       return NextResponse.json({
         ok: true,
         providerResponse: respText.slice(0, 4096) || `HTTP ${providerResp.status}`,
+        packageSha256: actualPackageSha256,
       })
     }
+
     return NextResponse.json(
       {
         ok: false,
@@ -121,14 +165,10 @@ export const POST = withCsrf(async (req: NextRequest) => {
       },
       { status: 502 },
     )
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Network error during provider fetch'
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Network error during provider fetch'
     return NextResponse.json(
-      {
-        ok: false,
-        requiresCredentials: false,
-        error: `Delivery request failed: ${msg}`,
-      },
+      { ok: false, requiresCredentials: false, error: `Delivery request failed: ${message}` },
       { status: 502 },
     )
   }
