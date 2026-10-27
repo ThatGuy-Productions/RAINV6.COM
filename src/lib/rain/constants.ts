@@ -364,7 +364,7 @@ export const TABS: readonly TabDef[] = [
   { slug: 'stems', label: 'Stems', icon: 'Layers', group: 'master', description: '12-stem BS-RoFormer separation' },
   { slug: 'repair', label: 'Repair', icon: 'Wrench', group: 'repair', description: 'Neural spectral repair' },
   // Pitch tab removed — non-functional (CREPE/PSOLA not implemented). Will return in V7 with real DSP.
-  { slug: 'spatial', label: 'Spatial', icon: 'Box', group: 'master', description: 'Dolby Atmos binaural' },
+  { slug: 'spatial', label: 'Spatial', icon: 'Box', group: 'master', description: 'Experimental HRTF/ADM BWF spatial draft — not Dolby-certified' },
   { slug: 'qc', label: 'QC', icon: 'ShieldCheck', group: 'master', description: '18-point quality control' },
   { slug: 'reference', label: 'Reference', icon: 'Target', group: 'intelligence', description: 'A/B reference matching' },
   { slug: 'metadata', label: 'Metadata', icon: 'ClipboardList', group: 'distribution', description: 'Ditto-standard release metadata' },
