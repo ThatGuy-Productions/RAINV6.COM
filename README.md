@@ -196,7 +196,7 @@ rain-beta/
 
 ## 🔒 Security
 
-- **No PII collected** during BETA — no accounts, no passwords, no email, no IP logging
+- **No account required** to use the browser-based product. The operator reports that live-beta accounts do not persist beyond a session and reliable historical usage totals are unavailable; this repository's admin-auth/database code does not by itself prove the deployed retention configuration.
 - **Audio never leaves your device** — all processing via browser Web Audio API
 - **Ed25519 provenance signatures** — cryptographic proof of origin on every render
 - **scrypt authentication** (N=16384, r=8, p=1) — OWASP-correct key derivation
@@ -215,8 +215,10 @@ rain-beta/
 | Item | Status |
 |---|---|
 | Pricing | R0.00 across all tiers |
-| User accounts | Not required — anonymous sessions |
-| PII collection | None — POPIA compliant by design |
+| User accounts | Not required to use the product; operator reports live-beta accounts do not persist beyond a session |
+| Usage evidence | Historical usage hours, completed work, exports, and AIE activity are unavailable/unsubstantiated; do not treat missing records as zero use |
+| Telemetry code | This repo contains future event instrumentation and database models; durable production storage and end-to-end capture remain unverified |
+| Privacy | Audio processing stays local on the local processing path; review optional feedback/contact fields and deployment telemetry before making blanket no-PII claims |
 | Mastering | Full 16-stage pipeline, all features available |
 | Distribution | DDEX ZIP download + DistroKid browser automation |
 | AI disclosure | EU AI Act Article 50 compliant |
