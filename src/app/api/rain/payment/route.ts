@@ -403,7 +403,7 @@ async function handleConfirm(
     },
     { status: 200, headers: corsHeaders(origin) },
   )
-})
+}
 
 // ---------------------------------------------------------------------------
 // GET — Check payment status (idempotent read-only)
