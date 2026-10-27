@@ -35,8 +35,8 @@ jobs:
   prisma:
     runs-on: ubuntu-latest
     env:
-      # Prisma's SQLite datasource needs a URL even for schema-only CI validation.
-      DATABASE_URL: file:./ci.db
+      # Schema validation targets the canonical production database provider.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rainv6?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -64,6 +64,22 @@ jobs:
   test:
     runs-on: ubuntu-latest
     needs: [build]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: rainv6
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d rainv6"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/rainv6?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -71,4 +87,5 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bunx prisma generate
+      - run: bun run db:migrate:deploy
       - run: bun test
