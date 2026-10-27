@@ -17,7 +17,7 @@
  *   5. AI Disclosure           (5-row × 3-column grid)
  *   6. Release Notes / Comments
  *
- * Sticky top toolbar: live validation badge, "Generate ISRC + UPC",
+ * Sticky top toolbar: live validation badge, "Generate local test ISRC",
  * "Save to release" (toast), "Reset" (confirm dialog).
  *
  * Visual language: dark rain-panel/rain-surface-2, lime accent, font-mono
@@ -364,7 +364,7 @@ export function MetadataForm() {
             className="bg-rain-surface-2 border-rain-border hover:border-rain-accent/50 hover:text-rain-accent font-mono text-[11px]"
           >
             <Wand2 className="w-3.5 h-3.5" />
-            Generate ISRC + UPC
+            Generate local test ISRC
           </Button>
 
           <Button
@@ -644,7 +644,7 @@ export function MetadataForm() {
                   hint="ISO 15707 — for the underlying composition (not the recording)."
                   error={metadata.iswc && !validateIswc(metadata.iswc) ? 'ISWC must match T-XXX.XXX.XXX-X with valid check digit.' : undefined}
                 />
-                {/* UPC with Generate button */}
+                {/* UPC requires a registered GS1-issued identifier */}
                 <Field
                   label="UPC"
                   value={metadata.upc}
@@ -653,7 +653,6 @@ export function MetadataForm() {
                   hint="RAIN cannot issue official UPCs. Enter your GS1-registered UPC/EAN before distribution."
                   error={metadata.upc && !validateUpc(metadata.upc) ? 'UPC must be 12 digits with valid check digit.' : issueForField(issues, 'upc')}
                   warning={!metadata.upc ? 'Required for distribution — obtain a registered UPC/EAN from GS1' : undefined}
-
                 />
                 <Field
                   label="Recording Year"
