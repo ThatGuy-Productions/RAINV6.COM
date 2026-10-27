@@ -25,6 +25,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
+      - run: bunx prisma generate
       # Independent tsc --noEmit: BETA's next build ignores type errors
       # (next.config.ts: typescript.ignoreBuildErrors = true).
       # This step catches real type errors without changing the app's
