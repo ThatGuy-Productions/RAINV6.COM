@@ -143,7 +143,7 @@ export function ExportTab() {
   const isMp3 = selectedFormat === 'mp3_320'
   const isWav = selectedFormat === 'wav24' || selectedFormat === 'wav16'
 
-  // Toggles are only meaningful for WAV/MP3. Atmos package uses its own
+  // Toggles are only meaningful for WAV/MP3. The spatial package uses its own
   // embedding path (axml chunk + sidecar XML), so we show a notice rather
   // than fake-enabled toggles.
   const togglesRelevant = isWav || isMp3
@@ -174,7 +174,7 @@ export function ExportTab() {
     setVerification(null)
     // P2-ANALYTICS: measure real export wall-clock + actual blob size for
     // the Analytics tab's "Export Format Distribution" chart. Each branch
-    // (atmos / mp3 / wav) records its own format string + size + duration.
+    // (spatial package / mp3 / wav) records its own format string + size + duration.
     const exportStart = Date.now()
     const fileState = useSessionStore.getState()
     const recordExport = (format: string, blob: Blob, bitDepthOverride?: number) => {
