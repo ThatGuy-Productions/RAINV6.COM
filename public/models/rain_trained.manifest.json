@@ -1,7 +1,7 @@
 {
   "schemaVersion": "rain-v1",
   "modelName": "rain_trained.onnx",
-  "externalDataFile": "rain_base.onnx.data",
+  "externalDataFile": "rain_trained.onnx.data",
   "modelVersion": "2.0.0-trained",
   "engineVersion": "RAIN V6 RainNet mastering-parameter inference",
   "createdAt": "2026-07-31T00:00:00Z",
