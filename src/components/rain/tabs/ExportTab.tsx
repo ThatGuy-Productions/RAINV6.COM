@@ -30,7 +30,8 @@ async function reportBetaExportEvent(format: string, outputFileHash: string | un
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId() }),
     })
-    return response.ok
+    const result = await response.json().catch(() => ({})) as { telemetryRecorded?: boolean }
+    return response.ok && result.telemetryRecorded === true
   } catch (e) {
     console.warn('[analytics] reportBetaExportEvent failed:', e)
     return false
@@ -308,10 +309,10 @@ export function ExportTab() {
           `${baseName}.cert.json`,
         )
         triggerDownload(zipBlob, `${baseName}_RAIN.zip`)
-        recordExport(bitDepth === 24 ? 'WAV-24+SIDECAR' : 'WAV-16+SIDECAR', zipBlob, bitDepth)
+        await recordExport(bitDepth === 24 ? 'WAV-24+SIDECAR' : 'WAV-16+SIDECAR', zipBlob, bitDepth)
       } else {
         triggerDownload(blob, `${baseName}_RAIN.wav`)
-        recordExport(bitDepth === 24 ? 'WAV-24' : 'WAV-16', blob, bitDepth)
+        await recordExport(bitDepth === 24 ? 'WAV-24' : 'WAV-16', blob, bitDepth)
       }
       reportExportResult(result, 'WAV')
     } catch (e) {
