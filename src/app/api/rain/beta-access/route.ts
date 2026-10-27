@@ -16,8 +16,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'An anonymous beta ID or signed-in account is required.' }, { status: 400 })
   }
   try {
+    // Keep anonymous exports attached to the same browser identity when a
+    // visitor later signs in; account creation must not reset the two-export
+    // allowance on that browser.
     const where = user
-      ? { type: 'export_completed', userId: user.id }
+      ? { type: 'export_completed', OR: anonId ? [{ userId: user.id }, { anonId }] : [{ userId: user.id }] }
       : { type: 'export_completed', userId: null, anonId }
     const exportsUsed = await db.event.count({ where })
     return NextResponse.json({
