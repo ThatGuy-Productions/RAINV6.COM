@@ -3,36 +3,34 @@
 **Branch:** `codex/bring-code-to-readme-2026-10-27`  
 **Base:** `release-candidate`
 
-The README remains the target specification. This backlog is a work tracker, not a proposal to reduce advertised scope. Changes should be small, testable, and made on this branch. Do not merge or label the repository production-ready until release gates pass.
+The README remains the target specification. This is a work tracker, not a proposal to reduce the requirements. Do not merge or label the repository production-ready until the release gates pass.
 
-## P0 — Correct integrity and security gaps
+## P0 — Core product and integrity
 
-- [ ] **P0.1 RainNet model integrity (in progress):** implemented SHA-256 checks for ONNX graph and declared external weights; added valid, missing/placeholder, and tamper tests; populated base/trained manifests with Git LFS OIDs and enabled LFS checkout in the CI build job. Still must confirm CI fetches actual LFS objects, validate binary input/output signatures, and pass browser inference tests.
-- [ ] **P0.2 Private signing-key storage:** stop serializing the Ed25519 private key as JWK in IndexedDB. Store a non-extractable CryptoKey, retain/export the public key as required, and safely migrate or invalidate legacy key records. Test signing, verification, and tampering.
-- [ ] **P0.3 Shared rate limiting:** replace in-memory production enforcement in middleware and library paths with an atomic shared store (for example Upstash Redis REST when configured); establish an explicit safe production response when no shared store is configured. Trust forwarded client IP headers only behind a known proxy.
-- [ ] **P0.4 Authentication/admin review:** trace all auth and admin routes, verify server-side role checks and session expiry, and add tests for unauthenticated and non-admin access.
+- [ ] **P0.1 RainNet model runtime:** integrity checks and manifest hashes are implemented, but the actual ONNX LFS objects, input/output signatures, browser inference, and heuristic fallback still need validation against real binaries.
+- [ ] **P0.2 RAIN-CERT key lifecycle:** private keys are now stored as non-extractable CryptoKey objects and legacy JWK records are rejected. Add browser tests for key rotation, legacy migration, signing, independent verification, and tamper detection.
+- [ ] **P0.3 Rate-limit audit:** production middleware uses shared atomic Upstash Redis and fails closed. Audit every other API route and the library limiter for bypasses; test multi-instance and outage behaviour.
+- [ ] **P0.4 Authentication/admin:** test registration/login/logout, strict expiry, CSRF/cookie configuration, admin role checks, and all sensitive routes.
+- [ ] **P0.5 Real mastering acceptance:** add browser fixtures for supported input formats and active stages; verify output measurements, clipping, true peak, LUFS, stereo, encoder failures, and deterministic DSP tolerances.
+- [ ] **P0.6 Finish all advertised stages:** stages 7–9 are honestly gated until a licensed neural separation model is bundled. Source a suitable model, implement actual inference, test separation quality and reconstruction, then re-enable those stages.
+- [ ] **P0.7 Export acceptance:** expand independent WAV/MP3 decoding and metadata/provenance tests across longer, multichannel, and cross-browser cases.
 
-## P0 — Core mastering must be demonstrated
+## P1 — Distribution and spatial
 
-- [ ] **P0.5 Audio acceptance suite:** add repeatable fixtures and browser-level tests for supported file decoding, render completion, stage failures, valid WAV/MP3 export, independent decode, and output measurements.
-- [ ] **P0.6 DSP regression:** verify LUFS, true peak, clipping, stereo/channel handling, and determinism against independently calculated reference values and documented tolerances.
-- [ ] **P0.7 Stage wiring (in progress):** fixed source-channel initialization order, passed real spectral features/genre/platform into groove analysis, guarded optional overrides, and aligned multiband processing/presets to the canonical three-band ProcessingParams schema. Still must validate all 16 stages against real audio fixtures and prove failure propagation.
-- [ ] **P0.8 Stem-separation truth:** the current source describes a TypeScript DSP approximation, not a shipped BS-RoFormer neural model. Implement a real, licensed model path and quality tests before asserting BS-RoFormer separation.
-
-## P1 — Provenance and distribution
-
-- [ ] **P1.1 RAIN-CERT:** bind the signed certificate to a canonical manifest and actual exported asset hashes; test tampering and key identity.
-- [ ] **P1.2 DDEX:** validate ERN XML against the relevant schema/profile and validate required metadata and identifiers before packaging.
-- [ ] **P1.3 Provider delivery:** test credentials missing, non-2xx, timeout, retry, duplicate submission, and confirmed success. Do not transition to delivered on client assumptions.
-- [ ] **P1.4 Spatial package:** validate multichannel WAV/ADM BWF and ZIP contents with independent tooling; distinguish format generation from Dolby certification.
+- [ ] **P1.1 DDEX ERN 4.3.2 XSD/profile validation:** the XML builder now emits ERN 4.3.2 structure and Base64 SHA-256 resource hashes, and local structural tests pass. Official XSD/profile validation remains unimplemented. Vendor or integrate the official schema validator and test valid/invalid fixtures before live submission.
+- [ ] **P1.2 Official DDEX identifiers:** obtain and configure the actual registered sender and recipient DPIDs. Format-only validation is not proof that an ID is assigned.
+- [ ] **P1.3 LabelGrid contract:** verify the official API endpoint, auth, multipart contract, accepted/rejected response shapes, timeout/retry/idempotency behaviour, and authoritative delivery confirmation using real test credentials.
+- [ ] **P1.4 RAIN-CERT/package binding:** retain package signature, asset hash, ZIP integrity, embedded certificate, and tamper tests; add server-route tests for altered manifest/audio/XML/checksums.
+- [ ] **P1.5 Spatial output:** validate ADM BWF drafts with independent tools. The current output is not Dolby Atmos-certified; do not restore that product claim until a licensed/validated workflow exists.
+- [ ] **P1.6 Remove remaining false-success paths:** legacy finalize is disabled and payment no longer triggers delivery without a ZIP. Audit remaining payment/distribution/admin paths for optimistic status updates.
 
 ## P1 — Release engineering
 
-- [ ] **P1.5 CI:** ensure the actual build, type check, lint, unit tests, and browser smoke tests are run and their results recorded.
-- [ ] **P1.6 Configuration and deployment:** validate required environment variables, database startup/migrations, health/readiness, structured errors, and graceful dependency failures.
-- [ ] **P1.7 Product gating:** remove non-functional tabs/actions from the active product surface until the backing workflow passes its acceptance tests.
-- [ ] **P1.8 Release evidence pack:** attach commit SHA, test reports, feature truth matrix, known limitations, and deployment checklist.
+- [ ] **P1.7 CI release gate:** require lint, typecheck, build, tests, and browser smoke tests for `release-candidate` and release PRs; run the latest commit and attach results.
+- [ ] **P1.8 Environment validation:** fail startup safely for missing production config; require Redis, DPID, and provider endpoint configuration where applicable.
+- [ ] **P1.9 Operations:** database migrations, health/readiness, structured logs, monitoring, graceful dependency failures, and production storage.
+- [ ] **P1.10 Release evidence pack:** final commit SHA, clean CI, browser test report, DSP fixture report, XSD validation report, provider sandbox evidence, and known limitations.
 
 ## Completion definition
 
-A task is complete only when the code change is committed on this branch, tests cover the failure and success paths, available CI passes, and any external validation still outstanding is explicitly recorded. Do not claim full shippability while any P0 task remains open.
+A task is complete only when the code change is committed on this branch, tests cover success and failure paths, available CI passes, and external validation is recorded. Do not claim full shippability while any P0 task remains open.
