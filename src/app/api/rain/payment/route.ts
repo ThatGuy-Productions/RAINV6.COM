@@ -196,7 +196,7 @@ async function handleCreate(
   const result = await isolation.createSession(userSessionId, provider, amountCents, req)
 
   if ('error' in result) {
-    const status = result.retryAfter ? 429 : 400
+    const status = result.unavailable ? 503 : result.retryAfter ? 429 : 400
     return NextResponse.json(
       {
         ok: false,
