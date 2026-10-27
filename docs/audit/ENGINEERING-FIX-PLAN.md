@@ -207,3 +207,33 @@ For each gate preserve commit SHA, command/test name, environment, pass/fail, lo
 ## Current confidence and limitations
 
 This plan is grounded in the repository README, backlog/truth matrix, schema, beta-access/quota code, payment module, analytics, render endpoint, stems capability flags, provenance and rate-limit code. Source inspection cannot establish that the live database, payment provider, browser inference, deployed artifacts, backups or third-party delivery work. Those require runtime and external verification. Proceed in small increments with tests; where the available GitHub connection cannot execute code, changes must remain explicitly unverified rather than being described as tested.
+
+
+## W5a — Intelligent QC scoring, review and recovery (P0 for trustworthy finalization)
+
+RAIN QC is a diagnostic and decision-support layer, not a simplistic all-checks-must-pass switch. Individual checks may be configured as bypassable where appropriate, but a bypass must be explicit, recorded and visible; it must never silently convert a failure into a pass. The system must distinguish a technical hard stop from a non-critical warning and from a subjective issue that needs human listening/review.
+
+### Required user-facing result
+- Show a final **RAIN SCORE /100** based on measured QC results and documented weights, not a raw count of checks passed.
+- List each check with its actual result, threshold/target, measured value where available, severity, and status: passed, warning, failed, bypassed, not run, or unavailable.
+- Explain in plain language what failed, its likely audible/technical impact, and the recommended next action.
+- Provide a reasoned disposition: **Accept**, **Review recommended**, **Targeted rerun recommended**, **Full rerun recommended**, or **Blocked**.
+- Where supported, identify the affected pipeline stage and offer a targeted rerun from that stage rather than rerunning the entire pipeline. State when a targeted rerun is unavailable.
+- Preserve the original result and QC report when rerunning; compare before/after metrics and never overwrite evidence of the prior failure.
+
+### Decision rules
+- **Hard blockers:** corrupted/unreadable output, invalid or mismatched exact-output integrity evidence where required, invalid mandatory signature/certificate binding, invalid/non-finite samples, or other explicitly designated mandatory technical/security requirements. These cannot be bypassed into a successful/verified export merely because the score is high.
+- **Warnings / reviewable findings:** issues whose severity is tolerable under an explicit policy, or subjective findings that need human judgement. They may be accepted or bypassed only with a visible explanation and an audit record; the system must not imply that the finding passed.
+- **Rerun candidates:** deterministic, stage-local failures with a plausible corrective action (for example a measurable loudness/true-peak target miss when the relevant stage can safely correct it). Recommend the smallest valid rerun scope and explain the expected correction. Do not automatically loop indefinitely; cap attempts and detect repeated/no-improvement failures.
+- **Human review candidates:** subjective quality issues or ambiguous metrics for which an automatic rerun is not predictably corrective. Direct the user to listen to the relevant segment or compare a reference instead of blindly rerunning.
+- **Unavailable / not run:** never score as passed. Mark the check unknown and explain why; apply the configured policy for whether that uncertainty blocks export.
+- **Score versus disposition:** calculate and show the score independently of export eligibility. A high score cannot override a hard blocker; a low score alone does not prove a rerun is necessary.
+
+### Score design and evidence
+- Define the QC check catalogue, units, thresholds, severity, weights, bypass policy, and hard-block list in versioned code/configuration. Version the scoring rubric so historical scores remain interpretable after policy changes.
+- Normalize check scores carefully and aggregate only checks that actually ran with valid measurements; disclose coverage and missing checks. Do not silently inflate the score by omitting failed/unavailable checks.
+- Store per-run rubric version, per-check measurement/result, bypass reason and actor, stage/parameter changes, rerun ancestry, final score, disposition, and final export validation outcome.
+- Use fault-injection and fixture tests for pass, warning, hard-block, unavailable-check, bypass, targeted-rerun success, repeated failure, and no-improvement scenarios. Verify that a failed stage gate prevents dependent stages from running unless a documented recovery path explicitly restarts from that stage.
+- Never claim that QC is intelligent merely because it displays a score. The recommendation logic must be deterministic, testable and grounded in the failure type and available recovery actions; any ML-assisted recommendation must be separately identified and validated.
+
+Acceptance: for each supported QC check, tests demonstrate the correct status, score contribution, explanation, disposition and rerun scope. Tests prove that bypasses remain visible in the report and audit trail, hard blockers cannot be bypassed into a verified export, and a rerun does not erase prior evidence.
