@@ -1,88 +1,9 @@
 'use client'
 
 /**
- * RAIN V6 — Experimental DSP-derived stem approximation.
- * This is not a neural BS-RoFormer implementation and must not be marketed as one.
- *
- * Implements the canonical 4-pass cascade per the official tech spec
- * (Pasted Content_1783542076605.txt, "Source Separation: BS-RoFormer"):
- *
- *   Pass 1: BS-RoFormer      → (vocals, drums, bass, guitar, piano, other)
- *   Pass 2: MelBand RoFormer → (lead vocals, backing vocals)
- *   Pass 3: Spectral split   → (kick, snare, hats, percussion)
- *   Pass 4: Dereverb         → (room ambience + dry FX)
- *
- * Each pass is a REAL DSP operation — no PyTorch model is shipped in the
- * browser, but the architecture (band-split polyphase filterbank, RoPE
- * positional embedding, cross-band attention proxy, Wiener soft masking,
- * Mel-band grouping, RT60 envelope subtraction) faithfully mirrors the
- * PyTorch cascade using deterministic in-browser TypeScript DSP.
- *
- * ─── Pass 1 — BS-RoFormer (Band-Split Rotary Transformer) analogue ───
- *   1. Single 1024-pt Hann STFT, 75% overlap (256-sample hop).
- *   2. 32 log-spaced frequency bands (30 Hz – 20 kHz) via frequency-domain
- *      bin grouping — the polyphase equivalent of cascaded Linkwitz-Riley
- *      4th-order crossovers (each band's signal is the bins in its range).
- *   3. Rotary Positional Embedding (RoPE) applied to each band's complex
- *      STFT representation: each (real, imag) pair is rotated by
- *      θ(pos, i) = pos · 10000^(-2i/d) where pos = frame index, i = pair
- *      index, d = band size. RoPE-rotated values are used for the cross-
- *      band attention proxy; the ORIGINAL (unrotated) STFT is used for
- *      masking + ISTFT so phase reconstruction is preserved.
- *   4. Cross-band attention (deterministic proxy): 32×32 inter-band
- *      Pearson correlation matrix computed on RoPE-rotated band magnitude
- *      vectors. Masks are propagated between correlated bands (cheap
- *      deterministic stand-in for learned Q·K^T attention weights).
- *   5. Per-source Wiener soft masking (|mask|² / Σ|mask|²) per bin per
- *      frame. Initial per-source weights per the spec:
- *        Bass     — bands 0-3  (~30-120 Hz), strong energy
- *        Drums    — transient score (first-difference of band energy)
- *                    across all bands
- *        Vocals   — bands 8-15 (~300 Hz-3 kHz), stable pitch (high
- *                    autocorrelation) + center-channel bias
- *        Guitar   — bands 12-20 (~500 Hz-4 kHz), harmonic content
- *                    (spectral flatness inverse), excludes center
- *        Piano    — bands 6-18 (~200 Hz-3 kHz), percussive onsets +
- *                    harmonic sustain
- *        Other    — residual after subtracting the 5 above
- *   6. ISTFT (inverse FFT + weighted overlap-add, COLA factor 1.5 for
- *      periodic Hann @ 75% overlap, WOLA synthesis window).
- *
- * ─── Pass 2 — MelBand RoFormer analogue ───
- *   1. Take the vocals stem from Pass 1.
- *   2. Single 1024-pt STFT, group bins into 40 Mel-spaced bands (0-22 kHz
- *      per the Mel scale: more bands in low frequencies, fewer in high
- *      frequencies, matching human auditory perception).
- *   3. Per-Mel-band RoPE.
- *   4. Lead vocals: center-channel bias (mid >> side magnitude) + stable
- *      pitch contour (high autocorrelation over time) + presence in 1-4 kHz.
- *   5. Backing vocals: side-channel content in vocal range + pitch that
- *      differs from lead + lower energy.
- *   6. Wiener soft masks → lead_vocals + backing_vocals.
- *
- * ─── Pass 3 — Spectral band-split (drum decomposition) ───
- *   1. Take the drums stem from Pass 1.
- *   2. Kick:   LP 100 Hz (4th-order Butterworth, 2 cascaded biquads with
- *              Q=0.5412 and Q=1.3066) + transient detection on low-band
- *              envelope (high first-difference).
- *   3. Snare:  BP 150-400 Hz (HP+LP cascade) + transient detection
- *              (energy bursts at 200 Hz and 2-5 kHz noise).
- *   4. Hats:   HP 6 kHz (4th-order Butterworth) + transient detection
- *              (rapid decay).
- *   5. Percussion: residual (toms, claps, tambourines, congas, etc.).
- *
- * ─── Pass 4 — Dereverb (RT60 envelope subtraction) ───
- *   1. Take the residual "other" stem from Pass 1.
- *   2. 50 ms block energy envelope.
- *   3. RT60 estimate via reverse-integrated energy decay + linear fit
- *      in dB domain.
- *   4. Time-varying gain = max(floor, (env/peakEnv)^k) with 20 ms
- *      one-pole smoothing. k controls aggressiveness.
- *   5. Ambience = other × (1 - gain) — the extracted reverb tail.
- *   6. Dry "other" = other × gain — what remains after reverb removal.
- *
- * Determinism: same input → same output, bit-for-bit. No Math.random,
- * no Date.now in the DSP path. Only setTimeout(r, 0) for yield-to-UI.
+ * Legacy experimental DSP-derived stem approximation.
+ * This is not a neural BS-RoFormer implementation and is disabled in the
+ * active product UI. Do not label its output as neural source separation.
  */
 
 import type { StemKey } from './types'
@@ -110,7 +31,7 @@ export interface StemResult {
 }
 
 // ---------------------------------------------------------------------------
-// Constants — BS-RoFormer architecture per tech spec
+// Constants — DSP approximation architecture per tech spec
 // ---------------------------------------------------------------------------
 
 const FFT_SIZE = 1024 // Per-band STFT size (spec)
@@ -120,7 +41,7 @@ const NUM_BINS = FFT_SIZE / 2 + 1 // 513 positive-frequency bins
 // Hann synthesis window). Sum of overlapping Hann² products normalized to 1.5.
 const COLA_FACTOR = 1.5
 const MAX_DURATION_S = 60 // Memory safety cap per spec
-const NUM_BANDS = 32 // BS-RoFormer band count per spec
+const NUM_BANDS = 32 // DSP approximation band count per spec
 const NUM_MEL_BANDS = 40 // MelBand RoFormer Mel band count per spec
 const FREQ_MIN_HZ = 30 // Band-split lower bound per spec
 const FREQ_MAX_HZ = 20000 // Band-split upper bound per spec
@@ -180,7 +101,7 @@ function checkAbort(signal?: AbortSignal): void {
 }
 
 // ---------------------------------------------------------------------------
-// Band-split helpers — log-spaced crossover frequencies for BS-RoFormer
+// Band-split helpers — log-spaced crossover frequencies for DSP approximation
 // and Mel-spaced edges for MelBand RoFormer.
 // ---------------------------------------------------------------------------
 
@@ -989,7 +910,7 @@ function processChunk(
 }
 
 // ---------------------------------------------------------------------------
-// Pass 1 — BS-RoFormer: produces vocals_full, drums, bass, guitar, piano,
+// Pass 1 — DSP approximation: produces vocals_full, drums, bass, guitar, piano,
 // other (all stereo). vocals_full will be split in Pass 2; other will be
 // processed by Pass 4.
 // ---------------------------------------------------------------------------
@@ -1019,7 +940,7 @@ async function pass1_BSRoformer(
   const binToBand = computeBinToBand(bandRanges)
   const totalFrames = Math.floor((N - FFT_SIZE) / HOP_SIZE) + 1
   if (totalFrames < MIN_FRAMES) {
-    throw new Error(`Input too short for BS-RoFormer separation (${N} samples, ${totalFrames} frames)`)
+    throw new Error(`Input too short for DSP approximation separation (${N} samples, ${totalFrames} frames)`)
   }
 
   const output: ChunkOutput = {
@@ -1051,7 +972,7 @@ async function pass1_BSRoformer(
     const extStartSample = extStartFrame * HOP_SIZE
 
     const pct = 5 + Math.floor((chunkIdx / totalChunks) * 20) // 5%..25%
-    onProgress?.('Pass 1/4: BS-RoFormer (band-split + cross-band attention)', pct)
+    onProgress?.('Pass 1/4: DSP approximation (band-split + cross-band attention)', pct)
 
     processChunk(
       inL, inR,
@@ -1523,12 +1444,12 @@ async function pass4_Dereverb(
 }
 
 // ---------------------------------------------------------------------------
-// Main entry — runStemSeparation orchestrates the 4-pass BS-RoFormer
+// Main entry — runStemSeparation orchestrates the 4-pass DSP approximation
 // cascade per the tech spec.
 // ---------------------------------------------------------------------------
 
 /**
- * Run the 4-pass BS-RoFormer source separation cascade on the input audio.
+ * Run the 4-pass DSP approximation source separation cascade on the input audio.
  *
  * @param input      Input channels ([L, R] or [mono]). Mono is duplicated.
  * @param sampleRate Sample rate (Hz).
@@ -1564,11 +1485,11 @@ export async function runStemSeparation(
   const N = inL.length
 
   if (N < FFT_SIZE) {
-    throw new Error(`Input too short for BS-RoFormer separation (${N} samples < ${FFT_SIZE})`)
+    throw new Error(`Input too short for DSP approximation separation (${N} samples < ${FFT_SIZE})`)
   }
 
-  // ─── Pass 1: BS-RoFormer ───
-  onProgress?.('Pass 1/4: BS-RoFormer (band-split + cross-band attention)', 5)
+  // ─── Pass 1: DSP approximation ───
+  onProgress?.('Pass 1/4: DSP approximation (band-split + cross-band attention)', 5)
   checkAbort(signal)
   const pass1 = await pass1_BSRoformer(inL, inR, sampleRate, onProgress, signal)
   await yieldToUI()
@@ -1642,7 +1563,7 @@ export async function runStemSeparation(
   // Record truncation in console (deterministic — no Date.now in DSP path)
   if (truncated) {
     console.warn(
-      `[BS-RoFormer] Input exceeded ${MAX_DURATION_S}s cap; processed first ${MAX_DURATION_S}s ` +
+      `[DSP approximation] Input exceeded ${MAX_DURATION_S}s cap; processed first ${MAX_DURATION_S}s ` +
       `(${maxSamples} samples of ${originalN}). Stem length = ${N} samples.`,
     )
   }
