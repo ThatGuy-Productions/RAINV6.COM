@@ -46,8 +46,8 @@ const FEATURES: Feature[] = [
   },
   {
     icon: <Box className="w-5 h-5" />,
-    title: 'Dolby Atmos Binaural',
-    description: '7.1.4 bed with HOA path, SADIE II HRTFs (KU100). UPOLS convolution at 128-sample quantum. 20-30 simultaneous objects within budget.',
+    title: 'Experimental Spatial Rendering',
+    description: 'HRTF binaural rendering and ADM BWF spatial drafts. Not Dolby Atmos-certified; validate in a compatible renderer before commercial distribution.',
     color: '#06B6D4',
   },
   {
