@@ -11,7 +11,7 @@ import {
   type ExportVerificationResult,
 } from '@/lib/rain/audio-engine'
 import { useSessionStore } from '@/lib/rain/store'
-import { exportAtmosPackage } from '@/lib/rain/spatial'
+import { exportSpatialPackage } from '@/lib/rain/spatial'
 import type { SpatialConfig } from '@/lib/rain/spatial'
 import { notifySuccess, notifyError } from '@/lib/rain/notifications'
 import { recordExportDetails } from '@/lib/rain/analytics'
@@ -54,7 +54,7 @@ const FORMATS: ExportFormat[] = [
   { id: 'wav24', label: 'WAV 24-bit', ext: 'wav', desc: 'Authoritative master · 48 kHz · 24-bit PCM · TPDF dither · LIST/INFO provenance', size: '~10 MB/min', bitDepth: 24, icon: <FileAudio className="w-5 h-5" /> },
   { id: 'wav16', label: 'WAV 16-bit', ext: 'wav', desc: '16-bit / 48 kHz CD-compatible (TPDF dither) · LIST/INFO provenance', size: '~7 MB/min', bitDepth: 16, icon: <FileAudio className="w-5 h-5" /> },
   { id: 'mp3_320', label: 'MP3 320 kbps', ext: 'mp3', desc: 'Streaming distribution · 48 kHz · 320 kbps CBR · TPDF dither · ID3v2 provenance', size: '~2.4 MB/min', bitDepth: 16, icon: <FileAudio className="w-5 h-5" /> },
-  { id: 'atmos', label: 'Atmos Package (.zip)', ext: 'zip', desc: 'Dolby Atmos 7.1.4 bed + 16 dynamic objects (28ch). Full-source ZIP: .atmos.wav + audioDefinitionModelBwf.xml sidecar + spatial.json + README.txt + MANIFEST.json (SHA-256). Up to 6 min.', size: '~50 MB/min', bitDepth: 24, icon: <Box className="w-5 h-5" /> },
+  { id: 'atmos', label: 'ADM BWF Spatial Draft (.zip)', ext: 'zip', desc: 'Experimental multichannel ADM BWF spatial draft + ADM XML sidecar + spatial.json + README + SHA-256 manifest. Not Dolby Atmos-certified; validate in a compatible renderer before commercial use. Up to 6 min.', size: '~50 MB/min', bitDepth: 24, icon: <Box className="w-5 h-5" /> },
 ]
 
 /** Extract the Chromaprint hash from a RAIN-CERT manifest (if present). */
@@ -139,7 +139,7 @@ export function ExportTab() {
     fingerprint,
   })
 
-  const isAtmos = selectedFormat === 'atmos'
+  const isSpatialPackage = selectedFormat === 'atmos'
   const isMp3 = selectedFormat === 'mp3_320'
   const isWav = selectedFormat === 'wav24' || selectedFormat === 'wav16'
 
@@ -194,20 +194,20 @@ export function ExportTab() {
       const format = FORMATS.find((f) => f.id === selectedFormat)!
       const baseName = (metadata.title || fileName || 'rain-master').replace(/\s+/g, '_')
 
-      // --- Atmos path: separate code path, no ID3/LIST toggles apply ---
+      // --- Spatial package path: separate code path, no ID3/LIST toggles apply ---
       if (format.id === 'atmos') {
         // EXPORT CAP: the spatial pipeline processes the full track (no silent
         // 60s preview truncation). 360s (6 min) is the memory-safe ceiling for
         // a 7.1.4 bed (12ch × 360s × 48k × 4B ≈ 830 MB persistent). Tracks
         // beyond this get an EXPLICIT error — never a silently truncated file.
-        const ATMOS_EXPORT_MAX_SEC = 360
+        const SPATIAL_EXPORT_MAX_SEC = 360
         const sourceBuffer = audioEngine.getProcessedBuffer() ?? null
         const sourceDuration = sourceBuffer?.duration ?? 0
-        if (sourceDuration > ATMOS_EXPORT_MAX_SEC) {
+        if (sourceDuration > SPATIAL_EXPORT_MAX_SEC) {
           const mm = Math.floor(sourceDuration / 60)
           const ss = Math.floor(sourceDuration % 60)
           throw new Error(
-            `Atmos export supports tracks up to ${Math.floor(ATMOS_EXPORT_MAX_SEC / 60)} minutes. ` +
+            `Spatial package export supports tracks up to ${Math.floor(SPATIAL_EXPORT_MAX_SEC / 60)} minutes. ` +
             `Your track is ${mm}:${ss.toString().padStart(2, '0')}. ` +
             `Please trim the track or export as WAV / MP3 instead.`,
           )
@@ -222,21 +222,21 @@ export function ExportTab() {
         }
         // Pass the export cap so the full track (up to 6 min) is processed.
         // If the result is somehow still truncated (defensive), refuse to ship.
-        const result = await audioEngine.processSpatial(config, undefined, undefined, ATMOS_EXPORT_MAX_SEC)
+        const result = await audioEngine.processSpatial(config, undefined, undefined, SPATIAL_EXPORT_MAX_SEC)
         if (result.truncated) {
           throw new Error(
-            `Atmos export was truncated to ${result.processedSeconds.toFixed(0)}s ` +
+            `Spatial package export was truncated to ${result.processedSeconds.toFixed(0)}s ` +
             `(track is ${result.inputSeconds.toFixed(0)}s). Refusing to export a partial file. ` +
-            `Please trim the track to ≤ ${ATMOS_EXPORT_MAX_SEC}s.`,
+            `Please trim the track to ≤ ${SPATIAL_EXPORT_MAX_SEC}s.`,
           )
         }
-        // Full-source package: .atmos.wav + ADM XML sidecar + spatial.json +
+        // Full-source package: .spatial-bwf.wav + ADM XML sidecar + spatial.json +
         // README.txt + MANIFEST.json (real SHA-256 over every file).
-        const blob = await exportAtmosPackage(result, { title: metadata.title, artist: metadata.artist }, config)
-        triggerDownload(blob, `${baseName}_Atmos_7.1.4.zip`)
-        recordExport('ATMOS-7.1.4', blob, 24)
+        const blob = await exportSpatialPackage(result, { title: metadata.title, artist: metadata.artist }, config)
+        triggerDownload(blob, `${baseName}_Spatial_ADM_Draft.zip`)
+        recordExport('ADM-BWF-SPATIAL-DRAFT', blob, 24)
         notifySuccess(
-          'Atmos full-source package complete',
+          'ADM BWF spatial draft package created',
           `${result.processedSeconds.toFixed(1)}s · 5 files · ${(blob.size / 1024 / 1024).toFixed(1)} MB`,
         )
         setIsExporting(false)
@@ -392,7 +392,7 @@ export function ExportTab() {
           <div className="text-sm font-semibold mb-3">What gets embedded in the audio bytes</div>
           {!togglesRelevant && (
             <div className="text-[10px] text-muted-foreground/80 italic mb-2">
-              Toggles below apply to WAV/MP3 only. The Atmos path embeds metadata
+              Toggles below apply to WAV/MP3 only. The Spatial package path embeds metadata
               via the ADM axml chunk and the audioDefinitionModelBwf.xml sidecar —
               it does not use these ID3/RIFF INFO toggles.
             </div>
