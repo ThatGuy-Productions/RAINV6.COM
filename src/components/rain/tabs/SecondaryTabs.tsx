@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Box, Download, Headphones, Keyboard, Layers, Loader2, Moon, Music2, Pause, Play, Shield, Sun, Target, Upload, UserCircle, X, Zap } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
+import { getAnonId } from '@/lib/rain/anon-id'
 import { RAIN_BRAND, MACROS } from '@/lib/rain/constants'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
@@ -1015,6 +1016,10 @@ export function AIETab() {
       const next = await updateVoiceVectorFromBuffer(buf)
       setVoice(next)
       setExportStatus(null)
+      void fetch('/api/rain/aie-activity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: 'aie_vector_computed', anonId: getAnonId(), sessions: next.sessions, stability: next.stability }),
+      }).catch(() => {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Voice vector computation failed')
     } finally {
@@ -1061,6 +1066,10 @@ export function AIETab() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       setExportStatus(`Exported · sig ${payload.signature.slice(0, 12)}…`)
+      void fetch('/api/rain/aie-activity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: 'aie_vector_exported', anonId: getAnonId(), sessions: voice.sessions, stability: voice.stability }),
+      }).catch(() => {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed')
       setExportStatus(null)
