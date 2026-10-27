@@ -56,8 +56,8 @@ export function MasteringTab() {
   const setProcessingStageProgress = useSessionStore((s) => s.setProcessingStageProgress)
   const triggerCompletionCelebration = useSessionStore((s) => s.triggerCompletionCelebration)
   const setRenderAbortController = useSessionStore((s) => s.setRenderAbortController)
-  // P3-BSROFORMER: clear stale stems at render start, populate fresh ones
-  // from Stage 7 of the render pipeline via the onStemsReady callback.
+  // Clear any legacy stem results at render start. Neural source separation
+  // is disabled until a verified model artifact is bundled.
   const setStemResults = useSessionStore((s) => s.setStemResults)
   // P2-4 Simple Mode state + setter wiring.
   const simpleMode = useSessionStore((s) => s.simpleMode)
@@ -219,12 +219,7 @@ export function MasteringTab() {
         // Reset the within-stage indicator — real stage boundary reached.
         stageStartRef.current = Date.now()
         setProcessingStageProgress(0)
-      }, abortController.signal, (stems) => {
-        // P3-BSROFORMER: Stage 7 emitted BS-RoFormer 4-pass stem results.
-        // Populate the session store so the Stems tab shows them immediately
-        // (no separate "Run Separation" click required).
-        setStemResults(stems)
-      })
+      }, abortController.signal, simpleMode
 
       // Clear the progress interval
       if (progressIntervalRef.current) {
