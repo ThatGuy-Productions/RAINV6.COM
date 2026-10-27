@@ -39,6 +39,11 @@ type RateLimitDecision =
   | { allowed: false; remaining: 0; resetAt: number }
   | { allowed: false; unavailable: true; remaining: 0; resetAt: number }
 
+async function hashRateLimitKey(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 async function checkRateLimit(
   key: string,
   maxRequests: number,
@@ -58,7 +63,9 @@ async function checkRateLimit(
 
   const now = Date.now()
   const windowStart = Math.floor(now / windowMs)
-  const redisKey = `rain:ratelimit:${key}:${windowStart}`
+  // Hash IP-bearing limiter keys before sending them to Redis so the shared
+  // store does not retain raw client IP addresses in key names.
+  const redisKey = `rain:ratelimit:${await hashRateLimitKey(key)}:${windowStart}`
   const script = [
     'local count = redis.call("INCR", KEYS[1])',
     'if count == 1 then redis.call("PEXPIRE", KEYS[1], ARGV[1]) end',
