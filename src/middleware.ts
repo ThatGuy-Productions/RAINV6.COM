@@ -204,7 +204,7 @@ function validateCsrf(request: NextRequest): boolean {
   if (origin && host) {
     try {
       const parsedOrigin = new URL(origin)
-      if (parsedOrigin.origin === `${request.nextUrl.protocol}//${host}`) return true
+      if (parsedOrigin.host === host) return true
     } catch {
       return false
     }
