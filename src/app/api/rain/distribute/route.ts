@@ -78,7 +78,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
     typeof manifest.genre !== 'string' ||
     !manifest.genre.trim() ||
     typeof manifest.releaseDate !== 'string' ||
-    !/^\\d{4}-\\d{2}-\\d{2}$/.test(manifest.releaseDate) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(manifest.releaseDate) ||
     manifest.ddexVersion !== '4.3.2' ||
     typeof manifest.isrc !== 'string' ||
     !validateIsrc(manifest.isrc) ||
@@ -167,7 +167,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
   const checksumLines = new Map<string, string>()
   for (const line of new TextDecoder().decode(checksumsBytes).split(/\\r?\\n/)) {
     if (!line.trim()) continue
-    const match = /^([a-f0-9]{64})\\s{2}(.+)$/.exec(line)
+    const match = /^([a-f0-9]{64})\s{2}(.+)$/.exec(line)
     if (!match || checksumLines.has(match[2])) {
       return NextResponse.json(
         { ok: false, requiresCredentials: false, error: 'checksums.txt contains malformed or duplicate entries' },
