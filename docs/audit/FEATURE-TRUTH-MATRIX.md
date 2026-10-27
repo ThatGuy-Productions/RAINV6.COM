@@ -2,46 +2,44 @@
 
 **Audit branch:** `codex/bring-code-to-readme-2026-10-27`  
 **Baseline:** `release-candidate`  
-**Purpose:** Track implementation against the existing README and release claims. This document does not replace or lower the README requirements.
+**Rule:** The README remains the target specification. This matrix records code evidence and blockers; it does not lower the README requirements.
 
 ## Status definitions
 
-- **Verified in source:** Directly confirmed by source inspection; runtime behaviour may still require tests.
-- **Known gap:** Source contains an explicit placeholder, bypass, or implementation that does not satisfy the advertised claim.
-- **Not yet verified:** Requires further source tracing, executable tests, browser testing, or external-provider validation.
+- **Implemented; tests pass:** A repeatable automated test exercises the claimed behaviour.
+- **Implemented; external validation pending:** Source and local tests pass, but a real browser, deployment, model artifact, or provider contract remains unverified.
+- **Gated / unavailable:** The product UI no longer presents a stub or approximation as the advertised feature.
+- **Known gap:** The implementation does not yet meet the README claim.
 
-## Findings confirmed during initial source inspection
+## Current evidence
 
-| README / product claim | Source evidence | Current status | Required code work |
+| README / product claim | Source evidence | Current status | Remaining work |
 |---|---|---|---|
-| RainNet v2 ONNX inference with graceful fallback | `src/lib/rain/rainnet-inference.ts` now hashes the fetched ONNX graph and declared external-data file with SHA-256 and verifies each against its manifest before ONNX Runtime loads the model. Base and trained manifests now carry hashes matching the Git LFS pointer OIDs; CI build checkout enables Git LFS. | **Implementation updated; runtime verification pending** | Confirm CI obtains actual LFS objects (not pointer text), verify ONNX input/output signatures against the binary, and test browser inference plus heuristic fallback. |
-| Model integrity manifest | `public/models/rain_base.manifest.json` and `public/models/rain_trained.manifest.json` now bind model names, expected inference tensors, 46-value parameter output, and graph/external-data SHA-256 values to Git LFS OIDs. The base manifest no longer mislabels RainNet as BS-RoFormer. | **Metadata corrected; binary/runtime validation pending** | Confirm LFS object availability and byte-for-byte hashes in CI/build; inspect actual ONNX signatures; retain a release blocker until browser inference passes. |
-| BS-RoFormer 4-pass cascade producing 12 stems | `src/lib/rain/stems.ts` describes a TypeScript DSP approximation and explicitly says no PyTorch model is shipped in the browser; the README calls the feature BS-RoFormer. | **Known gap: claim/implementation mismatch** | Implement and validate a legally distributable real separation model, or ensure the advertised BS-RoFormer claim is backed by the actual shipped model. A heuristic DSP decomposition must not be labelled as inference from BS-RoFormer. |
-| Ed25519 RAIN-CERT signing | `src/lib/rain/provenance.ts` uses WebCrypto Ed25519, but persists the private key as exported JWK fields in IndexedDB. | **Security gap** | Persist a non-extractable private CryptoKey where supported, retain a verifiable public key, handle legacy records safely, and add tamper/verification tests. |
-| Multi-instance production rate limiting | `src/middleware.ts` and `src/lib/rain/rate-limit.ts` both use in-memory Maps. | **Known gap** | Replace production enforcement with a shared atomic store; define safe behaviour when the store is unavailable; avoid trusting client-controlled forwarded-IP headers unless the deployment proxy is trusted. |
-| Distribution provider delivery | `src/lib/rain/distribution.ts` describes real provider submission; `src/app/api/rain/distribute/route.ts` checks LabelGrid credentials. | **Not yet verified end-to-end** | Validate package generation and schema, exercise missing-credential and provider-failure paths, and verify that “delivered” is based on an authoritative provider response. |
-| 16-stage mastering and export | `src/lib/rain/audio-engine.ts` contains a pipeline orchestrator and real WAV/MP3 encoder code paths; the UI includes post-export verification functions. | **Not yet verified end-to-end** | Run real-file browser tests for every stage, WAV/MP3 decoding, output metrics, unsupported inputs, and explicit failure states. Source presence alone is insufficient. |
-| Dolby Atmos / spatial export | `src/lib/rain/spatial.ts` contains spatial DSP, multichannel BWF/ADM XML and ZIP-export code paths. | **Not yet verified against interoperability requirements** | Validate channel layout, ADM/BWF structure and package contents using independent parsers and target-compatible tools. Do not equate a multichannel WAV or ADM XML file with Dolby certification. |
+| RainNet v2 ONNX inference with graceful fallback | `src/lib/rain/rainnet-inference.ts` hashes the ONNX graph and declared external-data file and verifies both against the manifest before ONNX Runtime loads them. Base/trained manifests include graph and external-data SHA-256 values matching Git LFS OIDs; CI checkout enables LFS. Tests reject placeholder, missing, and tampered hashes. | **Integrity checks implemented; actual browser inference pending** | Verify that CI and production deployment receive real LFS objects rather than pointer text; inspect actual ONNX input/output signatures; test browser inference and heuristic fallback against the real binaries. |
+| RAIN-CERT Ed25519 signing and exported provenance | `src/lib/rain/provenance.ts` stores CryptoKey objects rather than exported private JWKs, rejects legacy extractable private keys, and signs the canonical output hash plus manifest. WAV/MP3 export tests verify certificate ID and signature bytes are embedded when enabled. | **Implementation and automated tests present; independent verification pending** | Test key rotation/legacy migration in a browser; independently verify signatures and tamper detection; confirm every UI export path passes the intended certificate and metadata. |
+| Production-safe shared rate limiting | `src/middleware.ts` uses an atomic Upstash Redis REST counter in production and fails closed if the shared store is missing/unavailable; local Map fallback is development-only. | **Middleware path updated; whole-app route audit pending** | Search every API route for separate in-memory limiters; verify proxy/IP trust assumptions; test multi-instance behaviour and Redis outage responses. |
+| BS-RoFormer neural 12-stem separation | `src/lib/rain/stems.ts` contains a TypeScript DSP approximation, not a shipped neural model. The active Stems UI disables automatic separation, and the mastering pipeline explicitly skips stages 7–9 until a licensed, verified model is bundled. Landing copy no longer markets the approximation as BS-RoFormer. | **Gated / unavailable** | Bundle a licensed model, implement and validate real inference, test separation quality and output shape, then re-enable UI and pipeline stages only after acceptance tests pass. |
+| 16-stage mastering pipeline | Core DSP/render/export code exists and CI exercises DSP helpers and WAV/MP3 encoding. Stages 7–9 are now explicitly skipped because the neural model is absent. LUFS gating and compressor configuration have been corrected. | **Partial; not a complete 16-stage run** | Test real audio files through every active stage; validate LUFS/true peak/clipping/stereo metrics; finish stages 7–9; test failure propagation, unsupported inputs, and browser rendering. |
+| WAV/MP3 export integrity | Automated tests verify RIFF/WAVE structure, 24-bit PCM layout, MP3 frame presence, and embedded RAIN-CERT ID/signature when enabled. Distribution integration test verifies ZIP asset sizes and SHA-256 checksums. | **Automated test coverage present; broader interoperability pending** | Decode exports with independent tools; test longer and multichannel inputs, metadata retention, encoder failures, and cross-browser behaviour. |
+| DDEX ERN 4.3.2 packaging | `src/lib/rain/distribution.ts` now emits the ERN 4.3.2 namespace/schema location, official Party ID fields, ICPN for UPC/EAN, release/resource/deal structures, AI disclosure, resource URIs, and Base64 SHA-256 HashSum values. Package generation hashes actual WAV/MP3/artwork assets and includes a manifest and checksums. Structural validation uses `fast-xml-parser`. | **Structural checks and package tests implemented; official XSD/profile validation NOT implemented** | Validate against the official ERN 4.3.2 XSD/profile; confirm all mandatory sequence/cardinality/AVS values; verify assigned sender/recipient DPIDs; do not claim schema certification until this passes. |
+| LabelGrid provider submission | `POST /api/rain/distribute` receives actual ZIP bytes, checks package SHA-256, embedded manifest, asset hashes, RAIN-CERT signature/embedding, DPID formats, and structural ERN fields. The endpoint URL must be explicitly configured; there is no guessed default. A 2xx response means `submitted` unless the provider explicitly reports `delivered` or `published`. | **Safer submission path implemented; live contract/credentials unverified** | Confirm LabelGrid endpoint and multipart/API contract from official account docs; test credentials, timeouts, provider rejection, retries, duplicate submissions, and authoritative final delivery status. Official ERN XSD validation remains a blocker. |
+| Legacy finalize/payment-to-delivery flow | `/api/rain/distribute/finalize` is disabled because it accepted metadata/hash without package bytes. Payment confirmation no longer triggers distribution without the signed ZIP. | **False-success path disabled** | Implement a real payment-to-package handoff only after a complete verified package is available; test payment idempotency and delivery state transitions. |
+| Dolby Atmos output | Spatial code generates HRTF binaural/multichannel audio and ADM BWF draft packages. Product UI and generated package README now state that these are experimental and not Dolby Atmos-certified. | **Atmos-certified output not available; spatial draft retained** | Validate ADM/BWF interoperability in a target renderer; implement/licence the required Atmos workflow and certification path before restoring any Dolby Atmos claim. |
+| Testimonials and social proof | Fictional testimonials, ratings, and unverified customer logos were removed from the active testimonial component. | **Misleading surface removed** | Add testimonials only with auditable source and publication permission. |
+| CI and release gates | `.github/workflows/ci.yml` runs actual Bun tests rather than an always-passing placeholder. Latest completed baseline run recorded 132 passing tests and 0 failures before the most recent distribution/UI changes. | **Real CI enabled; latest commit run pending** | Require lint, typecheck, build, tests, and browser smoke tests on release PRs; rerun after current changes and attach the final SHA/test report. |
 
-| Audio pipeline wiring / multiband dynamics | CI type-check found groove analysis used `inChannels` before declaration, called `analyzeGrooveEmotion` with too few arguments, and the mastering bus referenced five-band sub/air parameters absent from the canonical 46-parameter schema. The source path has been reordered and the compressor/presets aligned to the canonical low/mid/high parameters. | **Source corrected; runtime audio regression pending** | Run audio fixtures through all 16 stages; compare signal metrics and verify no stage skips, exceptions, clipping regressions, or output drift. |
+## Still-unverified product areas
 
-## Remaining high-priority claims requiring investigation
-
-- Audio format support: WAV, MP3, FLAC, AIFF, OGG.
-- All 16 mastering stages, their ordering, and failure propagation.
-- All seven macro controls and whether each affects rendered audio.
-- All eight repair modules and their measurable effect.
-- 18-point QC coverage and correctness of the underlying metrics.
-- 12-stem shape, reconstruction/residual behaviour, and separation quality.
-- Exported provenance placement, signature scope, and independent verification.
-- DDEX ERN 4.3.2 schema/profile compliance.
-- LabelGrid provider request/response contract and retries.
-- DistroKid browser automation, authentication handling, and completion confirmation.
-- Registration/login/logout/session expiry, account isolation, and admin authorization.
-- Startup environment validation, database migrations, health checks, and production storage.
-- Payment providers and the claim that payments are isolated and disabled during beta.
-- Automated test discovery, CI gates, and actual clean-build results.
+- Supported input formats: WAV, MP3, FLAC, AIFF, OGG.
+- Every mastering stage and all seven macro controls.
+- Eight repair modules and measurable effect.
+- Eighteen-point QC correctness.
+- Admin/auth/session expiry, account isolation, and route authorization.
+- Startup environment validation, database migrations, health/readiness, production storage.
+- DistroKid browser automation and all external provider integrations.
+- Payment providers and disabled-beta payment configuration.
+- Full production deployment and independent listening/quality validation.
 
 ## Evidence rule
 
-A capability may be marked **Implemented and verified** only when source tracing and a repeatable test demonstrate its expected behaviour. Unit tests, mocks, generated metadata, UI labels, comments, and documentation alone are not enough. External delivery, production security, and audio quality require the corresponding integration, deployment, or listening evidence.
+Source presence, comments, UI labels, generated XML, mocks, and structural XML parsing are not proof of production readiness. A capability is marked complete only after repeatable tests and any required external validation pass.
