@@ -5,39 +5,19 @@ import { trackEvent } from '@/lib/rain/server-analytics'
 
 export const runtime = 'nodejs'
 
+const FORMATS = new Set(['wav24', 'wav16', 'mp3_320', 'atmos'])
+
 /**
  * POST /api/rain/render
  *
- * Persists a completed render/export and fires the matching Event.
- * Previously `Render` existed in schema.prisma but nothing wrote to it —
- * the 16-stage pipeline runs entirely client-side in audio-engine.ts and
- * never touched the DB, so `usage.ts`'s totalRenders/totalExports always
- * read zero regardless of real usage. This route is the fix.
+ * Persists a client-reported render/export event. The browser performs local
+ * audio encoding, so this endpoint cannot independently prove that a file was
+ * downloaded. Treat these events as usage telemetry, not cryptographic proof
+ * of output or a tamper-proof entitlement boundary.
  *
- * ANONYMOUS ACCESS (free-beta analytics): if no user is signed in, the
- * route no longer returns 401. It fires the render_completed /
- * export_completed Event with the caller's anonId (so the funnel captures
- * free-beta usage) and returns `{ ok: true }` with 200. The Render row
- * itself requires a userId FK, so it is skipped for anonymous callers —
- * the Event is the source of truth for funnel math.
- *
- * Called twice from MasteringTab per user action:
- *   1. `kind: "render"` right after Stage 16 completes (audioEngine.render()
- *      resolves) — no format/file yet, just marks the master as produced.
- *   2. `kind: "export"` right after a WAV/MP3/Atmos download completes —
- *      creates the actual Render row (format + hash + measured LUFS/TP are
- *      known at this point) and fires export_completed.
- *
- * Body: {
- *   kind: 'render' | 'export'
- *   sessionId?: string
- *   format?: 'wav24' | 'wav16' | 'mp3_320' | 'atmos'
- *   outputFileHash?: string
- *   loudnessLufs?: number
- *   truePeakDbfs?: number
- *   renderTimeMs?: number
- *   anonId?: string
- * }
+ * Authenticated Render rows are written only when the session belongs to the
+ * caller and a supported format plus SHA-256-shaped output hash are supplied.
+ * Event and Render writes for authenticated users are transactional.
  */
 export async function POST(req: NextRequest) {
   const user = await getSessionUser(req).catch(() => null)
@@ -49,66 +29,125 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const kind = body.kind === 'export' ? 'export' : 'render'
-  const sessionId = typeof body.sessionId === 'string' ? body.sessionId : undefined
+  if (body.kind !== 'render' && body.kind !== 'export') {
+    return NextResponse.json({ error: 'kind must be render or export' }, { status: 400 })
+  }
+  const kind = body.kind
+  const sessionId = typeof body.sessionId === 'string' && body.sessionId.length > 0
+    ? body.sessionId.slice(0, 128)
+    : undefined
   const format = typeof body.format === 'string' ? body.format : undefined
-  const outputFileHash = typeof body.outputFileHash === 'string' ? body.outputFileHash : undefined
-  const loudnessLufs = typeof body.loudnessLufs === 'number' ? body.loudnessLufs : undefined
-  const truePeakDbfs = typeof body.truePeakDbfs === 'number' ? body.truePeakDbfs : undefined
-  const renderTimeMs = typeof body.renderTimeMs === 'number' && Number.isFinite(body.renderTimeMs) ? Math.max(0, Math.min(body.renderTimeMs, 24 * 60 * 60 * 1000)) : undefined
-  const audioDurationSec = typeof body.audioDurationSec === 'number' && Number.isFinite(body.audioDurationSec) ? Math.max(0, Math.min(body.audioDurationSec, 24 * 60 * 60)) : undefined
-  const anonId =
-    typeof body.anonId === 'string' && body.anonId.length > 0
-      ? body.anonId.slice(0, 128)
-      : null
+  const outputFileHash = typeof body.outputFileHash === 'string' ? body.outputFileHash.toLowerCase() : undefined
+  const validOutputHash = outputFileHash ? /^[a-f0-9]{64}$/.test(outputFileHash) : false
+  const loudnessLufs = typeof body.loudnessLufs === 'number' && Number.isFinite(body.loudnessLufs)
+    ? body.loudnessLufs
+    : undefined
+  const truePeakDbfs = typeof body.truePeakDbfs === 'number' && Number.isFinite(body.truePeakDbfs)
+    ? body.truePeakDbfs
+    : undefined
+  const renderTimeMs = typeof body.renderTimeMs === 'number' && Number.isFinite(body.renderTimeMs)
+    ? Math.max(0, Math.min(86_400_000, Math.floor(body.renderTimeMs)))
+    : undefined
+  const anonId = typeof body.anonId === 'string' && body.anonId.length > 0
+    ? body.anonId.slice(0, 128)
+    : null
+
+  if (kind === 'export' && (!format || !FORMATS.has(format))) {
+    return NextResponse.json({ error: 'A supported export format is required.' }, { status: 400 })
+  }
+  if (outputFileHash && !validOutputHash) {
+    return NextResponse.json({ error: 'outputFileHash must be a 64-character SHA-256 hex digest.' }, { status: 400 })
+  }
+
+  // A signed-in user may not attach a render to another account's project.
+  if (user && sessionId) {
+    const ownedSession = await db.session.findFirst({
+      where: { id: sessionId, userId: user.id },
+      select: { id: true },
+    }).catch(() => null)
+    if (!ownedSession) {
+      return NextResponse.json({ error: 'Session not found for this account.' }, { status: 403 })
+    }
+  }
 
   const eventType = kind === 'export' ? 'export_completed' : 'render_completed'
-
-  // Anonymous path: fire the Event so the funnel captures this render/export,
-  // but don't create a Render row (it requires a userId FK).
-  if (!user) {
-    const telemetryRecorded = await trackEvent({
-      userId: null,
-      anonId,
-      type: eventType,
-      metadata: { sessionId: null, format, renderTimeMs, audioDurationSec, anonymous: true },
-    })
-    return NextResponse.json({ ok: true, renderId: null, anonymous: true, telemetryRecorded }, { status: 200 })
+  const metadata = {
+    sessionId: user ? sessionId ?? null : null,
+    format: format ?? null,
+    renderTimeMs: renderTimeMs ?? null,
+    hasOutputHash: validOutputHash,
+    clientReported: true,
+    outputFileIndependentlyVerified: false,
   }
 
   try {
-    // Only create a Render row once we have the fields the model requires
-    // (sessionId, format, outputFileHash) — the plain "render" ping right
-    // after Stage 16 usually won't have those yet, and that's fine: it
-    // still logs a render_completed Event, which is what activation math
-    // reads from.
-    let renderId: string | null = null
-    if (sessionId && format && outputFileHash) {
-      const row = await db.render.create({
-        data: {
-          sessionId,
-          userId: user.id,
-          format,
-          outputFileHash,
-          loudnessLufs,
-          truePeakDbfs,
-          renderTimeMs,
-        },
+    if (!user) {
+      const recorded = await trackEvent({
+        userId: null,
+        anonId,
+        type: eventType,
+        metadata: { ...metadata, anonymous: true },
       })
-      renderId = row.id
+      if (!recorded) {
+        return NextResponse.json(
+          { ok: false, telemetryRecorded: false, error: 'Usage event could not be persisted.' },
+          { status: 503 },
+        )
+      }
+      return NextResponse.json({
+        ok: true,
+        telemetryRecorded: true,
+        renderId: null,
+        anonymous: true,
+        evidence: 'client-reported',
+      }, { status: 200 })
     }
 
-    const telemetryRecorded = await trackEvent({
-      userId: user.id,
-      anonId,
-      type: eventType,
-      metadata: { sessionId, format, renderId, renderTimeMs, audioDurationSec },
+    const result = await db.$transaction(async (tx) => {
+      let renderId: string | null = null
+      if (kind === 'export' && sessionId && format && validOutputHash && outputFileHash) {
+        const row = await tx.render.create({
+          data: {
+            sessionId,
+            userId: user.id,
+            format,
+            outputFileHash,
+            loudnessLufs,
+            truePeakDbfs,
+            renderTimeMs,
+          },
+          select: { id: true },
+        })
+        renderId = row.id
+      }
+
+      await tx.event.create({
+        data: {
+          userId: user.id,
+          anonId,
+          type: eventType,
+          metadata: JSON.stringify({ ...metadata, renderId }),
+        },
+      })
+      await tx.account.update({
+        where: { id: user.id },
+        data: { lastActiveAt: new Date() },
+      })
+      return { renderId }
     })
 
-    return NextResponse.json({ ok: true, renderId, anonymous: false, telemetryRecorded }, { status: 201 })
+    return NextResponse.json({
+      ok: true,
+      telemetryRecorded: true,
+      renderId: result.renderId,
+      anonymous: false,
+      evidence: 'client-reported',
+    }, { status: 201 })
   } catch (err) {
-    console.error('[api/rain/render] failed:', err)
-    // Never let an analytics write block the user's actual export/download.
-    return NextResponse.json({ ok: true, renderId: null }, { status: 200 })
+    console.error('[api/rain/render] failed to persist usage event:', err)
+    return NextResponse.json(
+      { ok: false, telemetryRecorded: false, error: 'Usage event could not be persisted.' },
+      { status: 503 },
+    )
   }
 }
