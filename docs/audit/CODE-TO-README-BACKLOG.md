@@ -5,6 +5,10 @@
 
 The README remains the target specification. This is a work tracker, not a proposal to reduce the requirements. Do not merge or label the repository production-ready until the release gates pass.
 
+## P0 — Beta usage evidence and access policy
+
+- [ ] **P0.0 Live-beta reality and metrics:** operator reports that live accounts do not persist beyond a session and the deployed beta retains no reliable usage hours, completed work, export totals, or AIE activity. Treat historical metrics as unavailable; never fabricate/backfill them. Verify the deployed environment, then implement privacy-conscious durable event aggregation and admin reporting for future sessions. Keep the entire available product capability free for all users throughout the beta; do not introduce feature-tier restrictions during this stage. Security-sensitive admin APIs must remain authenticated/authorized, and any future paid-tier enforcement must be explicitly deferred until beta policy changes.
+
 ## P0 — Core product and integrity
 
 - [ ] **P0.1 RainNet model runtime:** manifest integrity checks and backend fallback logic are implemented; tests cover graph/external-data hash validation and WebGPU-to-WASM fallback. Still verify the actual ONNX input/output signatures and real model binaries, run browser inference in supported browsers, and validate the heuristic fallback and output quality end to end.
