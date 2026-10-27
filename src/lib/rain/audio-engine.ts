@@ -915,8 +915,8 @@ class RainAudioEngine {
     // tube saturation) master-bus work is moved here. Multiband compression
     // is also moved here from old Stage 11 (it was labeled "Loudness
     // Targeting" but actually did multiband comp). Stage 10 now operates on
-    // the stem-summed bus (when stages 7-9 produced stems) or on the input
-    // signal directly (long-audio fallback).
+    // the processed input signal directly; stages 7-9 are explicitly skipped
+    // until a verified neural separation model is bundled.
     wrappedOnProgress?.(10, 16, 'Master Bus')
     checkCancel()
     {
@@ -1412,9 +1412,8 @@ class RainAudioEngine {
 function sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)) }
 
 // ---------------------------------------------------------------------------
-// Multiband compression — 4-band Linkwitz-Riley crossover at 80/500/4000 Hz
-// with soft knee and feed-forward detection — industry-standard mastering
-// crossover points.
+// Multiband compression — canonical three-band low/mid/high split at
+// 200 Hz and 4 kHz, with soft knee and feed-forward detection.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1481,17 +1480,10 @@ function compressBand(
 }
 
 /**
- * 4-band Linkwitz-Riley crossover at 80/500/4000 Hz with soft knee and
- * feed-forward detection — industry-standard mastering crossover points.
- *
- * Bands:
- *   - Sub-bass:   0–80 Hz      (params.mb_*_sub)
- *   - Low-mid:   80–500 Hz     (params.mb_*_low — backward compat)
- *   - Presence: 500–4000 Hz    (params.mb_*_mid — backward compat)
- *   - Air:      4000–20000 Hz  (params.mb_*_air)
- *
- * Crossover topology: cascaded 2nd-order Butterworth (Q=0.7071) highpass + lowpass
- * per band edge, approximating a 4th-order Linkwitz-Riley response when summed.
+ * Three-band low/mid/high compression matching the canonical ProcessingParams.
+ * Low band: below 200 Hz; mid band: 200 Hz–4 kHz; high band: above 4 kHz.
+ * Each band uses a Butterworth biquad split and its own threshold, ratio,
+ * attack, and release parameters.
  */
 function applyMultibandCompression(
   channels: Float32Array[],
@@ -1566,8 +1558,9 @@ function applyMultibandCompression(
  * Apply per-stem repair (Stage 8) to one separated stem.
  *
  * Returns a NEW Float32Array[] (does not mutate the separator's output — the
- * Stems tab needs the original measurements to remain stable for display
- * until the repaired results are emitted via onStemsReady).
+ * Stem UI would need the original measurements to remain stable for display
+ * until repaired results are emitted. This utility is dormant while neural
+ * separation is unavailable.
  *
  * Per the P3-PIPELINE-89 task spec:
  *   - vocals / backing_vocals : de-ess peak cut @ 7 kHz, Q=2, -2 dB + HPF @ 80 Hz
@@ -1776,9 +1769,8 @@ function sailProcessStems(
 
 // ---------------------------------------------------------------------------
 // P3-PIPELINE-89 — Stem measurement helpers
-// Re-compute RMS + peak dB on the repaired stem channels so the Stems tab
-// shows accurate post-repair measurements after Stage 8 re-emits via
-// onStemsReady. Matches the measurement logic in stems.ts.
+// Re-compute RMS + peak dB for legacy stem-repair utilities. These helpers
+// are not called by the active mastering pipeline while neural separation is disabled.
 // ---------------------------------------------------------------------------
 
 function measureStemRmsDb(channels: Float32Array[]): number {
