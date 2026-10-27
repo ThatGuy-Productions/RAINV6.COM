@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     // Rate limiting still applies to prevent LLM abuse.
 
     // Rate limit: 20 requests/min per IP — prevents abuse of the LLM endpoint.
-    const rl = checkRateLimit(req, 'assist', 20)
+    const rl = await checkRateLimit(req, 'assist', 20)
     if (!rl.ok) {
       return NextResponse.json(
         { error: 'Too many requests', retryAfter: rl.retryAfter },
