@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { resolveBetaExportAllowance } from '../../src/lib/rain/beta-export-quota'
 
-describe('two-free-export beta allowance', () => {
+describe('legacy client-side export gate (not the confirmed product policy)', () => {
   it('allows the first and second exports', () => {
     expect(resolveBetaExportAllowance(0, 0, false)).toEqual({ allowed: true, exportsUsed: 0 })
     expect(resolveBetaExportAllowance(1, 1, false)).toEqual({ allowed: true, exportsUsed: 1 })
