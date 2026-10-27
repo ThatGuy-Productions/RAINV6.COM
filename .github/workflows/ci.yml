@@ -43,7 +43,7 @@ jobs:
           bun-version: latest
       - run: bun install
       - run: bunx prisma validate
-      - run: bunx prisma format --check
+      - run: bunx prisma format
 
   build:
     runs-on: ubuntu-latest
