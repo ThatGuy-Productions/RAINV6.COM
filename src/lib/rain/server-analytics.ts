@@ -28,6 +28,7 @@ export type EventType =
   | 'beta_checkout_started'
   | 'aie_vector_computed'
   | 'aie_vector_exported'
+  | 'studio_heartbeat'
 
 interface TrackEventInput {
   userId?: string | null
