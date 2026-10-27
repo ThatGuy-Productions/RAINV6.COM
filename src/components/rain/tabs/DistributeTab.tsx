@@ -222,6 +222,8 @@ export function DistributeTab() {
           year: metadata.year,
           isrc: metadata.isrc,
           upc: metadata.upc,
+          senderDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '',
+          recipientDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '',
           iswc: metadata.iswc,
           releaseDate: metadata.releaseDate,
           originalReleaseDate: metadata.originalReleaseDate,
