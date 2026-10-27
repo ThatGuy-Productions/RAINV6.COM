@@ -149,6 +149,14 @@ export interface DeliveryJob {
 // SHA-256 helper (WebCrypto, browser only)
 // ---------------------------------------------------------------------------
 
+function hexToBase64(hex: string): string {
+  if (!/^(?:[a-f0-9]{2})+$/i.test(hex)) throw new Error('Invalid hexadecimal digest')
+  const bytes = Uint8Array.from(hex.match(/.{2}/g) ?? [], (pair) => Number.parseInt(pair, 16))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
 async function sha256Bytes(data: Uint8Array): Promise<string> {
   if (typeof crypto === 'undefined' || !crypto.subtle) {
     throw new Error('WebCrypto not available — SHA-256 requires crypto.subtle')
@@ -315,9 +323,9 @@ export interface DdexMetadata {
   senderDpid?: string
   recipientDpid?: string
   /** Actual rendered WAV resource details included in the package. */
-  audioResource?: { filename: string; sha256: string; channels: number; sampleRate: number; bitDepth: number; sizeBytes: number }
+  audioResource?: { filename: string; sha256: string; hashSumBase64: string; channels: number; sampleRate: number; bitDepth: number; sizeBytes: number }
   /** Optional validated cover-art resource included in the package. */
-  artworkResource?: { filename: string; sha256: string; width: number; height: number; format: 'image/jpeg' | 'image/png'; sizeBytes: number }
+  artworkResource?: { filename: string; sha256: string; hashSumBase64: string; width: number; height: number; format: 'image/jpeg' | 'image/png'; sizeBytes: number }
   /** ISWC for the underlying composition. TASK B enrichment. */
   iswc?: string
   /** ISO-8601 release date (YYYY-MM-DD). */
@@ -929,6 +937,7 @@ export async function buildDistributionPackage(
     artworkResource = {
       filename: `artwork/cover.${ext}`,
       sha256: artSha,
+      hashSumBase64: hexToBase64(artSha),
       width: art.dimensions[0],
       height: art.dimensions[1],
       format: art.format,
@@ -953,6 +962,7 @@ export async function buildDistributionPackage(
     audioResource: {
       filename: `assets/${safeTitle}.wav`,
       sha256: wavSha,
+      hashSumBase64: hexToBase64(wavSha),
       channels: audioBuffer.numberOfChannels,
       sampleRate: audioBuffer.sampleRate,
       bitDepth: 24,
