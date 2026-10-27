@@ -20,7 +20,7 @@
  *     → Live mode: Redirect to PayFast/Ozow/Stripe gateway
  *     → Callback: POST /api/rain/payment/confirm
  *     → Confirmation: PaymentIsolation.confirmPayment()
- *     → Distribution pipeline: POST /api/rain/distribute/finalize
+ *     → Distribution: separate POST /api/rain/distribute with the complete verified ZIP
  *
  * IDEMPOTENCY:
  *   The paymentSessionId is the idempotency key. If a payment with the same
