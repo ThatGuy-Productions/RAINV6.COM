@@ -28,7 +28,6 @@ import {
   submitToLabelGrid,
   updateDeliveryJob,
   validateArtwork,
-  validateDdex,
   type DeliveryJob,
   type DeliveryJobStatus,
 } from '@/lib/rain/distribution'
@@ -132,7 +131,6 @@ export function DistributeTab() {
     })
   }, [metadata, disclosure, selectedPlatforms])
 
-  const ddexValidation = useMemo(() => validateDdex(ddexXml), [ddexXml])
 
   const handleArtworkSelected = async (file: File | null) => {
     if (!file) return
@@ -205,13 +203,7 @@ export function DistributeTab() {
       notifyError('No processed buffer', 'Mastering pipeline has no output to package.')
       return
     }
-    if (!ddexValidation.ok) {
-      notifyError(
-        'DDEX validation failed',
-        ddexValidation.errors.join('; '),
-      )
-      return
-    }
+
     setBuildStatus('packaging')
     setBuildError(null)
     try {
@@ -364,21 +356,17 @@ export function DistributeTab() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
           <DdexInfo label="ERN Version" value="4.3.2" />
-          <DdexInfo label="Schema" value="ern/43" />
+          <DdexInfo label="Schema" value="ern/432" />
           <DdexInfo label="Disclosure Fields" value="5 (EU AI Act §50)" />
           <DdexInfo label="Output" value=".zip (ern+manifest+assets)" />
         </div>
-        {!ddexValidation.ok && (
-          <div className="mt-3 text-[10px] font-mono text-orange-400 bg-orange-400/10 rounded p-2 flex items-start gap-2">
-            <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-            <div>
-              <div className="uppercase tracking-wider mb-1">DDEX validation</div>
-              {ddexValidation.errors.map((err, i) => (
-                <div key={i}>· {err}</div>
-              ))}
-            </div>
+        <div className="mt-3 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded p-2 flex items-start gap-2">
+          <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="uppercase tracking-wider mb-1">Draft preview — not schema-certified</div>
+            This preview does not include the rendered WAV's real hash or final package resource references. The package builder adds those after export and runs structural checks. Official ERN 4.3.2 XSD/profile validation is not yet implemented; provider acceptance is not guaranteed.
           </div>
-        )}
+        </div>}
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
