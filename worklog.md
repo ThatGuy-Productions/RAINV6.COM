@@ -1187,3 +1187,35 @@ Remaining:
 - Add tests for the public stats endpoint's unavailable response and the landing page's unavailable/empty states.
 - Audit all visible UI and product routes for stale tier restrictions while preserving admin authorization.
 - Implement a minimal, privacy-conscious, disclosed telemetry path for future usage only, after deployment/storage/consent requirements are confirmed.
+
+
+---
+
+Task ID: 26
+Agent: RAIN V6 remediation
+Task: Begin correcting account/session data loss and implement the two-free-export R49 beta conversion flow.
+
+Operator requirements:
+- Persistent accounts and durable user work are required. Losing account continuity at the end of a session is a P0 product defect, not an accepted beta limitation.
+- The live beta has no reliable retained history for usage hours, completed work, exports, or AIE activity. Historical values are unknown; never invent or backfill them.
+- Every user should have full product capability during beta. The first two successful exports are free; subsequent exports should offer a R49.00 unlock. This is a conversion experiment for funder evidence, not a reduction in feature access.
+
+Changes made on this branch:
+- Added owner-scoped GET/POST/PUT support to `/api/rain/session`: signed-in users can list saved projects, retrieve one project, create a project record, and update its metadata/settings. The API rejects oversized/invalid JSON, checks ownership on reads/writes, and never uploads the source audio file.
+- Added a best-effort autosave after a successful mastering render, storing the project metadata and processing settings in the authenticated user's Session row. Source audio remains browser-local and must be reselected when returning.
+- Added `GET /api/rain/beta-access`, which counts recorded successful exports from the durable Event table and reports the two-export allowance plus the planned R49.00 amount.
+- Removed the sign-up-required-before-export gate. All users retain the product's available feature access; the export UI checks the two-free-export allowance before generating another export.
+- Updated public pricing copy to describe two free exports followed by a R49.00 unlock.
+- Added a transparent unlock-interest modal and server-side `beta_paywall_shown` / `beta_checkout_started` events. The modal explicitly says checkout is not live and does not take payment.
+- Added conversion funnel event types. A client-side intent event can never mark an account as paid.
+
+Important limitations / blockers:
+- These changes do not by themselves prove persistent accounts in the deployed beta. The current Prisma schema uses SQLite while its comments describe PostgreSQL production. A durable production database, correct migrations, deployment secrets, backups, and cross-restart tests are mandatory.
+- Saved project APIs and render-time autosave are not yet a complete restore workflow; the UI to browse a saved project, restore its settings, and ask the user to reselect the source audio still needs to be completed and tested.
+- The two-export gate is currently a client UX gate because audio export is performed locally in the browser. It can be bypassed by a modified client and must not be described as tamper-proof enforcement.
+- No payment has been integrated or taken. The current payment engine is ephemeral and beta-mode zero-priced. Configure a real provider, verified callback/webhook, persistent entitlement/payment record, idempotency, refunds/failure handling, and tests before charging R49 or counting paid conversions.
+- AIE usage must be instrumented at the real execution points; a generic tab-view event is not proof that an AIE task ran.
+- Do not report historical usage metrics as zero or as measured data where the old deployment did not retain them. Future evidence starts only after persistence and event writes are verified.
+
+Verification:
+- Automated CI is required on the latest branch head after these edits. A green typecheck/build alone will not establish production database durability or payment-provider readiness.
