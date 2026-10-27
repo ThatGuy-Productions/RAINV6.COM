@@ -639,7 +639,6 @@ class RainAudioEngine {
     platform: string,
     onProgress?: (stage: number, total: number, name: string) => void,
     signal?: AbortSignal,
-    onStemsReady?: (stems: import('./stems').StemResult[]) => void,
     simpleMode = false,
   ): Promise<{
     buffer: AudioBuffer
@@ -909,9 +908,7 @@ class RainAudioEngine {
       // TypeScript routine is a DSP approximation, not true source separation,
       // so never publish its output as neural stems or silently mark Stage 7 done.
       stemsSkipReason = 'licensed neural BS-RoFormer model not bundled'
-      if (onStemsReady) {
-        console.warn('[stems] Stage 7 skipped: verified neural separation model is unavailable.')
-      }
+
     }
     await sleep(0)
 
