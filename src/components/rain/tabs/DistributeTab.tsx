@@ -58,6 +58,7 @@ export function DistributeTab() {
   const metadata = useSessionStore((s) => s.metadata)
   const setMetadata = useSessionStore((s) => s.setMetadata)
   const hasProcessed = useSessionStore((s) => s.hasProcessed)
+  const rainCert = useSessionStore((s) => s.rainCert)
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['spotify', 'apple_music', 'youtube', 'tidal'])
   const [disclosure, setDisclosure] = useState<Record<DisclosureKey, DisclosureValue>>({
     vocals: 'assisted',
@@ -182,6 +183,10 @@ export function DistributeTab() {
       notifyError('Metadata validation failed', metadataIssues.map((issue) => issue.message).join(' '))
       return
     }
+    if (!rainCert) {
+      notifyError('RAIN-CERT required', 'Generate and verify provenance for the current master before building a distribution package.')
+      return
+    }
     if (!hasProcessed) {
       notifyError(
         'No master to package',
@@ -207,8 +212,8 @@ export function DistributeTab() {
       const result = await buildDistributionPackage(
         processedBuffer,
         {
-          title: metadata.title || 'Untitled',
-          artist: metadata.artist || 'Unknown Artist',
+          title: metadata.title,
+          artist: metadata.artist,
           album: metadata.album,
           genre: metadata.genre,
           // TASK B: pass through the new Ditto-standard fields from the
@@ -218,7 +223,7 @@ export function DistributeTab() {
           isrc: metadata.isrc,
           upc: metadata.upc,
           iswc: metadata.iswc,
-          releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+          releaseDate: metadata.releaseDate,
           originalReleaseDate: metadata.originalReleaseDate,
           releaseType: metadata.releaseType,
           label: metadata.label,
@@ -244,6 +249,7 @@ export function DistributeTab() {
           targetDsps: selectedPlatforms,
           dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
         },
+        rainCert,
         artwork?.file,
       )
 
