@@ -366,7 +366,7 @@ export function DistributeTab() {
             <div className="uppercase tracking-wider mb-1">Draft preview — not schema-certified</div>
             This preview does not include the rendered WAV's real hash or final package resource references. The package builder adds those after export and runs structural checks. Official ERN 4.3.2 XSD/profile validation is not yet implemented; provider acceptance is not guaranteed.
           </div>
-        </div>}
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
