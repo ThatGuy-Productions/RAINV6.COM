@@ -97,4 +97,27 @@ describe('RainNet model integrity verification', () => {
 
     expect(await verifyModelManifest('/models/rain_base.manifest.json', '/models/rain_base.onnx')).toBe(false)
   })
+  it('rejects external weights belonging to a different model', async () => {
+    const modelBytes = new TextEncoder().encode('test onnx graph bytes')
+    const dataBytes = new TextEncoder().encode('test external tensor bytes')
+    const manifest = {
+      schemaVersion: 'rain-v1',
+      modelName: 'rain_base.onnx',
+      externalDataFile: 'rain_trained.onnx.data',
+      checksums: {
+        sha256: await sha256(modelBytes),
+        sha256ExternalData: await sha256(dataBytes),
+      },
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('.manifest.json')) return response(JSON.stringify(manifest))
+      if (path === '/models/rain_base.onnx') return response(modelBytes)
+      if (path === '/models/rain_trained.onnx.data') return response(dataBytes)
+      return response('', 404)
+    }) as typeof fetch
+
+    expect(await verifyModelManifest('/models/rain_base.manifest.json', '/models/rain_base.onnx')).toBe(false)
+  })
+
 })
