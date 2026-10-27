@@ -126,20 +126,21 @@ echo "[BUN] Installing dependencies..."
 bun install
 log_step_end "bun install"
 
-log_step_start "bun run db:push"
-echo "[BUN] Setting up database (only if DB doesn't exist)..."
-# CRITICAL: Only run db:push if the database file doesn't exist yet.
-# Running db:push on every restart can wipe user data if the schema changed.
-# The DB should be created once and then preserved across restarts.
-if [ ! -f "$PROJECT_DIR/db/custom.db" ]; then
-  echo "[BUN] Database file not found — creating fresh schema..."
-  bun run db:push
-else
-  echo "[BUN] Database file exists — skipping db:push to preserve user data."
-  # Still regenerate the Prisma client in case schema.prisma changed
-  bun run db:generate
+log_step_start "database migrations"
+echo "[BUN] Applying versioned PostgreSQL migrations..."
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "ERROR: DATABASE_URL must point to a durable PostgreSQL database."
+  echo "SQLite/local files are not supported for accounts or saved work."
+  exit 1
 fi
-log_step_end "bun run db:push"
+case "$DATABASE_URL" in
+  postgres://*|postgresql://*) ;;
+  *) echo "ERROR: DATABASE_URL must use postgres:// or postgresql://."; exit 1 ;;
+esac
+bun run db:migrate:deploy
+bun run db:generate
+log_step_end "database migrations"
+
 
 log_step_start "Starting Next.js dev server"
 echo "[BUN] Starting development server..."
