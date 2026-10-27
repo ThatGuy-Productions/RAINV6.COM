@@ -1097,3 +1097,35 @@ Remaining:
 - Add browser-based IndexedDB key lifecycle/rotation and legacy-key migration tests.
 - Verify all export UI paths attach the intended certificate and independently inspect exported bytes.
 - Continue P0 mastering/model-runtime and P1 DDEX/provider acceptance work; this commit does not make the product production-ready.
+
+
+---
+
+Task ID: 23
+Agent: RAIN V6 remediation
+Task: Close first-admin bootstrap takeover risk and add authentication primitive acceptance tests.
+
+Findings:
+- The public first-run Admin Door allowed anyone to create the first Enterprise admin if they reached the endpoint before the legitimate operator. Rate limiting alone did not establish that the caller was authorized to claim the first-admin account.
+- HTTPS detection used `x-forwarded-proto.includes('https')`, which could incorrectly treat a value such as `nothttps` as HTTPS.
+
+Changes:
+- `POST /api/rain/admin/bootstrap` now requires a server-only `RAIN_ADMIN_BOOTSTRAP_SECRET` with at least 32 characters. Missing/weak configuration disables bootstrap with 503; an invalid secret returns 403 before any admin account is created.
+- Added `src/lib/rain/bootstrap-secret.ts` to perform fixed-size SHA-256 digest comparison with `timingSafeEqual`. The secret is never exposed through a public environment variable.
+- Added a bootstrap-secret field to the first-admin setup form and passed it through the auth context. Added the empty variable and security instructions to `.env.example`.
+- Session cookie HTTPS detection now parses the first forwarded protocol value exactly; the session expiry boundary now treats `expiresAt <= Date.now()` as expired.
+- Added `tests/lib/bootstrap-secret.test.ts` and `tests/lib/auth-security.test.ts` for missing/weak/wrong/correct bootstrap secrets, salted scrypt verification, secure cookie attributes, clearing cookies, and spoof-like protocol values.
+- Fixed CI test setup to run `bunx prisma generate` before tests that import the database-backed auth module. The first test attempt exposed this CI isolation issue; the workflow was corrected.
+
+Verification:
+- Workflow run 40581180438 passed all five jobs: lint, typecheck, Prisma validation, production build, and tests.
+- Automated suite: 148 passed, 0 failed.
+- These are unit tests. Full database-backed registration/login/logout/reset, persisted session expiry/revocation, CSRF route coverage, and role checks remain to be validated.
+
+Stage Summary:
+- First-admin creation is no longer an unauthenticated race to claim a public setup endpoint; it requires an out-of-band deployment secret.
+- Configure `RAIN_ADMIN_BOOTSTRAP_SECRET` in the deployment secret store before initial admin setup. Do not add it to `NEXT_PUBLIC_*` variables or commit its value.
+
+Remaining:
+- Finish P0.4 integration tests across every sensitive route.
+- Continue the core release blockers: real ONNX inference validation, genuine neural stem separation, full mastering acceptance, official DDEX XSD/profile validation, and live distribution-provider sandbox tests.
