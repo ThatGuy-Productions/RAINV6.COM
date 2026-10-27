@@ -125,9 +125,9 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
   const rateCheck = await checkRateLimit(req, 'payment:global', 10)
   if (!rateCheck.ok) {
     return NextResponse.json(
-      { ok: false, error: 'Too many payment requests. Please wait.', retryAfter: rateCheck.retryAfter },
+      { ok: false, error: rateCheck.unavailable ? 'Rate limiting service unavailable' : 'Too many payment requests. Please wait.', retryAfter: rateCheck.retryAfter },
       {
-        status: 429,
+        status: rateCheck.unavailable ? 503 : 429,
         headers: {
           ...corsHeaders(origin),
           'Retry-After': String(rateCheck.retryAfter),
