@@ -55,8 +55,6 @@ cd "$BUILD_DIR" || exit 1
 
 ls -lah
 
-DEFAULT_PACKAGED_DB_PATH="/app/db/custom.db"
-DEFAULT_PACKAGED_DATABASE_URL="file:$DEFAULT_PACKAGED_DB_PATH"
 
 # Start Next.js server
 if [ -f "./next-service-dist/server.js" ]; then
@@ -67,19 +65,19 @@ if [ -f "./next-service-dist/server.js" ]; then
     export NODE_ENV=production
     export PORT="${PORT:-3000}"
     export HOSTNAME="${HOSTNAME:-0.0.0.0}"
-    export DATABASE_URL="${DATABASE_URL:-$DEFAULT_PACKAGED_DATABASE_URL}"
-
-    if [ "$DATABASE_URL" = "$DEFAULT_PACKAGED_DATABASE_URL" ]; then
-        if [ ! -f "$DEFAULT_PACKAGED_DB_PATH" ]; then
-            echo "ERROR: Packaged database file not found: $DEFAULT_PACKAGED_DB_PATH"
-            echo "   Aborting startup to prevent launching with empty database"
-            exit 1
-        fi
-
-        echo "Using packaged database: $DEFAULT_PACKAGED_DB_PATH"
-    else
-        echo "Using external database: $DATABASE_URL"
+    if [ -z "${DATABASE_URL:-}" ]; then
+        echo "ERROR: DATABASE_URL is required and must point to durable PostgreSQL."
+        echo "   Refusing to start with an ephemeral or packaged SQLite database."
+        exit 1
     fi
+    case "$DATABASE_URL" in
+        postgres://*|postgresql://*) echo "Using external PostgreSQL database."
+            ;;
+        *) echo "ERROR: DATABASE_URL must use postgres:// or postgresql://."
+            exit 1
+            ;;
+    esac
+    echo "Ensure `prisma migrate deploy` has completed successfully before rollout."
 
     # Start Next.js in background
     bun server.js &
