@@ -34,6 +34,14 @@ export interface UsageStats {
   exports30d: number
   /** Count of feedback submissions. */
   feedbackCount: number
+  /** Persisted AIE vector computation events. */
+  aieComputations: number
+  /** Persisted AIE signed-vector export events. */
+  aieExports: number
+  /** Estimated visible-studio hours from rate-limited 60-second heartbeats. */
+  visibleStudioHours: number
+  /** Whether the database contains any usable event history. */
+  evidenceStatus: 'recorded' | 'no-recorded-events' | 'unavailable'
 }
 
 export async function getUsageStats(): Promise<UsageStats> {
@@ -42,36 +50,57 @@ export async function getUsageStats(): Promise<UsageStats> {
   const past30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
   try {
-    const [totalUsers, totalRenders, totalExports, renders30d, exports30d, feedbackCount] = await Promise.all([
+    const [
+      totalUsers, totalRenders, totalExports, renders30d, exports30d,
+      feedbackCount, aieComputations, aieExports, heartbeatRows, eventRows,
+      lastExport,
+    ] = await Promise.all([
       db.account.count(),
-      db.render.count(),
-      db.render.count(),
-      db.render.count({ where: { createdAt: { gte: past30d } } }),
-      db.render.count({ where: { createdAt: { gte: past30d } } }),
+      db.event.count({ where: { type: 'render_completed' } }),
+      db.event.count({ where: { type: 'export_completed' } }),
+      db.event.count({ where: { type: 'render_completed', createdAt: { gte: past30d } } }),
+      db.event.count({ where: { type: 'export_completed', createdAt: { gte: past30d } } }),
       db.feedback.count(),
+      db.event.count({ where: { type: 'aie_vector_computed' } }),
+      db.event.count({ where: { type: 'aie_vector_exported' } }),
+      db.event.findMany({ where: { type: 'studio_heartbeat' }, select: { metadata: true } }),
+      db.event.count(),
+      db.event.findFirst({
+        where: { type: 'export_completed' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
     ])
 
-    // Active users: accounts that have auth tokens created in last 24h (proxy for login activity)
-    const activeUsers24h = await db.authToken.count({
-      where: { createdAt: { gte: past24h } },
-    })
-
-    // Last export timestamp
-    const lastRender = await db.render.findFirst({
-      where: {},
-      orderBy: { createdAt: 'desc' },
-      select: { createdAt: true },
-    })
+    // Active users: accounts with auth tokens created in the last 24h.
+    const activeUsers24h = await db.authToken.count({ where: { createdAt: { gte: past24h } } })
+    // Heartbeats are clamped server-side to 60 seconds. This is an estimate
+    // of time with the studio tab visible, not proof of continuous human work.
+    const activeSeconds = heartbeatRows.reduce((sum, row) => {
+      try {
+        const metadata = row.metadata ? JSON.parse(row.metadata) as { activeSeconds?: unknown } : {}
+        const seconds = typeof metadata.activeSeconds === 'number' && Number.isFinite(metadata.activeSeconds)
+          ? Math.max(0, Math.min(60, metadata.activeSeconds))
+          : 0
+        return sum + seconds
+      } catch {
+        return sum
+      }
+    }, 0)
 
     return {
       totalUsers,
       activeUsers24h,
       totalRenders,
       totalExports,
-      lastExportAt: lastRender?.createdAt?.toISOString() ?? null,
+      lastExportAt: lastExport?.createdAt?.toISOString() ?? null,
       renders30d,
       exports30d,
       feedbackCount,
+      aieComputations,
+      aieExports,
+      visibleStudioHours: Math.round((activeSeconds / 3600) * 100) / 100,
+      evidenceStatus: eventRows > 0 ? 'recorded' : 'no-recorded-events',
     }
   } catch (err) {
     console.error('[usage] getUsageStats failed:', err)
@@ -84,6 +113,10 @@ export async function getUsageStats(): Promise<UsageStats> {
       renders30d: 0,
       exports30d: 0,
       feedbackCount: 0,
+      aieComputations: 0,
+      aieExports: 0,
+      visibleStudioHours: 0,
+      evidenceStatus: 'unavailable',
     }
   }
 }
