@@ -23,6 +23,8 @@
 | 16-stage mastering and export | `src/lib/rain/audio-engine.ts` contains a pipeline orchestrator and real WAV/MP3 encoder code paths; the UI includes post-export verification functions. | **Not yet verified end-to-end** | Run real-file browser tests for every stage, WAV/MP3 decoding, output metrics, unsupported inputs, and explicit failure states. Source presence alone is insufficient. |
 | Dolby Atmos / spatial export | `src/lib/rain/spatial.ts` contains spatial DSP, multichannel BWF/ADM XML and ZIP-export code paths. | **Not yet verified against interoperability requirements** | Validate channel layout, ADM/BWF structure and package contents using independent parsers and target-compatible tools. Do not equate a multichannel WAV or ADM XML file with Dolby certification. |
 
+| Audio pipeline wiring / multiband dynamics | CI type-check found groove analysis used `inChannels` before declaration, called `analyzeGrooveEmotion` with too few arguments, and the mastering bus referenced five-band sub/air parameters absent from the canonical 46-parameter schema. The source path has been reordered and the compressor/presets aligned to the canonical low/mid/high parameters. | **Source corrected; runtime audio regression pending** | Run audio fixtures through all 16 stages; compare signal metrics and verify no stage skips, exceptions, clipping regressions, or output drift. |
+
 ## Remaining high-priority claims requiring investigation
 
 - Audio format support: WAV, MP3, FLAC, AIFF, OGG.
