@@ -186,9 +186,8 @@ export function MasteringTab() {
     // BETA-ANALYTICS: fire-and-forget — don't gate the render on this.
     void ensureBackendSession()
 
-    // P3-BSROFORMER: clear any stale stem results from a previous render
-    // or manual Stems-tab run. Fresh results are populated from Stage 7
-    // of the render pipeline via the onStemsReady callback (below).
+    // Clear stale stem results from a previous render or manual Stems-tab run.
+    // Automatic neural separation is disabled until a verified model is bundled.
     setStemResults(null)
 
     // AUDIT-C5 FIX: create an AbortController for this render and store it so
