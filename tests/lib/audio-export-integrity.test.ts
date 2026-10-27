@@ -50,4 +50,44 @@ describe('Audio export integrity', () => {
     expect(bytes[0]).toBe(0xff)
     expect((bytes[1] & 0xe0) === 0xe0).toBe(true)
   })
+  it('embeds RAIN-CERT ID and signature into WAV and MP3 when enabled', async () => {
+    const certId = 'RAIN-CERT-TEST-001'
+    const signature = 'ab'.repeat(64)
+    const certificate = {
+      certId,
+      inputHash: '11'.repeat(32),
+      outputHash: '22'.repeat(32),
+      wasmHash: 'rain-dsp-ts-v6',
+      signedAt: '2026-10-27T00:00:00.000Z',
+      algorithm: 'Ed25519',
+      publicKey: 'test-public-key',
+      signature,
+      manifest: {
+        version: '2.2',
+        claimGenerator: 'RAIN/6.0.0',
+        actions: [],
+        assertions: [{ label: 'org.rain.fingerprint', data: { type: 'test', hash: 'test-fingerprint' } }],
+      },
+    } as unknown as import('../../src/lib/rain/types').ProvenanceCertificate
+    const options = {
+      embedProvenance: true,
+      embedSignature: true,
+      embedFingerprint: true,
+      embedMetadata: true,
+      attachCertificate: false,
+      metadata: { title: 'Test track', artist: 'Test artist', isrc: 'USABC2600001' },
+      fingerprint: 'test-fingerprint',
+    }
+
+    const wav = new Uint8Array(await audioBufferToWav(makeAudioBuffer(), 24, certificate, options).arrayBuffer())
+    const mp3 = new Uint8Array(await audioBufferToMp3(makeAudioBuffer(), 320, certificate, options).arrayBuffer())
+    const has = (bytes: Uint8Array, value: string) =>
+      Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).includes(Buffer.from(value))
+
+    expect(has(wav, certId)).toBe(true)
+    expect(has(wav, signature)).toBe(true)
+    expect(has(mp3, certId)).toBe(true)
+    expect(has(mp3, signature)).toBe(true)
+  })
+
 })
