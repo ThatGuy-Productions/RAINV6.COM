@@ -151,13 +151,25 @@ export function ExportTab() {
   const handleExport = async () => {
     if (!hasProcessed) return
 
-    // AUTH GATE: require sign-up before export/download.
-    if (!user) {
-      notifyError(
-        'Sign up required',
-        'Create a free account to export and download your master. No credit card needed.',
-      )
-      window.dispatchEvent(new CustomEvent('rain:signup-open'))
+    // BETA CONVERSION GATE: everyone gets the full product; the first two
+    // successful exports are free. Durable count comes from server events.
+    // The local encoder is not a security boundary, so this is a product UX
+    // gate until checkout is provider-backed and verified.
+    try {
+      const access = await fetch(`/api/rain/beta-access?anonId=${encodeURIComponent(getAnonId())}`, { cache: 'no-store' })
+      if (!access.ok) throw new Error('Could not verify the beta export allowance.')
+      const allowance = await access.json() as { unlockRequired?: boolean; exportsRemaining?: number }
+      if (allowance.unlockRequired) {
+        void fetch('/api/rain/beta-access/interest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'beta_paywall_shown', anonId: getAnonId() }),
+        }).catch(() => {})
+        window.dispatchEvent(new CustomEvent('rain:beta-unlock-open'))
+        return
+      }
+    } catch (error) {
+      notifyError('Export allowance unavailable', error instanceof Error ? error.message : 'Please retry.')
       return
     }
 
