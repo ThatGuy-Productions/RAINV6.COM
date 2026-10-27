@@ -44,6 +44,13 @@ export const POST = withCsrf(async (req: NextRequest) => {
   const pkg = form.get('package')
   const packageSha256 = form.get('packageSha256')
 
+  if (pkg instanceof Blob && pkg.size > 200 * 1024 * 1024) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Package exceeds the 200 MB upload limit' },
+      { status: 413 },
+    )
+  }
+
   if (
     typeof jobId !== 'string' ||
     !jobId.trim() ||
