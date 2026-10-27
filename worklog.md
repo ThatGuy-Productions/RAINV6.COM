@@ -1218,7 +1218,7 @@ Important limitations / blockers:
 - Do not report historical usage metrics as zero or as measured data where the old deployment did not retain them. Future evidence starts only after persistence and event writes are verified.
 
 Verification:
-- Latest branch CI is running against PostgreSQL. Require all jobs to pass on the final head. The PostgreSQL integration test must run with `RUN_DB_INTEGRATION_TESTS=1`; a green CI run still does not establish that the live deployment has correct database secrets or that a real payment provider is connected.
+- Verified GitHub Actions run `40588375006` on commit `e3c736b1`: lint, typecheck, PostgreSQL schema validation, production build, and tests all passed; test output was **156 passed, 0 failed**. The PostgreSQL integration test ran with `RUN_DB_INTEGRATION_TESTS=1` and confirmed account, auth-token, project-settings, and event rows were visible from a second DB connection. This does not establish that the live deployment has correct database secrets/backups or that a real payment provider is connected; run CI again on any subsequent code changes.
 
 
 ---
