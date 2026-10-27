@@ -49,13 +49,13 @@ export const POST = withCsrf(async (req: NextRequest) => {
   // Anonymous path: fire the Event so the funnel captures this session,
   // but don't create a Session row (it requires a userId FK).
   if (!user) {
-    void trackEvent({
+    const telemetryRecorded = await trackEvent({
       userId: null,
       anonId,
       type: 'session_created',
       metadata: { name, anonymous: true },
     })
-    return NextResponse.json({ sessionId: null, anonymous: true }, { status: 200 })
+    return NextResponse.json({ sessionId: null, anonymous: true, telemetryRecorded }, { status: 200 })
   }
 
   try {
@@ -67,14 +67,14 @@ export const POST = withCsrf(async (req: NextRequest) => {
       },
     })
 
-    void trackEvent({
+    const telemetryRecorded = await trackEvent({
       userId: user.id,
       anonId,
       type: 'session_created',
       metadata: { sessionId: session.id },
     })
 
-    return NextResponse.json({ sessionId: session.id, anonymous: false }, { status: 201 })
+    return NextResponse.json({ sessionId: session.id, anonymous: false, telemetryRecorded }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/session] create failed:', err)
     // Never block the mastering workflow on an analytics write — the client
