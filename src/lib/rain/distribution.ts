@@ -825,7 +825,7 @@ export async function buildDistributionPackage(
   const mp3Bytes = new Uint8Array(await mp3Blob.arrayBuffer())
   const ernBytes = new TextEncoder().encode(ddexXml)
 
-  const safeTitle = (metadata.title || 'rain-release')
+  const safeTitle = metadata.title
     .replace(/[^a-zA-Z0-9-_]+/g, '_')
     .slice(0, 64) || 'rain-release'
 
@@ -884,7 +884,7 @@ export async function buildDistributionPackage(
     album: metadata.album ?? '',
     genre: metadata.genre ?? '',
     genreSubgenre: metadata.genreSubgenre,
-    releaseDate: metadata.releaseDate ?? new Date().toISOString().slice(0, 10),
+    releaseDate: metadata.releaseDate,
     originalReleaseDate: metadata.originalReleaseDate,
     releaseType: metadata.releaseType,
     label: metadata.label,
