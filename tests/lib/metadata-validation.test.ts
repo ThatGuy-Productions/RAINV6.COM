@@ -52,8 +52,8 @@ describe('validateIsrc', () => {
 
 describe('validateUpc', () => {
   test('accepts valid UPC with correct check digit', () => {
-    // 012345678905 — known valid EAN-13, UPC is last 12
-    expect(validateUpc('123456789059')).toBe(true)
+    // 012345678905 is a standard valid UPC-A with check digit 5.
+    expect(validateUpc('012345678905')).toBe(true)
   })
 
   test('rejects short UPC', () => {
@@ -65,7 +65,7 @@ describe('validateUpc', () => {
   })
 
   test('rejects UPC with wrong check digit', () => {
-    expect(validateUpc('123456789050')).toBe(false)
+    expect(validateUpc('012345678904')).toBe(false)
   })
 })
 
