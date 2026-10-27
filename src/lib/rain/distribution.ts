@@ -755,6 +755,8 @@ export async function buildDistributionPackage(
     year?: string
     isrc: string
     upc: string
+    senderDpid: string
+    recipientDpid: string
     /** ISWC for the underlying composition. TASK B enrichment. */
     iswc?: string
     releaseDate?: string
