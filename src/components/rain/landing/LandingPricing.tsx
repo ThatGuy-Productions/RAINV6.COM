@@ -41,9 +41,9 @@ export function LandingPricing({ onLaunch }: PricingProps) {
             transition={{ delay: 0.1 }}
             className="text-lg text-muted-foreground"
           >
-            Every feature is unlocked — WAV + MP3 export, 12-stem separation, spatial audio,
-            Ed25519 provenance, DDEX distribution. No paywalls, no gating.
-            Audio never leaves your device.
+            Every available beta feature is open to everyone — no feature tiers.
+            Your first two successful exports are free; continued exports are planned to unlock
+            for a one-time R49.00 payment. Secure checkout is not live yet. Audio processing stays in your browser.
           </motion.p>
         </div>
 
@@ -71,8 +71,8 @@ export function LandingPricing({ onLaunch }: PricingProps) {
               </div>
               <div className="mb-6">
                 <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold text-rain-accent">$0</span>
-                  <span className="text-sm text-muted-foreground">/forever</span>
+                  <span className="text-4xl font-bold text-rain-accent">R0</span>
+                  <span className="text-sm text-muted-foreground">/ first 2 exports</span>
                 </div>
                 <div className="text-xs text-muted-foreground mt-1 font-mono">{tier.renders} renders &amp; exports</div>
               </div>
