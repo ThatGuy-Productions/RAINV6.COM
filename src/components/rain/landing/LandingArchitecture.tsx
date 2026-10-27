@@ -16,7 +16,7 @@ const PIPELINE = [
   { n: 9, name: 'Per-Stem Processing', desc: 'Skipped until neural stems are available' },
   { n: 10, name: 'Master Bus', desc: 'EQ · Multiband · Width · Groove · Life' },
   { n: 11, name: 'Loudness Targeting', desc: '27 platform targets' },
-  { n: 12, name: 'Spatial Rendering', desc: 'Dolby Atmos HRTF binaural' },
+  { n: 12, name: 'Spatial Rendering', desc: 'Experimental HRTF binaural / ADM BWF draft — not Dolby-certified' },
   { n: 13, name: 'QC Validation', desc: '18 automated checks' },
   { n: 14, name: 'Forensic Watermark', desc: 'Ed25519 RAIN-CERT provenance (AudioSeal watermark: future capability)' },
   { n: 15, name: 'Output Packaging', desc: '24-bit WAV @ 48 kHz + 320 kbps MP3' },
