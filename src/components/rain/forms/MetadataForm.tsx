@@ -624,7 +624,7 @@ export function MetadataForm() {
                   placeholder="US-XXX-YY-NNNNN"
                   hint="Local test IDs are not registered and cannot be distributed. Enter your officially issued ISRC."
                   error={metadata.isrc && !validateIsrc(metadata.isrc) ? 'ISRC must match CC-XXX-YY-NNNNN.' : issueForField(issues, 'isrc')}
-                  warning={!metadata.isrc ? 'Recommended — generate if you don\'t have one' : undefined}
+                  warning={!metadata.isrc ? 'Required for distribution — enter an officially issued ISRC' : undefined}
                   suffix={
                     <button
                       type="button"
