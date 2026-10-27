@@ -157,47 +157,58 @@ export function kWeight(samples: Float32Array, sampleRate: number): Float32Array
  * absolute gate (-70 LUFS) → relative gate (-10 LU) → mean square → -0.691 + 10·log10(mean).
  */
 export function computeLufs(channels: Float32Array[], sampleRate: number): number {
-  if (channels.length === 0) return -70
-  const blockSize = Math.floor(sampleRate * 0.4) // 400 ms
-  const hopSize = Math.floor(blockSize * 0.25) // 75% overlap
-  const channelWeights = [1.0, 1.0, 1.0, 1.0, 1.41] // L, R, C, LFE, Ls/Rs
-  const totalLength = channels[0].length
+  if (channels.length === 0 || channels[0].length === 0 || sampleRate <= 0) return -70
 
-  // K-weight each channel
-  const weighted: Float32Array[] = channels.map((c) => kWeight(c, sampleRate))
+  const totalLength = Math.min(...channels.map((channel) => channel.length))
+  if (totalLength === 0) return -70
+  // Standard 400 ms blocks, 75% overlap. For material shorter than 400 ms,
+  // measure the available samples as one block instead of silently returning
+  // the silence floor.
+  const blockSize = Math.min(totalLength, Math.max(1, Math.floor(sampleRate * 0.4)))
+  const hopSize = Math.max(1, Math.floor(blockSize * 0.25))
 
-  // Gating block loudness
-  const blockLoudness: number[] = []
-  for (let start = 0; start + blockSize <= totalLength; start += hopSize) {
-    let sum = 0
-    for (let ch = 0; ch < weighted.length; ch++) {
-      const w = channelWeights[ch] ?? 1.0
-      let s = 0
-      const buf = weighted[ch]
-      for (let i = start; i < start + blockSize; i++) {
-        s += buf[i] * buf[i]
-      }
-      sum += w * (s / blockSize)
-    }
-    if (sum > 0) {
-      blockLoudness.push(-0.691 + 10 * Math.log10(sum))
-    }
+  // BS.1770 channel weighting: L/R/C = 1.0, LFE = 0, surrounds = 1.41.
+  const channelWeight = (channelIndex: number): number => {
+    if (channelIndex === 3) return 0
+    if (channelIndex >= 4) return 1.41
+    return 1.0
   }
 
-  if (blockLoudness.length === 0) return -70
+  const weighted = channels.map((channel) => kWeight(channel, sampleRate))
+  const blockEnergies: number[] = []
+  for (let start = 0; start + blockSize <= totalLength; start += hopSize) {
+    let energy = 0
+    for (let ch = 0; ch < weighted.length; ch++) {
+      const weight = channelWeight(ch)
+      if (weight === 0) continue
+      let sumSquares = 0
+      const buffer = weighted[ch]
+      for (let i = start; i < start + blockSize; i++) {
+        sumSquares += buffer[i] * buffer[i]
+      }
+      energy += weight * (sumSquares / blockSize)
+    }
+    if (energy > 0 && Number.isFinite(energy)) blockEnergies.push(energy)
+  }
 
-  // Absolute gate -70 LUFS
-  const absGated = blockLoudness.filter((l) => l > -70)
-  if (absGated.length === 0) return -70
+  if (blockEnergies.length === 0) return -70
 
-  // Relative gate: -10 LU below mean of abs-gated
-  const meanAbs = absGated.reduce((a, b) => a + b, 0) / absGated.length
-  const relGate = meanAbs - 10
-  const relGated = absGated.filter((l) => l > relGate)
-  if (relGated.length === 0) return meanAbs
+  // Absolute gate at -70 LUFS.
+  const absoluteGateEnergy = Math.pow(10, (-70 + 0.691) / 10)
+  const absoluteGated = blockEnergies.filter((energy) => energy > absoluteGateEnergy)
+  if (absoluteGated.length === 0) return -70
 
-  const integrated = relGated.reduce((a, b) => a + b, 0) / relGated.length
-  return integrated
+  // Relative gate is 10 LU below the mean energy of absolute-gated blocks.
+  const meanAbsoluteEnergy = absoluteGated.reduce((sum, energy) => sum + energy, 0) / absoluteGated.length
+  const meanAbsoluteLufs = -0.691 + 10 * Math.log10(meanAbsoluteEnergy)
+  const relativeGateLufs = meanAbsoluteLufs - 10
+  const relativeGateEnergy = Math.pow(10, (relativeGateLufs + 0.691) / 10)
+  const relativeGated = absoluteGated.filter((energy) => energy > relativeGateEnergy)
+  if (relativeGated.length === 0) return -70
+
+  // Integrated loudness averages gated energies first, then converts to LUFS.
+  const integratedEnergy = relativeGated.reduce((sum, energy) => sum + energy, 0) / relativeGated.length
+  return -0.691 + 10 * Math.log10(integratedEnergy)
 }
 
 // ---------------------------------------------------------------------------
