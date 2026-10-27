@@ -37,8 +37,8 @@ export async function POST(req: NextRequest) {
     const rl = await checkRateLimit(req, 'suggest', 15)
     if (!rl.ok) {
       return NextResponse.json(
-        { error: 'Too many requests', retryAfter: rl.retryAfter },
-        { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+        { error: rl.unavailable ? 'Rate limiting service unavailable' : 'Too many requests', retryAfter: rl.retryAfter },
+        { status: rl.unavailable ? 503 : 429, headers: { 'Retry-After': String(rl.retryAfter) } },
       )
     }
 
