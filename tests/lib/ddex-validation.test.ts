@@ -11,7 +11,7 @@ const metadata = {
   upc: '012345678905',
   senderDpid: 'PADPIDA2025010100A',
   recipientDpid: 'PADPIDA2014120301U',
-  audioResource: { filename: 'assets/Unit_Test_Track.wav', sha256: 'ab'.repeat(32), channels: 2, sampleRate: 48000, bitDepth: 24, sizeBytes: 12345 },
+  audioResource: { filename: 'assets/Unit_Test_Track.wav', sha256: 'ab'.repeat(32), hashSumBase64: 'A'.repeat(43) + '=', channels: 2, sampleRate: 48000, bitDepth: 24, sizeBytes: 12345 },
   releaseDate: '2026-10-27',
   releaseType: 'single' as const,
   label: 'Test Label',
