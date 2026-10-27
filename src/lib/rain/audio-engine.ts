@@ -888,76 +888,24 @@ class RainAudioEngine {
     // Stages 8/9 remain explicitly skipped until that model is integrated.
     wrappedOnProgress?.(7, 16, 'Source Separation skipped — neural model unavailable')
     checkCancel()
-    let separatedStems: import('./stems').StemResult[] | null = null
-    let stemsSkipReason: string | null = null
-    {
-      for (const c of inChannels) {
-        // Measure real DC offset (mean of all samples)
-        let sum = 0
-        for (let i = 0; i < c.length; i++) sum += c[i]
-        const dc = sum / c.length
-        // Subtract DC offset if significant (> 0.0001 = -80 dBFS)
-        if (Math.abs(dc) > 1e-4) {
-          for (let i = 0; i < c.length; i++) c[i] -= dc
-        }
-      }
-
-      // No licensed neural BS-RoFormer model is bundled. The available
-      // TypeScript routine is a DSP approximation, not true source separation,
-      // so never publish its output as neural stems or silently mark Stage 7 done.
-      stemsSkipReason = 'licensed neural BS-RoFormer model not bundled'
-
-    }
-    await sleep(0)
-
-    // Stage 8 — Per-Stem Repair. This stage is skipped until Stage 7 has a
-    // verified neural separation model and actually produces stems.
-    {
-      const label = separatedStems
-        ? 'Per-Stem Repair'
-        : `Per-Stem Repair (skipped — ${stemsSkipReason ?? 'no stems'})`
-      wrappedOnProgress?.(8, 16, label)
-      checkCancel()
-      if (separatedStems) {
-        const repairedStems = separatedStems.map((stem) => {
-          const repairedChannels = repairStem(stem.key, stem.channels, sampleRate)
-          return {
-            ...stem,
-            channels: repairedChannels,
-            rms: measureStemRmsDb(repairedChannels),
-            peakDb: measureStemPeakDb(repairedChannels),
-          }
-        })
-        separatedStems = repairedStems
-        // Re-emit so the Stems tab shows the post-repair measurements.
-        if (onStemsReady) onStemsReady(repairedStems)
+    // DC-offset removal is a real DSP operation; neural separation is not
+    // run because the required licensed model artifact is absent.
+    for (const channel of inChannels) {
+      let sum = 0
+      for (let i = 0; i < channel.length; i++) sum += channel[i]
+      const dc = sum / channel.length
+      if (Math.abs(dc) > 1e-4) {
+        for (let i = 0; i < channel.length; i++) channel[i] -= dc
       }
     }
     await sleep(0)
 
-    // Stage 9 — SAIL v2 Per-Stem Processing (P3-PIPELINE-89).
-    // Stem-Aware Iterative Limiter: per-stem limiting (vocal protection,
-    // drum loudness, bass control) + per-stem gain faders (from the session
-    // store, with mute/solo handling) + sum all stems back to a stereo bus.
-    // The summed bus replaces `inChannels` for Stage 10 onwards, so the
-    // master bus chain operates on the stem-summed signal per the spec.
-    // Skipped with an honest label when Stage 7 did not produce stems.
-    {
-      const label = separatedStems
-        ? 'Per-Stem Processing'
-        : `Per-Stem Processing (skipped — ${stemsSkipReason ?? 'no stems'})`
-      wrappedOnProgress?.(9, 16, label)
-      checkCancel()
-      if (separatedStems) {
-        const stemBus = sailProcessStems(separatedStems, sampleRate, length)
-        // Replace inChannels with the stem-summed bus. Stages 10+ now
-        // operate on the stem-summed signal. Stems are always stereo, so
-        // trim any extra channels (e.g. from mono duplication earlier).
-        inChannels[0] = stemBus[0]
-        inChannels[1] = stemBus[1]
-        if (inChannels.length > 2) inChannels.length = 2
-      }
-    }
+    wrappedOnProgress?.(8, 16, 'Per-Stem Repair skipped — no neural stems')
+    checkCancel()
+    await sleep(0)
+
+    wrappedOnProgress?.(9, 16, 'Per-Stem Processing skipped — no neural stems')
+    checkCancel()
     await sleep(0)
 
     // Stage 10 — Master Bus (P3-PIPELINE-89 restructure).
@@ -984,9 +932,8 @@ class RainAudioEngine {
         }
       }
 
-      // 2. Multiband compression — 4-band Linkwitz-Riley crossover at
-      //    80/500/4000 Hz with soft knee and feed-forward detection.
-      //    Industry-standard mastering crossover points.
+      // 2. Three-band low/mid/high compression with 200 Hz and 4 kHz
+      //    crossovers, soft knee, and feed-forward detection.
       //    Moved from old Stage 11 — spec says multiband comp belongs in the
       //    Master Bus stage, not the Loudness Targeting stage.
       // P4-GROOVE-EMOTION: if groove was detected, override attack/release
