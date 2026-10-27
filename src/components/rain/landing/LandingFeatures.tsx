@@ -29,7 +29,7 @@ const FEATURES: Feature[] = [
   {
     icon: <Sliders className="w-5 h-5" />,
     title: '16-Stage Mastering Pipeline',
-    description: 'From format normalization through DDEX distribution — every stage deterministic, every render bit-identical for the same input + params.',
+    description: 'Browser-based mastering with measurable DSP stages and explicit failure/skip states. Stem-dependent stages remain gated until the licensed neural model is bundled; export dither is intentionally stochastic.',
     color: '#AAFF00',
   },
   {
