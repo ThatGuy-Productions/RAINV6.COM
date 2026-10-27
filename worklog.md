@@ -1129,3 +1129,36 @@ Stage Summary:
 Remaining:
 - Finish P0.4 integration tests across every sensitive route.
 - Continue the core release blockers: real ONNX inference validation, genuine neural stem separation, full mastering acceptance, official DDEX XSD/profile validation, and live distribution-provider sandbox tests.
+
+
+---
+
+Task ID: 24
+Agent: RAIN V6 remediation
+Task: Incorporate operator clarification on live-beta persistence, usage evidence, and full-capability beta access.
+
+Operator clarification (2026-10-27):
+- Live beta accounts do not persist beyond the session.
+- The deployed beta does not retain reliable usage history for session/work hours, completed work, exports, or AIE activity. Historical values therefore cannot be substantiated from platform telemetry.
+- Every user receives the full available product capability during the free-beta stage. The beta must not be described as a limited-feature free tier.
+
+Audit interpretation:
+- This is an operational statement from the product operator. The repository contains Prisma account/session/render/event models and analytics helpers, but those source files alone do not prove that the live deployment has persistent storage configured or that instrumentation is wired into the deployed user paths.
+- Do not equate a missing retained record with no product usage. Do not estimate or fabricate historical usage to fill the evidence gap.
+- Keep README as the target specification. Record the gap as implementation/deployment work rather than quietly weakening the target requirements.
+- Preserve the free-beta full-capability policy across product features. Authentication and authorization protections for administrative/security-sensitive endpoints remain mandatory; full product capability does not mean anonymous access to administrative controls.
+
+Required next work:
+1. Inspect the actual deployed beta environment, persistence configuration, migrations, and event/render/export/AIE call sites.
+2. Establish a privacy-conscious, clearly disclosed, minimal durable telemetry model for future sessions; do not attempt to reconstruct unavailable historical metrics.
+3. Verify that every user-facing capability remains available to all beta users and remove/defer commercial tier restrictions during the beta, without weakening admin/API security.
+4. Add end-to-end tests proving anonymous/free-beta access to product workflows, accurate future event counting, failure-safe telemetry, and no fabricated dashboard values.
+5. Update the release evidence pack to distinguish operator-reported product usage from platform-measured metrics.
+
+Documentation updates:
+- Added the live-beta persistence and full-capability policy to `docs/audit/FEATURE-TRUTH-MATRIX.md`.
+- Added P0.0 telemetry and beta access-policy acceptance criteria to `docs/audit/CODE-TO-README-BACKLOG.md`.
+
+Status:
+- Clarification recorded in the remediation branch.
+- Deployment behaviour and end-to-end instrumentation are not yet independently verified. No historical metrics have been invented.
