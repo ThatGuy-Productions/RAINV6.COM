@@ -797,6 +797,7 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   Object.assign(params, overrides)
   const genreSaturationOverride = overrides.analog_saturation
   const genreSaturationModeOverride = overrides.saturation_mode
+  const genreStereoWidthFloor = overrides.stereo_width
   // Apply macro overrides (macros are authoritative source of truth post-heuristic)
   params.macro_brighten = macros.brighten
   params.macro_glue = macros.glue
@@ -814,6 +815,9 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   }
   if (genreSaturationModeOverride) {
     params.saturation_mode = genreSaturationModeOverride
+  }
+  if (typeof genreStereoWidthFloor === 'number') {
+    params.stereo_width = Math.max(params.stereo_width, genreStereoWidthFloor)
   }
   return params
 }
