@@ -384,54 +384,40 @@ async function getOrCreateSession(): Promise<InferenceSession> {
   if (_ortSession) return _ortSession
 
   const ort = await import('onnxruntime-web')
-
-  // Prefer WebGPU for acceleration, fall back to WASM
-  if (!_ortBackend) {
-    const backends = ['webgpu', 'wasm'] as const
-    for (const backend of backends) {
-      try {
-        await (ort.env.webgpu as unknown as { init?: () => Promise<void> })?.init?.()
-        _ortBackend = backend
-        break
-      } catch {
-        // backend not available, try next
-      }
-    }
-    if (!_ortBackend) {
-      _ortBackend = 'wasm' // last resort
-    }
-  }
-
-  // Never pass an unverified ONNX artifact to the runtime. The trained
-  // variant is eligible only when its own matching manifest is present.
   const candidates = [
     {
       modelPath: '/models/rain_base.onnx',
       manifestPath: '/models/rain_base.manifest.json',
-      backend: _ortBackend,
     },
     {
       modelPath: '/models/rain_trained.onnx',
       manifestPath: '/models/rain_trained.manifest.json',
-      backend: 'wasm',
     },
   ] as const
-
   const failures: string[] = []
+
+  // Verify each graph and its external weights before attempting any backend.
+  // For each verified model, try WebGPU first and then WASM. Do not select a
+  // backend merely because an optional initialization hook did not throw:
+  // support is proven only when InferenceSession.create succeeds.
   for (const candidate of candidates) {
     const verified = await verifyModelManifest(candidate.manifestPath, candidate.modelPath)
     if (!verified) {
       failures.push(`${candidate.modelPath}: missing or invalid manifest/hash`)
       continue
     }
-    try {
-      _ortSession = await ort.InferenceSession.create(candidate.modelPath, {
-        executionProviders: [candidate.backend],
-      })
-      _ortBackend = candidate.backend
-      return _ortSession
-    } catch (error) {
-      failures.push(`${candidate.modelPath}: ${error instanceof Error ? error.message : String(error)}`)
+
+    for (const backend of ['webgpu', 'wasm'] as const) {
+      try {
+        const session = await ort.InferenceSession.create(candidate.modelPath, {
+          executionProviders: [backend],
+        })
+        _ortSession = session
+        _ortBackend = backend
+        return session
+      } catch (error) {
+        failures.push(`${candidate.modelPath} (${backend}): ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
   }
 
@@ -696,7 +682,8 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
 export async function checkRainNetAvailable(): Promise<string | null> {
   try {
     const session = await getOrCreateSession()
-    return _ortBackend ?? session.outputNames.length > 0 ? (_ortBackend ?? 'wasm') : null
+    if (session.outputNames.length === 0) return null
+    return _ortBackend ?? 'wasm'
   } catch {
     return null
   }
