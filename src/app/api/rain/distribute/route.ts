@@ -13,6 +13,8 @@ interface ReleaseManifestInput {
   upc?: unknown
   title?: unknown
   artist?: unknown
+  genre?: unknown
+  releaseDate?: unknown
   ddexVersion?: unknown
   assets?: unknown
 }
@@ -73,6 +75,10 @@ export const POST = withCsrf(async (req: NextRequest) => {
     !manifest.title.trim() ||
     typeof manifest.artist !== 'string' ||
     !manifest.artist.trim() ||
+    typeof manifest.genre !== 'string' ||
+    !manifest.genre.trim() ||
+    typeof manifest.releaseDate !== 'string' ||
+    !/^\\d{4}-\\d{2}-\\d{2}$/.test(manifest.releaseDate) ||
     manifest.ddexVersion !== '4.3.2' ||
     typeof manifest.isrc !== 'string' ||
     !validateIsrc(manifest.isrc) ||
@@ -158,15 +164,35 @@ export const POST = withCsrf(async (req: NextRequest) => {
     )
   }
 
+  const checksumLines = new Map<string, string>()
+  for (const line of new TextDecoder().decode(checksumsBytes).split(/\\r?\\n/)) {
+    if (!line.trim()) continue
+    const match = /^([a-f0-9]{64})\\s{2}(.+)$/.exec(line)
+    if (!match || checksumLines.has(match[2])) {
+      return NextResponse.json(
+        { ok: false, requiresCredentials: false, error: 'checksums.txt contains malformed or duplicate entries' },
+        { status: 422 },
+      )
+    }
+    checksumLines.set(match[2], match[1].toLowerCase())
+  }
+
+  const digestOf = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
   const embeddedAssetsValid = (manifest.assets as Array<{ filename: string; sizeBytes: number; sha256: string }>).every((asset) => {
     const bytes = zipEntries[asset.filename]
     if (!bytes || bytes.byteLength !== asset.sizeBytes) return false
-    const digest = createHash('sha256').update(bytes).digest('hex')
-    return digest === asset.sha256.toLowerCase()
+    const digest = digestOf(bytes)
+    return digest === asset.sha256.toLowerCase() && checksumLines.get(asset.filename) === digest
   })
-  if (!embeddedAssetsValid) {
+  const embeddedManifestSha = digestOf(embeddedManifestBytes)
+  const embeddedErnSha = digestOf(ernXmlBytes)
+  if (
+    !embeddedAssetsValid ||
+    checksumLines.get('manifest.json') !== embeddedManifestSha ||
+    checksumLines.get('ern.xml') !== embeddedErnSha
+  ) {
     return NextResponse.json(
-      { ok: false, requiresCredentials: false, error: 'One or more ZIP assets do not match the manifest size or SHA-256' },
+      { ok: false, requiresCredentials: false, error: 'ZIP assets, ern.xml, manifest.json, and checksums.txt do not agree' },
       { status: 422 },
     )
   }
