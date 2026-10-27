@@ -82,7 +82,7 @@ import { Field, TextAreaField } from './Field'
 import { SelectField } from './SelectField'
 import { RadioField } from './RadioField'
 import { useSessionStore } from '@/lib/rain/store'
-import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+import { generateIsrc } from '@/lib/rain/provenance'
 import { notifySuccess, notifyInfo, notifyWarning } from '@/lib/rain/notifications'
 import {
   CONTRIBUTOR_ROLE_OPTIONS,
@@ -270,8 +270,8 @@ export function MetadataForm() {
   // ---- Toolbar actions ----
   const handleGenerateIds = React.useCallback(() => {
     const localSessionId = crypto.randomUUID()
-    update({ isrc: generateIsrc(localSessionId), upc: generateUpc(localSessionId) })
-    notifyWarning('Local test identifiers only', 'RAIN cannot register official ISRC/UPC codes. Replace these with identifiers issued to you by your rights/registration agencies before distribution.')
+    update({ isrc: generateIsrc(localSessionId) })
+    notifyWarning('Local test ISRC only', 'This value is not registered and cannot be distributed. Enter an ISRC officially assigned to your recording before distribution.')
   }, [update])
 
   const handleSave = React.useCallback(() => {
@@ -652,16 +652,8 @@ export function MetadataForm() {
                   placeholder="12-digit UPC"
                   hint="RAIN cannot issue official UPCs. Enter your GS1-registered UPC/EAN before distribution."
                   error={metadata.upc && !validateUpc(metadata.upc) ? 'UPC must be 12 digits with valid check digit.' : issueForField(issues, 'upc')}
-                  warning={!metadata.upc ? 'Recommended — generate if you don\'t have one' : undefined}
-                  suffix={
-                    <button
-                      type="button"
-                      onClick={() => update({ upc: generateUpc(crypto.randomUUID()) })}
-                      className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
-                    >
-                      <Sparkles className="w-3 h-3 inline mr-1" />Gen
-                    </button>
-                  }
+                  warning={!metadata.upc ? 'Required for distribution — obtain a registered UPC/EAN from GS1' : undefined}
+
                 />
                 <Field
                   label="Recording Year"
