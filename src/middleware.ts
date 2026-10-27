@@ -16,7 +16,7 @@ function checkLocalRateLimit(
   key: string,
   maxRequests: number,
   windowMs: number,
-): { allowed: boolean; remaining: number; resetAt: number } {
+): { allowed: true; remaining: number; resetAt: number } | { allowed: false; remaining: 0; resetAt: number } {
   const now = Date.now()
   const entry = localRateLimitStore.get(key)
 
@@ -214,7 +214,7 @@ function validateCsrf(request: NextRequest): boolean {
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const response = NextResponse.next()
 
