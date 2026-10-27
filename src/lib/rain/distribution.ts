@@ -741,6 +741,14 @@ export async function buildDistributionPackage(
   if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.releaseDate) {
     throw new Error('Release title, artist, genre, and release date are required before distribution.')
   }
+  const parsedReleaseDate = new Date(`${metadata.releaseDate}T00:00:00.000Z`)
+  if (
+    !/^\\d{4}-\\d{2}-\\d{2}$/.test(metadata.releaseDate) ||
+    !Number.isFinite(parsedReleaseDate.getTime()) ||
+    parsedReleaseDate.toISOString().slice(0, 10) !== metadata.releaseDate
+  ) {
+    throw new Error('Release date must be a real calendar date in YYYY-MM-DD format.')
+  }
   const compactIsrc = metadata.isrc?.replace(/[-\s]/g, '').toUpperCase() ?? ''
   if (!metadata.isrc || !validateIsrc(metadata.isrc) || compactIsrc.startsWith('US2XX')) {
     throw new Error('A registered ISRC is required. Local test identifiers cannot be distributed.')
