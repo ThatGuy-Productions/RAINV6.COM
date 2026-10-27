@@ -44,9 +44,9 @@ function count(value: number): number {
  * included export, before requiring verified payment.
  */
 export function evaluateBetaEntitlement(input: BetaEntitlementInput): BetaEntitlementDecision {
-  const freeRenders = count(input.completedFreeRenders)
-  const creditsUsed = count(input.monthlyCreditsUsed)
-  const exports = count(input.successfulExportsThisMonth)
+  const freeRenders = nonNegativeCount(input.completedFreeRenders)
+  const creditsUsed = nonNegativeCount(input.monthlyCreditsUsed)
+  const exports = nonNegativeCount(input.successfulExportsThisMonth)
   const freeRendersRemaining = Math.max(0, BETA_FREE_RENDER_ALLOWANCE - freeRenders)
 
   if (!input.hasVerifiedR49Unlock) {
@@ -67,10 +67,7 @@ export function evaluateBetaEntitlement(input: BetaEntitlementInput): BetaEntitl
   const monthlyExportsRemaining = Math.max(0, BETA_MONTHLY_EXPORT_LIMIT - exports)
   const canRender = monthlyCreditsRemaining >= BETA_CREDITS_PER_RENDER
   const canExport = monthlyExportsRemaining > 0
-
-  let reason: BetaEntitlementDecision['reason'] = 'paid-beta'
-  if (!canExport) reason = 'monthly-export-limit'
-  else if (!canRender) reason = 'monthly-credit-limit'
+  const reason = !canExport ? 'monthly-export-limit' : !canRender ? 'monthly-credit-limit' : 'paid-beta'
 
   return {
     canStartFullCapabilityRender: canRender,
