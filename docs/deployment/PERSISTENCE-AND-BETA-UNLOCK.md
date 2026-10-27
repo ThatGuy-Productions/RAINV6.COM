@@ -20,13 +20,13 @@ This is a release checklist, not evidence that production has already been confi
 - `visibleStudioHours` is an estimate from rate-limited visible-tab heartbeats, not verified human work time. Anonymous browser events are useful funnel signals but are less trustworthy than authenticated account events.
 - Keep telemetry notices, retention rules, and deletion/export procedures aligned with the privacy policy.
 
-## 3. Two-free-export beta experiment
+## 3. Beta credits, R49 unlock and monthly fair use
 
-- Product capabilities remain open to every user during beta. The first two successful audio exports are free; after that the product presents the planned R49.00 unlock.
-- The current implementation is a client-side UX gate because audio encoding is local. It is not tamper-proof paid-access enforcement.
-- The current unlock screen records paywall views and checkout intent only. It does not take money or grant a paid entitlement.
-- Before charging: integrate a real payment provider; set the amount server-side to ZAR 4,900 cents; verify signed provider callbacks/webhooks; persist payment and entitlement records in PostgreSQL; make callbacks idempotent; handle failures, cancellations, refunds, and disputes; and test success/failure/replay cases in the provider sandbox.
-- Count a paid conversion only after the provider confirms payment through a verified server-to-server callback. Never trust a client-supplied `paid=true` value or the current in-memory beta payment engine.
+- Operator-confirmed policy (2026-10-27): each beta identity receives two free full-capability use credits. Once consumed, gated use requires a R49.00 payment/unlock. A paid beta identity receives full capability subject to a fair-use limit of 30 successful exports per month.
+- The current code counts successful export events for the free allowance; it does not yet implement a separately defined use-credit unit or the 30-export paid monthly allowance. This is a known policy/implementation gap, not an accepted interpretation. Define whether a credit means one mastering run, one export, or one session before enabling the policy gate.
+- The current implementation is a client-side UX gate because audio encoding is local. It is not tamper-proof paid-access enforcement. The unlock screen currently records paywall views and checkout intent only; it does not take money or grant a paid entitlement.
+- Before charging, confirm whether R49 is a once-off unlock or recurring payment. Then integrate one real provider; set the price server-side to ZAR 4,900 cents; verify signed provider callbacks/webhooks; persist payment and entitlement records in PostgreSQL; make callbacks idempotent; handle failures, cancellations, refunds and disputes; and test success/failure/replay cases in the provider sandbox.
+- Count paid conversion only after verified server-to-server payment confirmation. Never trust a client-supplied paid=true value, browser redirect or ephemeral payment engine. Use a documented monthly boundary/timezone for the 30-export fair-use limit.
 
 ## 4. Release acceptance
 
@@ -35,6 +35,7 @@ Do not close the persistence P0 until all of the following are evidenced:
 - [ ] Account and session survive browser restart and application redeploy.
 - [ ] Project settings autosave and restore work end to end.
 - [ ] Export and AIE events persist and appear in admin reporting.
-- [ ] The two-export allowance works across sign-in and return visits without resetting the count.
-- [ ] Payment provider sandbox tests pass before live R49 checkout is enabled.
+- [ ] The two free use credits are consumed according to the confirmed credit unit across sign-in and return visits without reset.
+- [ ] After verified R49 unlock, full capability is enabled and successful exports are limited to 30 in the defined monthly period.
+- [ ] Payment duration/renewal is explicitly decided and sandbox tests pass before live charging.
 - [ ] Backup and restore procedure has been exercised.
