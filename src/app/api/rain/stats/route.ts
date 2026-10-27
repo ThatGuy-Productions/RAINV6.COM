@@ -96,18 +96,17 @@ export async function GET() {
     )
   } catch (err) {
     console.error('[api/rain/stats] failed:', err)
-    // Return zeros rather than a 500 — the landing page should never break
-    // because the stats DB is unavailable.
-    return NextResponse.json({
-      totalSignups: 0,
-      totalRenders: 0,
-      totalSessions: 0,
-      totalExports: 0,
-      totalFeedback: 0,
-      changelogEntries: 7,
-      activitySeries: [],
-      generatedAt: new Date().toISOString(),
-      error: 'stats unavailable',
-    })
+    // Never turn a storage/instrumentation failure into apparent zero usage.
+    // The landing page treats this as unavailable evidence, not a real count.
+    return NextResponse.json(
+      {
+        error: 'usage metrics unavailable',
+        generatedAt: new Date().toISOString(),
+      },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store' },
+      },
+    )
   }
 }
