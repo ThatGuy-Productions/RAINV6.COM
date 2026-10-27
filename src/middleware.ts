@@ -117,7 +117,7 @@ const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/auth/forgot-password': { max: 3, windowMs: 60_000 }, // 3 req/min
   '/api/rain/auth/reset-password': { max: 5, windowMs: 60_000 },  // 5 req/min
   '/api/rain/render': { max: 10, windowMs: 60_000 },          // 10 req/min
-  '/api/rain/distribute': { max: 5, windowMs: 60_000 },       // 5 req/min
+  '/api/rain/distribute': { max: 5, windowMs: 60_000 },       // expensive package submissions
   '/api/rain/distribute/finalize': { max: 5, windowMs: 60_000 },
   '/api/rain/feedback': { max: 3, windowMs: 60_000 },         // 3 req/min
   '/api/rain/reviews': { max: 5, windowMs: 60_000 },          // 5 req/min
@@ -125,7 +125,6 @@ const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/suggest': { max: 15, windowMs: 60_000 },         // 15 req/min
   '/api/rain/source': { max: 10, windowMs: 60_000 },          // 10 req/min (upload)
   '/api/rain/payment': { max: 5, windowMs: 60_000 },          // 5 req/min
-  '/api/rain/distribute': { max: 5, windowMs: 60_000 },      // limit expensive package submissions
   '/api/rain/admin/bootstrap': { max: 3, windowMs: 60_000 }, // protect first-admin bootstrap
   '/api/rain/admin/status': { max: 10, windowMs: 60_000 },
   '/api/rain/admin': { max: 20, windowMs: 60_000 },           // other admin routes
