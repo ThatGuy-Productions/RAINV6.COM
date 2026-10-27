@@ -140,7 +140,7 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
   }
 
   return handleCreate(body, req, origin)
-}
+})
 
 // ---------------------------------------------------------------------------
 // handleCreate — Create a new isolated payment session
