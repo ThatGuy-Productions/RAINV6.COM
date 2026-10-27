@@ -25,7 +25,7 @@
  *   7. Multi-channel BWF encoder (bext + fmt + data + axml chunks).
  *   8. ADM BWF spatial package exporter: produces a real ZIP containing the .spatial-bwf.wav
  *      ADM BWF file + a standalone audioDefinitionModelBwf.xml sidecar, ready
- *      for Dolby Atmos Renderer import.
+ *      for external renderer validation; this does not certify a Dolby Atmos deliverable.
  *
  * Output modes (config.outputMode):
  *   - STEREO:       M/S-enhanced stereo only (2ch). No upmix, no HRTF.
@@ -1019,7 +1019,7 @@ export async function processSpatial(
 }
 
 // ---------------------------------------------------------------------------
-// Atmos package export — real ZIP with .spatial-bwf.wav + audioDefinitionModelBwf.xml
+// Experimental ADM BWF spatial package — ZIP with .spatial-bwf.wav + XML sidecar
 // ---------------------------------------------------------------------------
 
 /**
@@ -1147,13 +1147,13 @@ function buildCrcTable(): Uint32Array {
 }
 
 /**
- * Build a real Dolby-Atmos-compatible FULL-SOURCE package as a single
+ * Build an experimental ADM BWF spatial draft as a single
  * downloadable ZIP. The archive contains:
  *
  *   1. <basename>.spatial-bwf.wav           — ADM BWF WAV file (bext + fmt + data +
  *                                       axml chunks), 24-bit PCM, N channels
  *                                       (bed + object beds). This is the file
- *                                       Dolby Atmos Renderer imports.
+ *                                       a compatible renderer can inspect after independent validation.
  *   2. audioDefinitionModelBwf.xml    — Standalone ADM XML sidecar (the same
  *                                       content embedded in the axml chunk,
  *                                       provided as a separate file for tools
@@ -1441,7 +1441,7 @@ function buildSpatialReadme(
   lines.push('  IMPORT INSTRUCTIONS')
   lines.push('----------------------------------------------------------------')
   lines.push('')
-  lines.push('  Dolby Atmos Renderer:')
+  lines.push('  Optional validation in Dolby Atmos Renderer (not certification):')
   lines.push('    File → Import Audio... → select the .spatial-bwf.wav file.')
   lines.push('    The renderer reads the axml chunk for full ADM metadata.')
   lines.push('')
