@@ -636,10 +636,16 @@ export function validateDdex(xml: string): DdexValidationResult {
   }
 
   const required = [
-    'NewReleaseMessage', 'MessageHeader', 'MessageId', 'MessageCreatedDateTime',
-    'ResourceList', 'SoundRecording', 'ResourceReference', 'ISRC', 'ReferenceTitle',
-    'Duration', 'ReleaseList', 'Release', 'ReleaseId', 'UPC', 'DisplayArtist',
-    'AIInvolvement', 'DealList',
+    'NewReleaseMessage', 'MessageHeader', 'MessageThreadId', 'MessageId',
+    'MessageSender', 'MessageRecipient', 'MessageCreatedDateTime', 'PartyList',
+    'PartyReference', 'ResourceList', 'SoundRecording', 'ResourceReference',
+    'SoundRecordingEdition', 'ISRC', 'TechnicalDetails', 'DeliveryFile', 'File',
+    'HashSum', 'HashSumValue', 'DisplayTitleText', 'DisplayTitle', 'DisplayArtistName',
+    'Duration', 'ContainsAI', 'ReleaseList', 'Release', 'ReleaseReference',
+    'ReleaseType', 'ReleaseId', 'ICPN', 'DisplayArtist', 'ReleaseLabelReference',
+    'DisplayGenre', 'ResourceGroup', 'TrackRelease', 'DealList', 'ReleaseDeal',
+    'DealReleaseReference', 'DealTerms', 'TerritoryCode', 'ValidityPeriod',
+    'StartDate', 'CommercialModelType', 'UseType',
   ]
   for (const tag of required) {
     if (!hasTag(tag)) errors.push(`Missing required element: <${tag}>`)
@@ -647,8 +653,8 @@ export function validateDdex(xml: string): DdexValidationResult {
 
   const isrc = tagText('ISRC')
   if (isrc && !validateIsrc(isrc)) errors.push(`Invalid ISRC format: ${isrc}`)
-  const upc = tagText('UPC')
-  if (upc && !validateUpc(upc)) errors.push(`Invalid UPC/EAN check digit: ${upc}`)
+  const upc = tagText('ICPN')
+  if (upc && !validateUpc(upc)) errors.push(`Invalid UPC/EAN check digit in ICPN: ${upc}`)
 
   return { ok: errors.length === 0, errors }
 }
