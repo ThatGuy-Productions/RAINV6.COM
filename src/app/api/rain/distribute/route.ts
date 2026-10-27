@@ -79,6 +79,13 @@ export const POST = withCsrf(async (req: NextRequest) => {
     )
   }
 
+  const releaseDateValue = typeof manifest.releaseDate === 'string' ? manifest.releaseDate : ''
+  const parsedReleaseDate = new Date(`${releaseDateValue}T00:00:00.000Z`)
+  const releaseDateValid =
+    /^\d{4}-\d{2}-\d{2}$/.test(releaseDateValue) &&
+    Number.isFinite(parsedReleaseDate.getTime()) &&
+    parsedReleaseDate.toISOString().slice(0, 10) === releaseDateValue
+
   if (
     typeof manifest.releaseId !== 'string' ||
     !manifest.releaseId.trim() ||
@@ -88,8 +95,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
     !manifest.artist.trim() ||
     typeof manifest.genre !== 'string' ||
     !manifest.genre.trim() ||
-    typeof manifest.releaseDate !== 'string' ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(manifest.releaseDate) ||
+    !releaseDateValid ||
     !manifest.provenance || typeof manifest.provenance !== 'object' ||
     manifest.ddexVersion !== '4.3.2' ||
     typeof manifest.isrc !== 'string' ||
