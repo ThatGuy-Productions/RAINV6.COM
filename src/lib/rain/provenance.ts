@@ -436,7 +436,7 @@ export async function verifyProvenance(cert: ProvenanceCertificate): Promise<boo
     )
     const message = hasV2Payload
       ? createProvenanceSigningPayload(cert)
-      : new TextEncoder().encode(cert.outputHash + JSON.stringify(cert.manifest))
+      : new TextEncoder().encode(cert.outputHash + JSON.stringify(cert.manifest)).buffer as ArrayBuffer
     const sigBytes = hexToBuf(cert.signature)
     // Must await — returning the promise without await defeats the try/catch
     // (async function semantics: `return p` ≠ `return await p` for error handling).
