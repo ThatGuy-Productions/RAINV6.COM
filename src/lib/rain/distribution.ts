@@ -750,7 +750,7 @@ export async function buildDistributionPackage(
   if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.releaseDate) {
     throw new Error('Release title, artist, genre, and release date are required before distribution.')
   }
-  const compactIsrc = metadata.isrc?.replace(/[-\\s]/g, '').toUpperCase() ?? ''
+  const compactIsrc = metadata.isrc?.replace(/[-\s]/g, '').toUpperCase() ?? ''
   if (!metadata.isrc || !validateIsrc(metadata.isrc) || compactIsrc.startsWith('US2XX')) {
     throw new Error('A registered ISRC is required. Local test identifiers cannot be distributed.')
   }
