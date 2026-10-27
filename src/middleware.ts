@@ -113,6 +113,7 @@ const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/feedback': { max: 3, windowMs: 60_000 },         // 3 req/min
   '/api/rain/reviews': { max: 5, windowMs: 60_000 },          // 5 req/min
   '/api/rain/assist': { max: 10, windowMs: 60_000 },          // 10 req/min
+  '/api/rain/suggest': { max: 15, windowMs: 60_000 },         // 15 req/min
   '/api/rain/source': { max: 10, windowMs: 60_000 },          // 10 req/min (upload)
   '/api/rain/payment': { max: 5, windowMs: 60_000 },          // 5 req/min
   '/api/rain/admin': { max: 20, windowMs: 60_000 },           // 20 req/min
