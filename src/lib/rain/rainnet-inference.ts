@@ -34,16 +34,71 @@ import type { InferenceSession, Tensor } from 'onnxruntime-web'
 
 /** Parameters for the Mel spectrogram matching RainNet's training setup. */
 
-// AI-M1 — Verify model manifest + checksum before loading ONNX
-async function verifyModelManifest(manifestPath: string): Promise<boolean> {
+interface RainNetModelManifest {
+  schemaVersion?: unknown
+  modelName?: unknown
+  externalDataFile?: unknown
+  checksums?: {
+    sha256?: unknown
+    sha256ExternalData?: unknown
+  }
+}
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
+}
+
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Verify the exact model artifact before ONNX Runtime is allowed to load it.
+ * External-data models must declare and verify their companion data file too.
+ * Placeholder hashes, missing artifacts, mismatched names, and malformed
+ * manifests fail closed; callers can then use the documented heuristic path.
+ */
+export async function verifyModelManifest(
+  manifestPath: string,
+  modelPath: string,
+): Promise<boolean> {
   try {
-    const res = await fetch(manifestPath, { cache: 'no-store' });
-    if (!res.ok) return false;
-    const manifest = await res.json();
-    if (!manifest.checksums?.sha256) return false;
-    // Production: stream-compute SHA-256 of /models/rain_base.onnx and compare
-    return true; // Passes manifest existence + checksum field presence
-  } catch { return false; }
+    const manifestResponse = await fetch(manifestPath, { cache: 'no-store' })
+    if (!manifestResponse.ok) return false
+
+    const manifest = await manifestResponse.json() as RainNetModelManifest
+    const modelName = modelPath.split('/').pop()
+    if (
+      manifest.schemaVersion !== 'rain-v1' ||
+      !modelName ||
+      manifest.modelName !== modelName ||
+      !isSha256Hex(manifest.checksums?.sha256)
+    ) return false
+
+    const modelResponse = await fetch(modelPath, { cache: 'no-store' })
+    if (!modelResponse.ok) return false
+    const modelBytes = await modelResponse.arrayBuffer()
+    if (await sha256Hex(modelBytes) !== manifest.checksums.sha256.toLowerCase()) return false
+
+    if (manifest.externalDataFile !== undefined) {
+      if (
+        typeof manifest.externalDataFile !== 'string' ||
+        manifest.externalDataFile.length === 0 ||
+        !isSha256Hex(manifest.checksums?.sha256ExternalData)
+      ) return false
+
+      const dataPath = `/models/${manifest.externalDataFile}`
+      const dataResponse = await fetch(dataPath, { cache: 'no-store' })
+      if (!dataResponse.ok) return false
+      const dataBytes = await dataResponse.arrayBuffer()
+      if (await sha256Hex(dataBytes) !== manifest.checksums.sha256ExternalData.toLowerCase()) return false
+    }
+
+    return true
+  } catch {
+    return false
+  }
 }
 
 const MEL_SR = 48000
@@ -346,25 +401,40 @@ async function getOrCreateSession(): Promise<InferenceSession> {
     }
   }
 
-  // Use the smaller/base model. rain_trained.onnx is the full trained variant.
-  const modelPath = '/models/rain_base.onnx'
+  // Never pass an unverified ONNX artifact to the runtime. The trained
+  // variant is eligible only when its own matching manifest is present.
+  const candidates = [
+    {
+      modelPath: '/models/rain_base.onnx',
+      manifestPath: '/models/rain_base.manifest.json',
+      backend: _ortBackend,
+    },
+    {
+      modelPath: '/models/rain_trained.onnx',
+      manifestPath: '/models/rain_trained.manifest.json',
+      backend: 'wasm',
+    },
+  ] as const
 
-  try {
-    _ortSession = await ort.InferenceSession.create(modelPath, {
-      executionProviders: [_ortBackend],
-    })
-    return _ortSession
-  } catch (err) {
-    console.warn('[RainNet] Loading base model failed, trying trained model:', err)
+  const failures: string[] = []
+  for (const candidate of candidates) {
+    const verified = await verifyModelManifest(candidate.manifestPath, candidate.modelPath)
+    if (!verified) {
+      failures.push(`${candidate.modelPath}: missing or invalid manifest/hash`)
+      continue
+    }
     try {
-      _ortSession = await ort.InferenceSession.create('/models/rain_trained.onnx', {
-        executionProviders: ['wasm'], // force WASM for trained model
+      _ortSession = await ort.InferenceSession.create(candidate.modelPath, {
+        executionProviders: [candidate.backend],
       })
+      _ortBackend = candidate.backend
       return _ortSession
-    } catch (err2) {
-      throw new Error(`RainNet model failed to load: ${err2 instanceof Error ? err2.message : String(err2)}`)
+    } catch (error) {
+      failures.push(`${candidate.modelPath}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
+
+  throw new Error(`No verified RainNet model could be loaded. ${failures.join('; ')}`)
 }
 
 // ---------------------------------------------------------------------------
