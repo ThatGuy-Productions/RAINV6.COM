@@ -237,7 +237,7 @@ RAIN will provide reasonable assistance to the Data Controller for data deletion
 
 ## 9. International Data Transfers
 
-### 9.1 No Transfers Occur
+### 9.1 Hosting Region and International Transfers
 
 The location of server-side account and project records depends on the configured PostgreSQL hosting provider. The hosting region, any international transfers, and applicable safeguards must be identified and disclosed before account persistence is enabled in production.
 
@@ -298,7 +298,7 @@ This DPA terminates automatically upon:
 
 ### 13.3 Effect of Termination
 
-Upon termination, the Data Processor's obligations cease. As no data is held by the Data Processor, no data return or deletion process is required.
+Upon termination, server-side account and project data must be handled according to the final retention/deletion schedule and the parties' applicable legal obligations. This schedule and process remain a production-release gate.
 
 ## 14. Governing Law
 
