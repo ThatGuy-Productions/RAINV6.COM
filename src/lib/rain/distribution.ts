@@ -126,7 +126,7 @@ export type DeliveryJobStatus =
   | 'submitted'      // Provider accepted the package; final delivery not yet confirmed.
   | 'pending_credentials' // Package is valid but provider endpoint/credentials are missing.
   | 'delivered'      // Provider explicitly confirmed final delivery/completion.
-  | 'failed'         // Provider returned non-2xx OR network error OR credentials missing.
+  | 'failed'         // Provider rejected submission or a network/validation error occurred.
 
 export interface DeliveryJob {
   id: string
@@ -1306,8 +1306,9 @@ export type SubmitResult = SubmitResultOk | SubmitResultFail
  *          The client surfaces this honestly — the package IS built and IS
  *          ready, but no delivery has been attempted.
  *        - If present → the server makes a real `fetch()` to
- *          `LABELGRID_API_URL` (default `https://api.labelgrid.com/v1/deliveries`)
- *          with `Authorization: Bearer <key>` and forwards the multipart body.
+ *          `LABELGRID_API_URL` (must be explicitly configured from the verified
+ *          provider API docs) with `Authorization: Bearer <key>` and forwards
+ *          the multipart body.
  *          2xx → `{ ok: true, status: 'submitted' }` unless the provider explicitly
  *          confirms delivery. Non-2xx or explicit provider failure →
  *          `{ ok: false, error: <provider body>, requiresCredentials: false }`.
