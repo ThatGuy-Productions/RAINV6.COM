@@ -136,7 +136,8 @@ export function AdminDoorModal({ onClose, onSuccess }: AdminDoorModalProps) {
                   <AlertCircle className="w-3.5 h-3.5 text-[#AAFF00] mt-0.5 flex-shrink-0" />
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     No enterprise admin exists yet. This one-time form creates the first
-                    admin account and signs you in immediately. Future access uses the login form.
+                    admin account and signs you in immediately. Enter the bootstrap secret configured
+                    by the deployment owner. Future access uses the login form.
                   </p>
                 </div>
               )}
