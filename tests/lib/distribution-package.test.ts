@@ -68,6 +68,8 @@ describe('Distribution package integration', () => {
       year: '2026',
       isrc: 'USABC2600001',
       upc: '012345678905',
+      senderDpid: 'PADPIDA2025010100A',
+      recipientDpid: 'PADPIDA2014120301U',
       releaseDate: '2026-10-27',
       releaseType: 'single',
       label: 'Test Label',
