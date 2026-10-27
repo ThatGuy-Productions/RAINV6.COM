@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { verifyProvenance } from '../../src/lib/rain/provenance'
+import { createProvenanceSigningPayload, verifyProvenance } from '../../src/lib/rain/provenance'
 import type { ProvenanceCertificate } from '../../src/lib/rain/types'
 
 async function signedCertificate(): Promise<ProvenanceCertificate> {
@@ -7,25 +7,30 @@ async function signedCertificate(): Promise<ProvenanceCertificate> {
     version: '2.2',
     claimGenerator: 'RAIN/6.0.0-test',
     actions: [{ action: 'c2pa.audio.mastered', parameters: { engine: 'test' }, when: '2026-10-27T00:00:00.000Z' }],
-    assertions: [{ label: 'org.rain.cert.level', data: { level: 'RAIN-CERT-1', algorithm: 'Ed25519' } }],
+    assertions: [
+      { label: 'org.rain.cert.level', data: { level: 'RAIN-CERT-1', algorithm: 'Ed25519' } },
+      { label: 'org.rain.cert.signature-payload', data: { version: 2, fields: ['algorithm', 'certId', 'inputHash', 'manifest', 'outputHash', 'signedAt', 'wasmHash'] } },
+    ],
   }
   const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
   const jwk = await crypto.subtle.exportKey('jwk', pair.publicKey)
-  const outputHash = 'ab'.repeat(32)
-  const message = new TextEncoder().encode(outputHash + JSON.stringify(manifest))
+  const unsigned = {
+    certId: 'RAIN-CERT-TEST',
+    inputHash: 'cd'.repeat(32),
+    outputHash: 'ab'.repeat(32),
+    wasmHash: 'rain-dsp-ts-v6:test',
+    signedAt: '2026-10-27T00:00:00.000Z',
+    algorithm: 'Ed25519' as const,
+    manifest,
+  }
+  const message = createProvenanceSigningPayload(unsigned)
   const signatureBytes = new Uint8Array(await crypto.subtle.sign('Ed25519', pair.privateKey, message))
   const signature = Array.from(signatureBytes, byte => byte.toString(16).padStart(2, '0')).join('')
 
   return {
-    certId: 'RAIN-CERT-TEST',
-    inputHash: 'cd'.repeat(32),
-    outputHash,
-    wasmHash: 'rain-dsp-ts-v6:test',
-    signedAt: '2026-10-27T00:00:00.000Z',
-    algorithm: 'Ed25519',
+    ...unsigned,
     publicKey: btoa(JSON.stringify(jwk)),
     signature,
-    manifest,
   } as ProvenanceCertificate
 }
 
