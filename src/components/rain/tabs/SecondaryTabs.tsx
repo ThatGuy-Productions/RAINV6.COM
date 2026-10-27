@@ -208,7 +208,7 @@ export function SpatialTab() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${(metadata?.title || fileName || 'rain-spatial').replace(/\s+/g, '_')}_${bedFormat}_atmos.zip`
+      a.download = `${(metadata?.title || fileName || 'rain-spatial').replace(/\s+/g, '_')}_${bedFormat}_spatial-adm-draft.zip`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
