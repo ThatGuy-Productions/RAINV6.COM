@@ -221,8 +221,8 @@ export function buildPricingTable(): Array<{
 }> {
   return Object.entries(DISTROKID_TIERS).map(([key, tier]) => ({
     tier: tier.name,
-    distrokid: `$${tier.dkPrice}/yr`,
-    rainPrice: formatZar(calculateRainPrice(tier.dkPrice)),
+    distrokid: `${formatZar(tier.dkPriceZar)}/yr`,
+    rainPrice: `${formatZar(tier.rainPriceZar)}/yr`,
     artists: String(tier.artists),
     features: tier.features.join(', '),
   }))
@@ -245,6 +245,6 @@ export function buildAddonTable(): Array<{
     rainPrice: 'rainSingle' in addon
       ? `${formatZar(addon.rainSingle)} single / ${formatZar(addon.rainAlbum)} album`
       : formatZar(addon.rainPrice),
-    note: addon.note ?? ('perYear' in addon && addon.perYear ? 'Per year' : ''),
+    note: 'note' in addon ? addon.note : ('perYear' in addon && addon.perYear ? 'Per year' : ''),
   }))
 }
