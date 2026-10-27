@@ -1263,3 +1263,31 @@ Stage Summary:
 - The codebase no longer treats a database file baked into the application build as the production account store.
 - Account persistence is now designed around a durable external PostgreSQL database with versioned migrations.
 - **Not yet declared complete:** live deployment configuration, cross-redeploy end-to-end proof, backup/restore, saved-project restore UI, and final legal review remain required.
+
+
+---
+
+Task ID: 28
+Agent: RAIN V6 remediation
+Task: Start full-stack engineering fix programme against the operator-confirmed beta entitlement policy.
+
+Operator-confirmed policy (2026-10-27):
+- Two free full-capability use credits per beta identity.
+- After those are consumed, gated use requires R49.00 payment/unlock.
+- Paid beta receives full capability subject to 30 successful exports per month.
+- Commercial launch moves to the full tiered subscription model.
+- Credit unit and R49 duration/renewal are not yet specified; no assumption is made.
+
+Changes:
+- Added docs/audit/ENGINEERING-FIX-PLAN.md with W0–W12 workstreams, dependency order, P0/P1/P2 release gates and acceptance evidence.
+- Added Payment, Entitlement and UsageRecord Prisma models and a new additive migration. The original initial migration was restored unchanged to preserve migration immutability.
+- Added a pure beta entitlement policy helper and Bun unit tests for two free use credits and the 30-export paid monthly limit. The helper is not yet wired into the live UI/quota path.
+- Updated README, backlog, truth matrix, deployment checklist and PR description to stop presenting the old two-export client gate as the confirmed product policy.
+- Marked the existing browser-local export counter as a legacy UX gate pending replacement by the durable entitlement workflow.
+- Hardened POST /api/rain/render: rejects invalid event kinds/formats/hash shapes, checks authenticated project ownership, writes authenticated Render/Event rows in one transaction, and only returns telemetryRecorded=true after a successful database write. Event metadata explicitly says the event is client-reported and the output was not independently verified.
+
+Validation:
+- GitHub Actions run 40591606706: lint, TypeScript and Prisma validation passed; production build passed. The PostgreSQL integration test was still running when this entry was written.
+- Latest head at time of entry: 5692495504b3de655e40a65a05ee001d14962210. CI run 40591834699 is in progress and must be checked for the final test result.
+- No merge performed. PR #3 remains draft; branch comparison is diverged (340 commits ahead, 2 behind). Reconcile the divergence only after reviewing the two missing base commits and current CI.
+- Live deployment database, real payment provider, webhook verification, monthly export enforcement, and end-user cross-redeploy persistence remain unverified.
