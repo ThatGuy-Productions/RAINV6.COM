@@ -35,7 +35,7 @@ interface TrackEventInput {
 /** Log one event. Call this from the actual code paths — see integration
  *  notes at the bottom of this file. Never throws; analytics must not be
  *  able to break the product. */
-export async function trackEvent({ userId, anonId, type, metadata }: TrackEventInput): Promise<void> {
+export async function trackEvent({ userId, anonId, type, metadata }: TrackEventInput): Promise<boolean> {
   try {
     await db.event.create({
       data: {
@@ -45,15 +45,23 @@ export async function trackEvent({ userId, anonId, type, metadata }: TrackEventI
         metadata: metadata ? JSON.stringify(metadata) : null,
       },
     })
-    if (userId) {
-      await db.account.update({
-        where: { id: userId },
-        data: { lastActiveAt: new Date() },
-      })
-    }
   } catch (err) {
-    console.error('[analytics] trackEvent failed:', err)
+    console.error('[analytics] event write failed:', err)
+    return false
   }
+
+  // The event row is the source of truth. A failure to update the optional
+  // lastActiveAt denormalization must not turn a successfully stored event
+  // into a reported telemetry failure.
+  if (userId) {
+    await db.account.update({
+      where: { id: userId },
+      data: { lastActiveAt: new Date() },
+    }).catch((err) => {
+      console.error('[analytics] lastActiveAt update failed:', err)
+    })
+  }
+  return true
 }
 
 // ─────────────────────────────────────────────────────────────────────────
