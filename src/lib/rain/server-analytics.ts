@@ -26,6 +26,8 @@ export type EventType =
   | 'referral_signup'
   | 'beta_paywall_shown'
   | 'beta_checkout_started'
+  | 'aie_vector_computed'
+  | 'aie_vector_exported'
 
 interface TrackEventInput {
   userId?: string | null
