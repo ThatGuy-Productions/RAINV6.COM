@@ -21,6 +21,7 @@ interface BetaStats {
   totalFeedback: number
   changelogEntries: number
   activitySeries: { date: string; count: number }[]
+  evidenceStatus: 'recorded_activity_available' | 'no_retained_activity'
 }
 
 export function LandingBetaVelocity() {
@@ -52,7 +53,8 @@ export function LandingBetaVelocity() {
     }
   }, [isInView])
 
-  const hasData = stats && (stats.totalSignups > 0 || stats.totalExports > 0 || stats.totalRenders > 0)
+  // Do not display historical totals as zero when the backing event history is empty.
+  const hasData = stats?.evidenceStatus === 'recorded_activity_available'
 
   return (
     <section
@@ -88,35 +90,35 @@ export function LandingBetaVelocity() {
           <StatCard
             icon={Users}
             label="Signups"
-            value={stats?.totalSignups}
+            value={hasData ? stats?.totalSignups : undefined}
             loading={loading}
             color="#AAFF00"
           />
           <StatCard
             icon={Disc3}
             label="Sessions"
-            value={stats?.totalSessions}
+            value={hasData ? stats?.totalSessions : undefined}
             loading={loading}
             color="#06B6D4"
           />
           <StatCard
             icon={Activity}
             label="Renders"
-            value={stats?.totalRenders}
+            value={hasData ? stats?.totalRenders : undefined}
             loading={loading}
             color="#F59E0B"
           />
           <StatCard
             icon={Download}
             label="Exports"
-            value={stats?.totalExports}
+            value={hasData ? stats?.totalExports : undefined}
             loading={loading}
             color="#10B981"
           />
           <StatCard
             icon={MessageSquare}
             label="Feedback"
-            value={stats?.totalFeedback}
+            value={hasData ? stats?.totalFeedback : undefined}
             loading={loading}
             color="#8B5CF6"
           />
@@ -133,7 +135,7 @@ export function LandingBetaVelocity() {
         {!loading && stats && !hasData && (
           <div className="text-center mt-8 rounded-xl border border-rain-border/60 bg-rain-surface-2/30 p-5">
             <p className="text-sm font-medium">Historical usage totals cannot be verified</p>
-            <p className="text-xs text-muted-foreground mt-2">The available data source contains no usable activity history. This is an evidence gap, not proof that no one used RAIN V6.</p>
+            <p className="text-xs text-muted-foreground mt-2">The database currently has no retained event history. Historical usage is unknown; this is an evidence gap, not proof that no one used RAIN V6.</p>
           </div>
         )}
 
