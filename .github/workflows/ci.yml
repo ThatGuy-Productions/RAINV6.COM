@@ -57,6 +57,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
+      - run: bunx prisma generate
       - run: bun scripts/verify-model-assets.ts
       - run: bun run build
 
