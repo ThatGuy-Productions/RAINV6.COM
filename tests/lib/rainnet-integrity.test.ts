@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { createWithBackendFallback, verifyModelManifest } from '../../src/lib/rain/rainnet-inference'
+import { createWithBackendFallback, hasExpectedRainNetSignature, verifyModelManifest } from '../../src/lib/rain/rainnet-inference'
 
 const originalFetch = globalThis.fetch
 
@@ -17,6 +17,15 @@ afterEach(() => {
 })
 
 describe('RainNet model integrity verification', () => {
+  it('accepts only the documented five-input, one-output ONNX signature', () => {
+    const inputs = ['mel', 'artist_vec', 'genre_id', 'platform_id', 'simple_mode']
+    expect(hasExpectedRainNetSignature(inputs, ['processing_params'])).toBe(true)
+    expect(hasExpectedRainNetSignature(inputs.slice(1), ['processing_params'])).toBe(false)
+    expect(hasExpectedRainNetSignature([...inputs, 'unexpected'], ['processing_params'])).toBe(false)
+    expect(hasExpectedRainNetSignature(inputs, ['other_output'])).toBe(false)
+    expect(hasExpectedRainNetSignature(inputs, ['processing_params', 'extra_output'])).toBe(false)
+  })
+
   it('falls back to WASM when WebGPU session creation fails', async () => {
     const attempts: string[] = []
     const result = await createWithBackendFallback(async backend => {
