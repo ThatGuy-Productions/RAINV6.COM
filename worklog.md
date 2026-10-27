@@ -1162,3 +1162,28 @@ Documentation updates:
 Status:
 - Clarification recorded in the remediation branch.
 - Deployment behaviour and end-to-end instrumentation are not yet independently verified. No historical metrics have been invented.
+
+
+---
+
+Task ID: 25
+Agent: RAIN V6 remediation
+Task: Align beta UI and public usage metrics with the operator's full-access/no-retained-history clarification.
+
+Changes:
+- Removed obsolete paid-tier language from the Mastering tab's report feature labels.
+- Removed the stale Independent-tier upgrade prompt from the Mastering Report dialog. The report/AIE are available to all users during the free beta; a 403 is now treated as an actual request failure, not proof that the user must pay.
+- Changed `GET /api/rain/stats` so a database/instrumentation failure returns HTTP 503 and an unavailable marker rather than synthetic zero counts.
+- Updated the landing-page Beta Velocity section so a failed metrics request displays an explicit historical-telemetry-unavailable message rather than a grid of zeros.
+- Changed the empty-data state to explain that no retained activity rows are not evidence that nobody used the product.
+- Kept enterprise/admin routes separately gated; unrestricted beta product capability does not grant administrative access.
+
+Acceptance notes:
+- The source repository contains analytics schema/helpers, but the operator reports that the deployed beta has no reliable retained history for session/work hours, completed work, exports, or AIE activity. Code presence is not proof of deployed instrumentation.
+- No historical metrics were fabricated or backfilled.
+- CI must pass on the latest head before this change is considered verified. Deployed environment/persistence, event wiring, and end-to-end beta access still require validation.
+
+Remaining:
+- Add tests for the public stats endpoint's unavailable response and the landing page's unavailable/empty states.
+- Audit all visible UI and product routes for stale tier restrictions while preserving admin authorization.
+- Implement a minimal, privacy-conscious, disclosed telemetry path for future usage only, after deployment/storage/consent requirements are confirmed.
