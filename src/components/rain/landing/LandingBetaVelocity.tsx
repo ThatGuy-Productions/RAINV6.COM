@@ -129,12 +129,11 @@ export function LandingBetaVelocity() {
           />
         </div>
 
-        {/* Empty state is shown only when a successful query measured zero activity. */}
+        {/* Zero rows cannot establish that the beta had zero real-world usage. */}
         {!loading && stats && !hasData && (
-          <div className="text-center mt-8">
-            <p className="text-[13px] text-muted-foreground italic">
-              No recorded activity is present in the queried data source.
-            </p>
+          <div className="text-center mt-8 rounded-xl border border-rain-border/60 bg-rain-surface-2/30 p-5">
+            <p className="text-sm font-medium">Historical usage totals cannot be verified</p>
+            <p className="text-xs text-muted-foreground mt-2">The available data source contains no usable activity history. This is an evidence gap, not proof that no one used RAIN V6.</p>
           </div>
         )}
 
