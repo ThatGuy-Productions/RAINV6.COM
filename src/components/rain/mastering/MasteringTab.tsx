@@ -258,6 +258,39 @@ export function MasteringTab() {
       setResult(result.analysis, result.score, result.params)
       setInputAnalysis(audioEngine.currentAnalysis ?? useSessionStore.getState().inputAnalysis!)
 
+      // Persist resumable project settings for authenticated users. The audio
+      // itself remains in-browser; users reselect the source file when they
+      // return. Do not let a failed save interrupt mastering or export.
+      void (async () => {
+        const persistentSessionId = await ensureBackendSession()
+        if (!persistentSessionId) return
+        const current = useSessionStore.getState()
+        const response = await fetch('/api/rain/session', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: persistentSessionId,
+            name: fileName ?? 'Untitled',
+            inputMetadata: current.metadata,
+            renderSettings: {
+              macros: current.macros,
+              genre: current.genre,
+              platform: current.platform,
+              simpleMode: current.simpleMode,
+              simpleIntensity: current.simpleIntensity,
+              params: result.params,
+              score: result.score,
+              analysis: result.analysis,
+              savedAt: new Date().toISOString(),
+            },
+            status: 'rendered',
+          }),
+        })
+        if (!response.ok) {
+          console.warn('[projects] project state was not persisted:', response.status)
+        }
+      })().catch((error) => console.warn('[projects] project autosave failed:', error))
+
       // Log this render to session history
       // P3-ANALYTICS: `duration` is the AUDIO file duration in SECONDS
       // (used by computeAnalytics for storage-size + minutes-processed math),
