@@ -806,7 +806,7 @@ export async function buildDistributionPackage(
     embedSignature: true,
     embedFingerprint: true,
     embedMetadata: true,
-    attachCertificate: true,
+    attachCertificate: false,
     metadata: {
       title: metadata.title,
       artist: metadata.artist,
