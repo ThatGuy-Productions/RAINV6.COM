@@ -468,45 +468,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
  * configured — this is expected during beta.
  */
 async function triggerDistributionFinalize(
-  userSessionId: string,
-  paymentSessionId: string,
+  _userSessionId: string,
+  _paymentSessionId: string,
 ): Promise<{ triggered: boolean; error?: string }> {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const finalizeUrl = `${appUrl}/api/rain/distribute/finalize`
-
-  try {
-    const resp = await fetch(finalizeUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId: userSessionId,
-        paymentSessionId,
-        // Distribution-finalize expects these fields from the client pipeline.
-        // When triggered from payment, the DDEX package should already be built.
-        // The finalize route will return 'pending_credentials' if LabelGrid
-        // is not configured — this is expected in beta.
-        ddexXml: '', // Populated by the client before calling finalize
-        manifest: {},
-        packageSha256: '',
-        packageSizeBytes: 0,
-        aiDisclosure: {},
-      }),
-      signal: AbortSignal.timeout(30_000),
-    })
-
-    if (resp.ok) {
-      return { triggered: true }
-    }
-
-    const respBody = await resp.json().catch(() => ({}))
-    return {
-      triggered: false,
-      error: (respBody as any).error || `Distribution pipeline returned HTTP ${resp.status}`,
-    }
-  } catch (e) {
-    return {
-      triggered: false,
-      error: e instanceof Error ? e.message : 'Failed to trigger distribution pipeline.',
-    }
+  // A payment event does not carry the actual ZIP bytes, validated ERN, or
+  // signed RAIN-CERT. Never call the legacy finalize route with empty metadata
+  // or claim that a release was submitted. The client must build and submit
+  // the complete package through POST /api/rain/distribute.
+  return {
+    triggered: false,
+    error: 'Payment confirmation cannot submit a release by itself. Build and submit the signed distribution ZIP separately.',
   }
 }
