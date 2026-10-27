@@ -36,6 +36,9 @@
 
 import { audioBufferToWav, audioBufferToMp3 } from './audio-engine'
 import { validateIsrc, validateUpc } from './metadata-validation'
+import { hashFloat32Channels, verifyProvenance } from './provenance'
+import type { ExportOptions } from './audio-engine'
+import type { ProvenanceCertificate } from './types'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,6 +60,8 @@ export interface DistributionAsset {
 
 export interface ReleaseManifest {
   releaseId: string
+  /** Signed RAIN-CERT attesting to the exact Float32 master used for exports. */
+  provenance: ProvenanceCertificate
   isrc: string
   upc: string
   title: string
@@ -738,6 +743,7 @@ export async function buildDistributionPackage(
     targetDsps?: string[]
     dspLabels?: Record<string, string>
   },
+  provenance: ProvenanceCertificate,
   artworkFile?: File,
 ): Promise<{
   manifest: ReleaseManifest
@@ -794,13 +800,39 @@ export async function buildDistributionPackage(
     throw new Error(`DDEX validation failed: ${validation.errors.join('; ')}`)
   }
 
-  // 2) Render WAV + MP3. These call the real encoders in audio-engine.ts
-  //    (audioBufferToWav appends a RIFF INFO chunk + TPDF dither; audioBufferToMp3
-  //    runs real LAME + ID3v2.3 tag). We pass null provenance here because the
-  //    distribution package attests to its own SHA-256s via the manifest; the
-  //    RAIN-CERT provenance flow lives on the Provenance tab and is orthogonal.
-  const wavBlob = audioBufferToWav(audioBuffer, 24, null)
-  const mp3Blob = audioBufferToMp3(audioBuffer, 320, null)
+  // 2) Require a valid RAIN-CERT for this exact Float32 master, then embed
+  // the certificate, signature, fingerprint, and release metadata into both
+  // delivery formats. The ZIP manifest is additional integrity evidence, not
+  // a substitute for audio-embedded provenance.
+  if (!await verifyProvenance(provenance)) {
+    throw new Error('RAIN-CERT signature is invalid. Regenerate provenance before distribution.')
+  }
+  const outputChannels = Array.from(
+    { length: audioBuffer.numberOfChannels },
+    (_, channel) => audioBuffer.getChannelData(channel),
+  )
+  const outputHash = await hashFloat32Channels(outputChannels)
+  if (outputHash !== provenance.outputHash) {
+    throw new Error('RAIN-CERT does not attest to the current master. Regenerate provenance after the last render.')
+  }
+
+  const exportOptions: ExportOptions = {
+    embedProvenance: true,
+    embedSignature: true,
+    embedFingerprint: true,
+    embedMetadata: true,
+    attachCertificate: true,
+    metadata: {
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      year: metadata.year,
+      isrc: metadata.isrc,
+      comment: 'RAIN V6 mastered export with embedded RAIN-CERT provenance',
+    },
+  }
+  const wavBlob = audioBufferToWav(audioBuffer, 24, provenance, exportOptions)
+  const mp3Blob = audioBufferToMp3(audioBuffer, 320, provenance, exportOptions)
 
   // 3) Convert Blobs to Uint8Array (one copy each — fine for the typical
   //    30-100 MB master sizes we deal with).
@@ -859,6 +891,7 @@ export async function buildDistributionPackage(
   const releaseId = `RAIN-RLS-${metadata.isrc}-${Date.now().toString(36)}`
   const manifest: ReleaseManifest = {
     releaseId,
+    provenance,
     isrc: metadata.isrc,
     upc: metadata.upc,
     title: metadata.title,
