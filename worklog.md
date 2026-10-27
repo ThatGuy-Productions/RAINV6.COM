@@ -1219,3 +1219,47 @@ Important limitations / blockers:
 
 Verification:
 - Latest branch CI is running against PostgreSQL. Require all jobs to pass on the final head. The PostgreSQL integration test must run with `RUN_DB_INTEGRATION_TESTS=1`; a green CI run still does not establish that the live deployment has correct database secrets or that a real payment provider is connected.
+
+
+---
+
+Task ID: 27
+Agent: RAIN V6 remediation
+Task: Correct session-only account persistence by replacing the packaged SQLite snapshot architecture with durable PostgreSQL and versioned migrations.
+
+Operator correction:
+- Account continuity is a major product defect. Accounts must persist beyond the browser/session and remain available after application restarts and redeployments.
+- Do not describe session-only accounts as acceptable beta behaviour. Do not fabricate historical account, hours, saved-work, export, or AIE metrics that were not retained.
+
+Repository findings:
+- Authentication code already persists Account and AuthToken rows, and the schema includes saved Session metadata, Render rows, and Event records.
+- The canonical Prisma schema was still using SQLite while production documentation described PostgreSQL.
+- The custom production build copied a build-time SQLite database into the deployment package; each redeployment could therefore restore an old snapshot rather than continue using the live database.
+- The previous incident report records a destructive schema push that lost approximately 135 accounts; those historical records are unrecoverable. This remediation does not claim to restore them.
+
+Changes:
+- Switched `prisma/schema.prisma` to PostgreSQL as the canonical database provider.
+- Added the initial versioned PostgreSQL migration and migration provider lock file.
+- Replaced the schema-push script with `db:migrate`, `db:migrate:deploy`, and `db:migrate:status` commands.
+- Updated the development startup path to require a PostgreSQL `DATABASE_URL` and apply versioned migrations.
+- Removed the build-time database snapshot from `.zscripts/build.sh`; deployment packages must not contain a production database copy.
+- Updated the custom deployment package to include Prisma CLI/engines and migrations, then apply migrations before starting Next.js.
+- Updated the Docker runtime to reject missing/non-PostgreSQL `DATABASE_URL` and apply migrations before serving requests.
+- Updated CI to validate the PostgreSQL schema, start a PostgreSQL service, apply migrations, and enable a persistence integration test.
+- Added `tests/integration/persistent-account.test.ts`, which creates an account, login token, saved project metadata, and export event, then reads them through an independent database connection.
+- Corrected README, master dossier, developer handbook, backlog, and truth-matrix claims that treated SQLite snapshots or no-account architecture as the target.
+- Updated the privacy policy to distinguish browser-local audio/AIE/provenance keys from server-side account/security/project/event metadata.
+- Marked the DPA as a draft pending hosting/sub-processor details, retention/deletion policy, data-subject request handling, and legal review.
+
+Verification status:
+- Earlier CI on commit `4ea1e692` had lint, typecheck, and Prisma validation passing; production build was still running when this entry was written.
+- The PostgreSQL migration and integration test must pass on the latest branch head before code-level acceptance.
+- This proves only database durability across independent connections in CI. Actual live deployment persistence remains unverified until the deployment receives a durable managed PostgreSQL service and secret `DATABASE_URL`, migrations run successfully, and a user is tested across browser/app restarts and a redeploy.
+- Configure automated backups and perform a restore test before declaring account persistence production-ready.
+- The end-user saved-project restore/reselect-source workflow and a production retention/deletion policy remain release gates. Source audio stays browser-local under the saved-project API; only project settings/metadata are persisted.
+- Historical metrics from before durable instrumentation remain unknown and must not be reconstructed or presented as measured.
+
+Stage Summary:
+- The codebase no longer treats a database file baked into the application build as the production account store.
+- Account persistence is now designed around a durable external PostgreSQL database with versioned migrations.
+- **Not yet declared complete:** live deployment configuration, cross-redeploy end-to-end proof, backup/restore, saved-project restore UI, and final legal review remain required.
