@@ -640,6 +640,7 @@ class RainAudioEngine {
     onProgress?: (stage: number, total: number, name: string) => void,
     signal?: AbortSignal,
     onStemsReady?: (stems: import('./stems').StemResult[]) => void,
+    simpleMode = false,
   ): Promise<{
     buffer: AudioBuffer
     analysis: AudioAnalysis
@@ -695,6 +696,15 @@ class RainAudioEngine {
       onProgress?.(stage, total, name)
     }
 
+    // Stage 1: copy decoded source channels before any analysis/inference.
+    // The prior ordering referenced `inChannels` before it was declared,
+    // causing the AI/groove stages to fail before the DSP pipeline began.
+    wrappedOnProgress?.(1, 16, 'Format Normalization')
+    checkCancel()
+    const inChannels: Float32Array[] = []
+    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
+    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
+
     try {
     // ─── Stage 4: AI Inference (RainNet v2) ───
     // P3-RAINNET: try ONNX inference first; fall back to genre heuristics
@@ -711,13 +721,12 @@ class RainAudioEngine {
     let grooveEmotionOverrides: import('./groove-emotion').GrooveEmotionOverrides | null = null
     try {
       const { analyzeGrooveEmotion } = await import('./groove-emotion')
-      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate)
-      grooveEmotionOverrides = geProfile?.overrides ?? null
-      if (grooveEmotionOverrides) {
-        console.log(
-          `[GrooveEmotion] BPM=${geProfile.profile.bpm ?? '?'} | groove=${geProfile.profile.grooveType} | emotion=${geProfile.profile.emotionQuadrant}`,
-        )
-      }
+      const sourceAnalysis = this.analysis ?? analyzeAudio(inChannels, sampleRate)
+      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate, sourceAnalysis.spectralFeatures, genre, platform)
+      grooveEmotionOverrides = geProfile.overrides
+      console.log(
+        `[GrooveEmotion] BPM=${geProfile.profile.groove.bpm ?? '?'} | groove=${geProfile.profile.groove.grooveType} | emotion=${geProfile.profile.emotion.quadrant}`,
+      )
     } catch (geError) {
       console.warn('[GrooveEmotion] analysis failed — continuing without groove/emotion:', geError)
     }
@@ -748,13 +757,6 @@ class RainAudioEngine {
     applyMacrosToParams(params)
     this.params = params
 
-    wrappedOnProgress?.(1, 16, 'Format Normalization')
-    checkCancel()
-    // Extract channel data
-    const inChannels: Float32Array[] = []
-    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
-    // Force stereo: if mono, duplicate
-    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
 
     // AUDIT-C4 / DIRECTIVE FIX: stages 2-5 were pure `await sleep()` theatre.
     // Each stage now performs REAL, measurable DSP work that contributes to
@@ -1042,7 +1044,7 @@ class RainAudioEngine {
       //    Master Bus stage, not the Loudness Targeting stage.
       // P4-GROOVE-EMOTION: if groove was detected, override attack/release
       // with groove-locked musical time constants before compression.
-      if (grooveEmotionOverrides) {
+      if (grooveEmotionOverrides?.mb_attack_override && grooveEmotionOverrides.mb_release_override) {
         params.mb_attack_low = grooveEmotionOverrides.mb_attack_override.low
         params.mb_attack_mid = grooveEmotionOverrides.mb_attack_override.mid
         params.mb_attack_high = grooveEmotionOverrides.mb_attack_override.high
