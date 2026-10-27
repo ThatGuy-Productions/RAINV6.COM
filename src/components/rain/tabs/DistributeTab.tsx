@@ -679,7 +679,7 @@ function JobRow({
                 <span className="break-all">{job.error}</span>
               </div>
             )}
-            {job.providerResponse && job.status === 'delivered' && (
+            {job.providerResponse && (job.status === 'delivered' || job.status === 'submitted') && (
               <div className="text-rain-accent mt-1 truncate">
                 Provider: {job.providerResponse.slice(0, 120)}
                 {job.providerResponse.length > 120 ? '…' : ''}
@@ -698,7 +698,7 @@ function JobRow({
               Submit
             </button>
           )}
-          {job.status === 'failed' && (
+          {(job.status === 'failed' || job.status === 'pending_credentials') && (
             <button
               onClick={onRetry}
               className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors flex items-center gap-1"
@@ -758,6 +758,8 @@ function StatusPill({ status }: { status: DeliveryJobStatus }) {
     pending: '#64748B',
     packaged: '#AAFF00',
     submitting: '#F59E0B',
+    submitted: '#60A5FA',
+    pending_credentials: '#F59E0B',
     delivered: '#10B981',
     failed: '#F97316',
   }
