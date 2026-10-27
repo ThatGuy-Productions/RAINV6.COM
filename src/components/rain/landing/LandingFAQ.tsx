@@ -45,7 +45,7 @@ const FAQS: FAQItem[] = [
     id: 'formats',
     question: 'What export formats are supported?',
     answer:
-      'WAV 24-bit (authoritative master, 48 kHz, TPDF dither), WAV 16-bit (CD-compatible), MP3 320 kbps (streaming distribution), and Dolby Atmos 7.1.4 packages (.atmos.wav + ADM XML sidecar + spatial.json + README + MANIFEST with SHA-256). Every export can embed an Ed25519 RAIN-CERT provenance certificate and metadata tags (ID3v2 for MP3, RIFF LIST/INFO for WAV).',
+      'WAV 24-bit, WAV 16-bit, and MP3 320 kbps exports are available. The spatial tab can create an experimental ADM BWF draft ZIP with an XML sidecar and SHA-256 manifest; it is not a Dolby Atmos-certified deliverable and must be validated in a compatible renderer before commercial use. WAV/MP3 exports can embed RAIN-CERT provenance when a valid certificate is available.',
     icon: Download,
     accent: '#06B6D4',
   },
