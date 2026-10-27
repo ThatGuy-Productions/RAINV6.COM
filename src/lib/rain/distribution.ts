@@ -24,8 +24,10 @@
  *     honestly return `{ ok: false, requiresCredentials: true, error: '...' }`
  *     — no automatic "delivered" state without a 2xx response.
  *
- * The ISRC/UPC generators in `provenance.ts` are reused (they emit real
- * ISO-3901 / EAN-13-checksum-correct identifiers).
+ * Locally generated identifier strings are test fixtures only; syntactic
+ * check digits do not mean an ISRC/UPC has been officially registered. The
+ * package builder rejects local test ISRCs and requires format-valid values;
+ * the UI additionally requires explicit confirmation of official assignment.
  *
  * Spec: TECH-STACK-SPECIFICATION v6.0 — Stage 16 (Distribution). September
  * 2025 EU AI Act Article 50 disclosure fields are embedded in the
@@ -33,6 +35,7 @@
  */
 
 import { audioBufferToWav, audioBufferToMp3 } from './audio-engine'
+import { validateIsrc, validateUpc } from './metadata-validation'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -743,6 +746,18 @@ export async function buildDistributionPackage(
   packageBytes: Uint8Array
   validation: DdexValidationResult
 }> {
+  // Never package fabricated fallback metadata or local test identifiers.
+  if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.releaseDate) {
+    throw new Error('Release title, artist, genre, and release date are required before distribution.')
+  }
+  const compactIsrc = metadata.isrc?.replace(/[-\\s]/g, '').toUpperCase() ?? ''
+  if (!metadata.isrc || !validateIsrc(metadata.isrc) || compactIsrc.startsWith('US2XX')) {
+    throw new Error('A registered ISRC is required. Local test identifiers cannot be distributed.')
+  }
+  if (!metadata.upc || !validateUpc(metadata.upc)) {
+    throw new Error('A registered UPC/EAN with a valid check digit is required before distribution.')
+  }
+
   // 1) Build + validate the DDEX XML first — fail fast if metadata is bad.
   const ddexXml = buildDdexErnXml({
     title: metadata.title,
