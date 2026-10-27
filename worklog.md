@@ -1210,12 +1210,12 @@ Changes made on this branch:
 - Added conversion funnel event types. A client-side intent event can never mark an account as paid.
 
 Important limitations / blockers:
-- These changes do not by themselves prove persistent accounts in the deployed beta. The current Prisma schema uses SQLite while its comments describe PostgreSQL production. A durable production database, correct migrations, deployment secrets, backups, and cross-restart tests are mandatory.
+- The repository schema has now been changed to PostgreSQL, a versioned initial migration has been added, CI runs against PostgreSQL, and `tests/integration/persistent-account.test.ts` verifies account, auth-token, project settings, and usage-event rows from a second independent database connection. This proves DB persistence when the integration test is enabled; it does not prove that the live deployment has a durable `DATABASE_URL`, applied migrations, backups, or a successful cross-deploy restart.
 - Saved project APIs and render-time autosave are not yet a complete restore workflow; the UI to browse a saved project, restore its settings, and ask the user to reselect the source audio still needs to be completed and tested.
 - The two-export gate is currently a client UX gate because audio export is performed locally in the browser. It can be bypassed by a modified client and must not be described as tamper-proof enforcement.
 - No payment has been integrated or taken. The current payment engine is ephemeral and beta-mode zero-priced. Configure a real provider, verified callback/webhook, persistent entitlement/payment record, idempotency, refunds/failure handling, and tests before charging R49 or counting paid conversions.
-- AIE usage must be instrumented at the real execution points; a generic tab-view event is not proof that an AIE task ran.
+- AIE vector computation and signed-vector export now emit dedicated server events without uploading the vector or source audio. Admin funnel metrics include AIE counts, R49 paywall displays, checkout intent, and visible-studio-hour estimates. These are future measurements only after deployed database writes succeed; visible-tab hours are estimates, not verified human work.
 - Do not report historical usage metrics as zero or as measured data where the old deployment did not retain them. Future evidence starts only after persistence and event writes are verified.
 
 Verification:
-- Automated CI is required on the latest branch head after these edits. A green typecheck/build alone will not establish production database durability or payment-provider readiness.
+- Latest branch CI is running against PostgreSQL. Require all jobs to pass on the final head. The PostgreSQL integration test must run with `RUN_DB_INTEGRATION_TESTS=1`; a green CI run still does not establish that the live deployment has correct database secrets or that a real payment provider is connected.
