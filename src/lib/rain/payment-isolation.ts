@@ -645,7 +645,7 @@ export class PaymentIsolation {
     provider: PaymentMethod,
     amountCents: number,
     req: NextRequest,
-  ): Promise<{ session: PaymentSession } | { error: string; retryAfter?: number }> {
+  ): Promise<{ session: PaymentSession } | { error: string; retryAfter?: number; unavailable?: boolean }> {
     // ── Rate limit check ────────────────────────────────────────────────
     const rateCheck = await checkRateLimit(req, `payment:${userSessionId}`, PAYMENT_RATE_LIMIT_RPM)
     if (!rateCheck.ok) {
