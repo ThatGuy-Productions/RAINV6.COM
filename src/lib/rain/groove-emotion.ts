@@ -132,9 +132,9 @@ export interface GrooveEmotionProfile {
  */
 export interface GrooveEmotionOverrides {
   /** Override multiband attack times (ms) with groove-locked values (4-band). */
-  mb_attack_override?: { sub: number; low: number; mid: number; high: number; air: number }
+  mb_attack_override?: { low: number; mid: number; high: number }
   /** Override multiband release times (ms) with groove-locked values (4-band). */
-  mb_release_override?: { sub: number; low: number; mid: number; high: number; air: number }
+  mb_release_override?: { low: number; mid: number; high: number }
   /** Emotion-tempered EQ gain adjustments (added to base eq_gains). */
   eq_emotion_temper: number[]
   /** Emotion-tempered stereo width multiplier. */
