@@ -23,15 +23,17 @@ import { getAnonId } from '@/lib/rain/anon-id'
 // truth for activation/retention — see server-analytics.ts). Separate from
 // recordExportDetails above, which writes local IndexedDB telemetry for
 // this browser's own Analytics tab. Best-effort; never blocks the download.
-async function reportBetaExportEvent(format: string, outputFileHash: string | undefined) {
+async function reportBetaExportEvent(format: string, outputFileHash: string | undefined): Promise<boolean> {
   try {
-    await fetch('/api/rain/render', {
+    const response = await fetch('/api/rain/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId() }),
     })
+    return response.ok
   } catch (e) {
     console.warn('[analytics] reportBetaExportEvent failed:', e)
+    return false
   }
 }
 
@@ -189,7 +191,7 @@ export function ExportTab() {
     // (spatial package / mp3 / wav) records its own format string + size + duration.
     const exportStart = Date.now()
     const fileState = useSessionStore.getState()
-    const recordExport = (format: string, blob: Blob, bitDepthOverride?: number) => {
+    const recordExport = async (format: string, blob: Blob, bitDepthOverride?: number) => {
       void recordExportDetails({
         timestamp: Date.now(),
         format,
@@ -200,7 +202,8 @@ export function ExportTab() {
         channels: fileState.fileChannels || 2,
         fileName: fileState.fileName ?? '(unknown)',
       }).catch((e) => console.warn('[analytics] recordExportDetails failed:', e))
-      void reportBetaExportEvent(selectedFormat, rainCert?.outputHash)
+      const recorded = await reportBetaExportEvent(selectedFormat, rainCert?.outputHash)
+      if (!recorded) notifyError('Export completed, usage record pending', 'Your download succeeded, but the beta usage counter could not be confirmed. Please keep this window open and retry before another export.')
     }
     try {
       const format = FORMATS.find((f) => f.id === selectedFormat)!
@@ -246,7 +249,7 @@ export function ExportTab() {
         // README.txt + MANIFEST.json (real SHA-256 over every file).
         const blob = await exportSpatialPackage(result, { title: metadata.title, artist: metadata.artist }, config)
         triggerDownload(blob, `${baseName}_Spatial_ADM_Draft.zip`)
-        recordExport('ADM-BWF-SPATIAL-DRAFT', blob, 24)
+        await recordExport('ADM-BWF-SPATIAL-DRAFT', blob, 24)
         notifySuccess(
           'ADM BWF spatial draft package created',
           `${result.processedSeconds.toFixed(1)}s · 5 files · ${(blob.size / 1024 / 1024).toFixed(1)} MB`,
@@ -279,10 +282,10 @@ export function ExportTab() {
             `${baseName}.cert.json`,
           )
           triggerDownload(zipBlob, `${baseName}_RAIN.zip`)
-          recordExport('MP3-320+SIDECAR', zipBlob, 16)
+          await recordExport('MP3-320+SIDECAR', zipBlob, 16)
         } else {
           triggerDownload(blob, `${baseName}_RAIN.mp3`)
-          recordExport('MP3-320', blob, 16)
+          await recordExport('MP3-320', blob, 16)
         }
         reportExportResult(result, 'MP3')
         setIsExporting(false)
