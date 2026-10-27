@@ -468,7 +468,7 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
           <BitsPerSample>${audio.bitDepth}</BitsPerSample>
           <File>
             <URI>${escapeXml(audio.filename)}</URI>
-            <HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${audio.sha256}</HashSumValue></HashSum>
+            <HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${audio.hashSumBase64}</HashSumValue></HashSum>
           </File>
         </DeliveryFile>
       </TechnicalDetails>`
@@ -486,7 +486,7 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
           <ImageCodecType>${artwork.format === 'image/jpeg' ? 'JPEG' : 'PNG'}</ImageCodecType>
           <ImageHeight>${artwork.height}</ImageHeight>
           <ImageWidth>${artwork.width}</ImageWidth>
-          <File><URI>${escapeXml(artwork.filename)}</URI><HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${artwork.sha256}</HashSumValue></HashSum></File>
+          <File><URI>${escapeXml(artwork.filename)}</URI><HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${artwork.hashSumBase64}</HashSumValue></HashSum></File>
         </TechnicalDetails>
       </Image>`
     : ''
