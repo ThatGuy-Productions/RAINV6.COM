@@ -225,6 +225,11 @@ export interface FunnelStats {
   anonymousSessions: number
   anonymousRenders: number
   anonymousExports: number
+  paywallShown: number
+  checkoutStarted: number
+  aieComputations: number
+  aieExports: number
+  visibleStudioHours: number
 }
 
 /** Distinct-identity counts at each funnel step — for a drop-off chart.
@@ -248,12 +253,28 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     return { total: userIds.size + anonIds.size, anonymous: anonIds.size }
   }
 
-  const [signups, sessions, renders, exports] = await Promise.all([
+  const [signups, sessions, renders, exports, paywallShown, checkoutStarted, aieComputations, aieExports, heartbeats] = await Promise.all([
     countDistinct('signup'),
     countDistinct('session_created'),
     countDistinct('render_completed'),
     countDistinct('export_completed'),
+    db.event.count({ where: { type: 'beta_paywall_shown' } }),
+    db.event.count({ where: { type: 'beta_checkout_started' } }),
+    db.event.count({ where: { type: 'aie_vector_computed' } }),
+    db.event.count({ where: { type: 'aie_vector_exported' } }),
+    db.event.findMany({ where: { type: 'studio_heartbeat' }, select: { metadata: true } }),
   ])
+  const activeSeconds = heartbeats.reduce((sum, row) => {
+    try {
+      const metadata = row.metadata ? JSON.parse(row.metadata) as { activeSeconds?: unknown } : {}
+      const seconds = typeof metadata.activeSeconds === 'number' && Number.isFinite(metadata.activeSeconds)
+        ? Math.max(0, Math.min(60, metadata.activeSeconds))
+        : 0
+      return sum + seconds
+    } catch {
+      return sum
+    }
+  }, 0)
 
   return {
     signups: signups.total,
@@ -263,6 +284,11 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     anonymousSessions: sessions.anonymous,
     anonymousRenders: renders.anonymous,
     anonymousExports: exports.anonymous,
+    paywallShown,
+    checkoutStarted,
+    aieComputations,
+    aieExports,
+    visibleStudioHours: Math.round((activeSeconds / 3600) * 100) / 100,
   }
 }
 
