@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { verifyBootstrapSecret } from '@/lib/rain/bootstrap-secret'
 import { NextRequest, NextResponse } from 'next/server'
 import { bootstrapEnterpriseAdmin, loginWithPassword } from '@/lib/rain/auth'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
@@ -36,17 +36,14 @@ export const POST = withCsrf(async (req: NextRequest) => {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
-  const configuredSecret = process.env.RAIN_ADMIN_BOOTSTRAP_SECRET
-  if (!configuredSecret || configuredSecret.length < 32) {
+  const bootstrapStatus = verifyBootstrapSecret(body.bootstrapSecret)
+  if (bootstrapStatus === 'disabled') {
     return NextResponse.json(
       { error: 'Admin bootstrap is disabled: configure RAIN_ADMIN_BOOTSTRAP_SECRET with at least 32 characters.' },
       { status: 503, headers: { 'Cache-Control': 'no-store' } },
     )
   }
-  const suppliedSecret = typeof body.bootstrapSecret === 'string' ? body.bootstrapSecret : ''
-  const expectedDigest = createHash('sha256').update(configuredSecret, 'utf8').digest()
-  const suppliedDigest = createHash('sha256').update(suppliedSecret, 'utf8').digest()
-  if (!timingSafeEqual(suppliedDigest, expectedDigest)) {
+  if (bootstrapStatus !== 'valid') {
     return NextResponse.json({ error: 'Invalid bootstrap credentials.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
   }
 
