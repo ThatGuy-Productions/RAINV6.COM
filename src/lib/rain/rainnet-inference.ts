@@ -376,6 +376,17 @@ let _ortBackend: string | null = null
 
 export type RainNetBackend = 'webgpu' | 'wasm'
 
+const EXPECTED_RAINNET_INPUTS = ['mel', 'artist_vec', 'genre_id', 'platform_id', 'simple_mode'] as const
+const EXPECTED_RAINNET_OUTPUT = 'processing_params'
+
+/** Check the loaded graph's runtime signature before it can be used. */
+export function hasExpectedRainNetSignature(inputNames: string[], outputNames: string[]): boolean {
+  return inputNames.length === EXPECTED_RAINNET_INPUTS.length &&
+    EXPECTED_RAINNET_INPUTS.every(name => inputNames.includes(name)) &&
+    outputNames.length === 1 &&
+    outputNames[0] === EXPECTED_RAINNET_OUTPUT
+}
+
 /** Attempt backends in priority order; a backend is selected only after its
  * session creation succeeds. Exported to make fallback behaviour testable. */
 export async function createWithBackendFallback<T>(
@@ -429,6 +440,10 @@ async function getOrCreateSession(): Promise<InferenceSession> {
       const loaded = await createWithBackendFallback((backend) =>
         ort.InferenceSession.create(candidate.modelPath, { executionProviders: [backend] }),
       )
+      if (!hasExpectedRainNetSignature(loaded.session.inputNames, loaded.session.outputNames)) {
+        await loaded.session.release()
+        throw new Error('ONNX input/output names do not match the documented RainNet v2 signature')
+      }
       _ortSession = loaded.session
       _ortBackend = loaded.backend
       return loaded.session
@@ -632,6 +647,20 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   const t0 = performance.now()
 
   // 1. Extract Mel spectrogram
+  if (!Number.isFinite(input.sampleRate) || input.sampleRate <= 0 || input.audio.length === 0) {
+    throw new Error('RainNet requires non-empty audio and a positive sample rate')
+  }
+  if (input.artistVector && (
+    input.artistVector.length !== 64 ||
+    !input.artistVector.every(Number.isFinite)
+  )) {
+    throw new Error('RainNet artist vector must contain 64 finite values')
+  }
+  const simpleMode = input.simpleMode ?? 0
+  if (!Number.isFinite(simpleMode) || simpleMode < 0 || simpleMode > 1) {
+    throw new Error('RainNet simpleMode must be between 0 and 1')
+  }
+
   const melSpec = extractMelSpectrogram(input.audio, input.sampleRate)
 
   // 2. Lazy-load ONNX Runtime and session
@@ -655,7 +684,7 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   const platformTensor = new ort.Tensor('int64', new BigInt64Array([BigInt(platformId)]), [1])
 
   // Simple mode: float32 scalar
-  const simpleModeVal = input.simpleMode ?? 0.0
+  const simpleModeVal = simpleMode
   const modeTensor = new ort.Tensor('float32', new Float32Array([simpleModeVal]), [1, 1])
 
   // 4. Run inference
@@ -676,7 +705,10 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   }
 
   // 5. Decode — the output is [1, 46] float32
-  const rawData = output.data as Float32Array
+  if (output.type !== 'float32' || !(output.data instanceof Float32Array)) {
+    throw new Error('RainNet output must be a float32 tensor')
+  }
+  const rawData = output.data
   if (rawData.length !== 46) {
     throw new Error(`RainNet output has ${rawData.length} elements, expected 46`)
   }
