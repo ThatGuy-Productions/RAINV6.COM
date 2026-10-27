@@ -34,8 +34,8 @@ const FEATURES: Feature[] = [
   },
   {
     icon: <Layers className="w-5 h-5" />,
-    title: '12-Stem BS-RoFormer Separation',
-    description: 'Four-pass cascade: vocals, backing, drums, bass, guitar, piano, kick, snare, hats, percussion, ambience, other. SAIL v2 stem-aware limiting.',
+    title: 'Stem Import & Mixing',
+    description: 'Import pre-separated stems, adjust levels, preview, and export. Automated neural separation is disabled until a licensed, verified model is bundled.',
     color: '#F97316',
   },
   {
