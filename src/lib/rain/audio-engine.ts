@@ -885,18 +885,10 @@ class RainAudioEngine {
       }
     }
 
-    // Stage 7 — BS-RoFormer Source Separation.
-    // (a) Real DC offset removal on every channel (preserved from prior fix).
-    // (b) P3-BSROFORMER: if audio is <= 60s AND onStemsReady is provided, run
-    //     the BS-RoFormer 4-pass cascade (vocals/drums/bass/guitar/piano/other
-    //     → lead/backing vocals + kick/snare/hats/percussion + ambience) on
-    //     the ORIGINAL input audio and emit the 12 stems via onStemsReady.
-    //     P3-PIPELINE-89: the separated stems are also saved to
-    //     `separatedStems` so Stage 8 (Per-Stem Repair) and Stage 9 (SAIL v2)
-    //     can operate on them. For audio > 60s (or when no onStemsReady
-    //     callback is supplied) the in-pipeline run is skipped — Stages 8/9
-    //     then also skip with an honest label, and the render continues to
-    //     operate on `inChannels` directly.
+    // Stage 7 — Neural source separation is currently unavailable.
+    // DC-offset removal still runs, but no stem output is produced because
+    // this repository does not ship a licensed, verified BS-RoFormer model.
+    // Stages 8/9 remain explicitly skipped until that model is integrated.
     wrappedOnProgress?.(7, 16, 'Source Separation skipped — neural model unavailable')
     checkCancel()
     let separatedStems: import('./stems').StemResult[] | null = null
@@ -923,12 +915,8 @@ class RainAudioEngine {
     }
     await sleep(0)
 
-    // Stage 8 — Per-Stem Repair (P3-PIPELINE-89).
-    // Iterates over the BS-RoFormer separated stems and applies per-category
-    // spectral correction (gentle HPF + de-ess + DC verify). Re-emits the
-    // repaired stems via onStemsReady so the Stems tab shows the post-repair
-    // measurements. Skipped with an honest label when Stage 7 did not produce
-    // stems (audio > 60s, no callback, or separation failed).
+    // Stage 8 — Per-Stem Repair. This stage is skipped until Stage 7 has a
+    // verified neural separation model and actually produces stems.
     {
       const label = separatedStems
         ? 'Per-Stem Repair'
