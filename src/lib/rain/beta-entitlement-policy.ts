@@ -1,65 +1,84 @@
 /**
- * Central beta entitlement policy.
+ * Canonical beta entitlement decision rules.
  *
- * This module is deliberately pure: API routes and UI should call the same
- * decision function rather than reimplementing limits in separate places.
- * It does not read browser storage and does not prove that a browser-local
- * export really occurred. Durable reservation/completion records and provider
- * verification must be implemented by the calling server workflow.
+ * This is a pure policy function, not the persistence/security boundary.
+ * Callers must load counts and verified entitlements from the durable server
+ * database. Never trust browser-supplied counters or paid flags.
  */
-export const BETA_FREE_USE_CREDITS = 2
+export const BETA_FREE_RENDER_ALLOWANCE = 2
+export const BETA_MONTHLY_CREDIT_ALLOWANCE = 1_500
+export const BETA_CREDITS_PER_RENDER = 25
 export const BETA_MONTHLY_EXPORT_LIMIT = 30
 export const BETA_UNLOCK_AMOUNT_CENTS = 4_900
 export const BETA_UNLOCK_CURRENCY = 'ZAR' as const
 
 export interface BetaEntitlementInput {
-  /** Successfully completed free-capability uses, not exports unless the product defines them as equivalent. */
-  completedFreeUseCredits: number
-  /** True only when a verified, active server-side entitlement exists. */
+  /** Successfully completed free full-capability renders; each includes one export. */
+  completedFreeRenders: number
+  /** True only when a verified, active server-side R49 entitlement exists. */
   hasVerifiedR49Unlock: boolean
-  /** Successful, finalized exports in the selected monthly accounting period. */
+  /** Credits consumed by successfully completed paid-beta renders in this monthly period. */
+  monthlyCreditsUsed: number
+  /** Successfully finalized exports in this monthly period. */
   successfulExportsThisMonth: number
 }
 
 export interface BetaEntitlementDecision {
-  canStartFullCapabilityUse: boolean
+  canStartFullCapabilityRender: boolean
   canExport: boolean
-  freeUseCreditsRemaining: number
+  freeRendersRemaining: number
+  monthlyCreditsRemaining: number | null
+  paidRendersRemainingByCredits: number | null
   monthlyExportsRemaining: number | null
-  reason: 'free-use-credit' | 'payment-required' | 'paid-beta' | 'monthly-export-limit'
+  reason: 'free-render' | 'payment-required' | 'paid-beta' | 'monthly-credit-limit' | 'monthly-export-limit'
 }
 
-function nonNegativeCount(value: number): number {
+function count(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
 }
 
 /**
- * Resolve beta access. Paid beta users retain full processing capability even
- * when they reach the monthly export cap; only further exports are blocked.
- * A client must never set hasVerifiedR49Unlock itself.
+ * Paid users may render while credits remain, but cannot export beyond 30
+ * successful files in the accounting month even when credits remain.
+ * The free path permits exactly two full-capability renders, each with one
+ * included export, before requiring verified payment.
  */
 export function evaluateBetaEntitlement(input: BetaEntitlementInput): BetaEntitlementDecision {
-  const uses = nonNegativeCount(input.completedFreeUseCredits)
-  const exports = nonNegativeCount(input.successfulExportsThisMonth)
-  const freeUseCreditsRemaining = Math.max(0, BETA_FREE_USE_CREDITS - uses)
+  const freeRenders = count(input.completedFreeRenders)
+  const creditsUsed = count(input.monthlyCreditsUsed)
+  const exports = count(input.successfulExportsThisMonth)
+  const freeRendersRemaining = Math.max(0, BETA_FREE_RENDER_ALLOWANCE - freeRenders)
 
-  if (input.hasVerifiedR49Unlock) {
-    const monthlyExportsRemaining = Math.max(0, BETA_MONTHLY_EXPORT_LIMIT - exports)
+  if (!input.hasVerifiedR49Unlock) {
+    const hasFreeRender = freeRenders < BETA_FREE_RENDER_ALLOWANCE
     return {
-      canStartFullCapabilityUse: true,
-      canExport: monthlyExportsRemaining > 0,
-      freeUseCreditsRemaining,
-      monthlyExportsRemaining,
-      reason: monthlyExportsRemaining > 0 ? 'paid-beta' : 'monthly-export-limit',
+      canStartFullCapabilityRender: hasFreeRender,
+      canExport: hasFreeRender,
+      freeRendersRemaining,
+      monthlyCreditsRemaining: null,
+      paidRendersRemainingByCredits: null,
+      monthlyExportsRemaining: null,
+      reason: hasFreeRender ? 'free-render' : 'payment-required',
     }
   }
 
-  const hasFreeCredit = uses < BETA_FREE_USE_CREDITS
+  const monthlyCreditsRemaining = Math.max(0, BETA_MONTHLY_CREDIT_ALLOWANCE - creditsUsed)
+  const paidRendersRemainingByCredits = Math.floor(monthlyCreditsRemaining / BETA_CREDITS_PER_RENDER)
+  const monthlyExportsRemaining = Math.max(0, BETA_MONTHLY_EXPORT_LIMIT - exports)
+  const canRender = monthlyCreditsRemaining >= BETA_CREDITS_PER_RENDER
+  const canExport = monthlyExportsRemaining > 0
+
+  let reason: BetaEntitlementDecision['reason'] = 'paid-beta'
+  if (!canExport) reason = 'monthly-export-limit'
+  else if (!canRender) reason = 'monthly-credit-limit'
+
   return {
-    canStartFullCapabilityUse: hasFreeCredit,
-    canExport: hasFreeCredit,
-    freeUseCreditsRemaining,
-    monthlyExportsRemaining: null,
-    reason: hasFreeCredit ? 'free-use-credit' : 'payment-required',
+    canStartFullCapabilityRender: canRender,
+    canExport,
+    freeRendersRemaining,
+    monthlyCreditsRemaining,
+    paidRendersRemainingByCredits,
+    monthlyExportsRemaining,
+    reason,
   }
 }
