@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { DSP_DELIVERY_PARTNERS } from '@/lib/rain/constants'
-import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+import { validateIsrc, validateUpc } from '@/lib/rain/metadata-validation'
 import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rain/notifications'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
@@ -74,6 +74,14 @@ export function DistributeTab() {
   const [submittingJobId, setSubmittingJobId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [lastBuildSha, setLastBuildSha] = useState<string | null>(null)
+  const [identifiersConfirmed, setIdentifiersConfirmed] = useState(false)
+  const compactIsrc = metadata.isrc.replace(/[-\\s]/g, '').toUpperCase()
+  const isrcFormatValid = validateIsrc(metadata.isrc) && !compactIsrc.startsWith('US2XX')
+  const upcFormatValid = validateUpc(metadata.upc)
+
+  useEffect(() => {
+    setIdentifiersConfirmed(false)
+  }, [metadata.isrc, metadata.upc])
 
   const refreshJobs = useCallback(async () => {
     const loaded = await loadDeliveryJobs()
@@ -83,11 +91,6 @@ export function DistributeTab() {
   useEffect(() => {
     refreshJobs()
   }, [refreshJobs])
-
-  const handleGenerateIdentifiers = () => {
-    const localSessionId = crypto.randomUUID()
-    setMetadata({ isrc: generateIsrc(localSessionId), upc: generateUpc(localSessionId) })
-  }
 
   // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected
   // platforms, and AI disclosure state. Memoised so the preview doesn't
@@ -100,8 +103,8 @@ export function DistributeTab() {
       genre: metadata.genre,
       genreSubgenre: metadata.genreSubgenre,
       year: metadata.year,
-      isrc: metadata.isrc || 'USXXX2400001',
-      upc: metadata.upc || '000000000000',
+      isrc: metadata.isrc,
+      upc: metadata.upc,
       iswc: metadata.iswc,
       releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
       originalReleaseDate: metadata.originalReleaseDate,
@@ -158,8 +161,16 @@ export function DistributeTab() {
   // compute SHA-256 over every asset, ZIP everything, persist to the
   // IndexedDB delivery queue, and trigger a download.
   const handleBuildPackage = async () => {
-    if (!metadata.isrc) {
-      notifyError('ISRC required', 'Generate or enter an ISRC before packaging.')
+    if (!isrcFormatValid) {
+      notifyError('Registered ISRC required', 'Enter an officially assigned ISRC. RAIN-generated local test identifiers cannot be distributed.')
+      return
+    }
+    if (!upcFormatValid) {
+      notifyError('Registered UPC required', 'Enter a GS1-registered UPC/EAN with a valid check digit before packaging.')
+      return
+    }
+    if (!identifiersConfirmed) {
+      notifyError('Confirm identifier registration', 'Confirm that the ISRC and UPC are officially assigned to this release before building a distribution package.')
       return
     }
     if (!hasProcessed) {
@@ -424,12 +435,19 @@ export function DistributeTab() {
               <Field label="ISRC" value={metadata.isrc} onChange={(v) => setMetadata({ isrc: v })} placeholder="US-XXX-YY-NNNNN" />
               <Field label="UPC" value={metadata.upc} onChange={(v) => setMetadata({ upc: v })} placeholder="12-digit UPC" />
             </div>
-            <button
-              onClick={handleGenerateIdentifiers}
-              className="text-xs px-3 py-1.5 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors"
-            >
-              Generate ISRC + UPC
-            </button>
+            <div className="text-[10px] text-muted-foreground">
+              Enter identifiers officially issued to this release. RAIN cannot register ISRC or UPC codes.
+            </div>
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={identifiersConfirmed}
+                onChange={(event) => setIdentifiersConfirmed(event.target.checked)}
+                disabled={!isrcFormatValid || !upcFormatValid}
+                className="mt-0.5"
+              />
+              <span>I confirm these are officially assigned identifiers, not locally generated test values.</span>
+            </label>
           </div>
         </div>
 
@@ -568,7 +586,7 @@ export function DistributeTab() {
       <div className="flex flex-wrap justify-end gap-2">
         <button
           onClick={handleBuildPackage}
-          disabled={buildStatus === 'packaging' || !metadata.isrc || !hasProcessed}
+          disabled={buildStatus === 'packaging' || !isrcFormatValid || !upcFormatValid || !identifiersConfirmed || !hasProcessed}
           className="flex items-center gap-2 px-5 py-2.5 rounded-md bg-rain-accent text-black font-semibold text-sm hover:scale-[1.02] active:scale-95 transition-transform disabled:opacity-50 disabled:hover:scale-100"
         >
           {buildStatus === 'packaging' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
@@ -576,7 +594,9 @@ export function DistributeTab() {
         </button>
       </div>
       <div className="text-[10px] text-right text-muted-foreground -mt-2 space-y-0.5">
-        {!metadata.isrc && <div>Generate or enter an ISRC to enable packaging.</div>}
+        {!isrcFormatValid && <div>Enter a registered ISRC (local test identifiers are rejected).</div>}
+        {!upcFormatValid && <div>Enter a registered UPC/EAN with a valid check digit.</div>}
+        {!identifiersConfirmed && isrcFormatValid && upcFormatValid && <div>Confirm identifier registration to enable packaging.</div>}
         {!hasProcessed && <div>Run the mastering pipeline first — the package wraps the rendered master.</div>}
         {buildStatus === 'packaged' && lastBuildSha && (
           <div className="text-rain-accent font-mono">Last package SHA-256: {lastBuildSha.slice(0, 24)}…</div>
