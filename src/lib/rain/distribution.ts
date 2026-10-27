@@ -882,8 +882,10 @@ export async function buildDistributionPackage(
   const manifestBytes = new TextEncoder().encode(manifestJson)
   const manifestSha = await sha256Bytes(manifestBytes)
 
-  // 7) checksums.txt — one line per asset + the manifest itself.
+  // 7) checksums.txt — one line per release asset, DDEX XML, and manifest.
+  const ernSha = await sha256Bytes(ernBytes)
   const checksumsLines = assets.map((a) => `${a.sha256}  ${a.filename}`)
+  checksumsLines.push(`${ernSha}  ern.xml`)
   checksumsLines.push(`${manifestSha}  manifest.json`)
   const checksumsTxt = checksumsLines.join('\n') + '\n'
   const checksumsBytes = new TextEncoder().encode(checksumsTxt)
@@ -895,7 +897,7 @@ export async function buildDistributionPackage(
     filename: 'ern.xml',
     mimeType: 'application/xml',
     sizeBytes: ernBytes.byteLength,
-    sha256: await sha256Bytes(ernBytes),
+    sha256: ernSha,
     data: ernBytes,
   })
   assets.push({
