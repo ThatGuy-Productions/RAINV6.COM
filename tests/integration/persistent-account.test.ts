@@ -4,11 +4,11 @@ import { db } from '../../src/lib/db'
 import { loginWithPassword, registerUser } from '../../src/lib/rain/auth'
 
 const enabled = process.env.RUN_DB_INTEGRATION_TESTS === '1'
-const verifier = new PrismaClient()
+const verifier = enabled ? new PrismaClient() : null
 
 describe.skipIf(!enabled)('persistent account and project storage (PostgreSQL integration)', () => {
   afterAll(async () => {
-    await verifier.$disconnect()
+    await verifier?.$disconnect()
   })
 
   it('keeps account, login token, saved project metadata, and usage events visible to a separate DB connection', async () => {
@@ -47,10 +47,10 @@ describe.skipIf(!enabled)('persistent account and project storage (PostgreSQL in
       // A second independent connection proves these are durable database
       // rows, not just React state or an in-memory request/session object.
       const [persistedAccount, persistedToken, persistedProject, persistedEvent] = await Promise.all([
-        verifier.account.findUnique({ where: { email } }),
-        verifier.authToken.findFirst({ where: { userId } }),
-        verifier.session.findUnique({ where: { id: project.id } }),
-        verifier.event.findFirst({ where: { userId, type: 'export_completed' } }),
+        verifier!.account.findUnique({ where: { email } }),
+        verifier!.authToken.findFirst({ where: { userId } }),
+        verifier!.session.findUnique({ where: { id: project.id } }),
+        verifier!.event.findFirst({ where: { userId, type: 'export_completed' } }),
       ])
 
       expect(persistedAccount?.id).toBe(userId)
