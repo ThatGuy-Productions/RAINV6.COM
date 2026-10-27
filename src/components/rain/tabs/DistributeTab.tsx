@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { DSP_DELIVERY_PARTNERS } from '@/lib/rain/constants'
-import { validateIsrc, validateUpc } from '@/lib/rain/metadata-validation'
+import { validateIsrc, validateUpc, validateMetadata } from '@/lib/rain/metadata-validation'
 import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rain/notifications'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
@@ -97,8 +97,8 @@ export function DistributeTab() {
   // regenerate MessageId / MessageCreatedDateTime on every render.
   const ddexXml = useMemo(() => {
     return buildDdexErnXml({
-      title: metadata.title || 'Untitled',
-      artist: metadata.artist || 'Unknown Artist',
+      title: metadata.title,
+      artist: metadata.artist,
       album: metadata.album,
       genre: metadata.genre,
       genreSubgenre: metadata.genreSubgenre,
@@ -106,7 +106,7 @@ export function DistributeTab() {
       isrc: metadata.isrc,
       upc: metadata.upc,
       iswc: metadata.iswc,
-      releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+      releaseDate: metadata.releaseDate,
       originalReleaseDate: metadata.originalReleaseDate,
       releaseType: metadata.releaseType,
       label: metadata.label,
@@ -171,6 +171,15 @@ export function DistributeTab() {
     }
     if (!identifiersConfirmed) {
       notifyError('Confirm identifier registration', 'Confirm that the ISRC and UPC are officially assigned to this release before building a distribution package.')
+      return
+    }
+    if (!metadata.title.trim() || !metadata.artist.trim() || !metadata.genre || !metadata.releaseDate) {
+      notifyError('Release metadata incomplete', 'Enter the real release title, primary artist, genre, and release date before packaging.')
+      return
+    }
+    const metadataIssues = validateMetadata(metadata)
+    if (metadataIssues.length > 0) {
+      notifyError('Metadata validation failed', metadataIssues.map((issue) => issue.message).join(' '))
       return
     }
     if (!hasProcessed) {
