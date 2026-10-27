@@ -63,6 +63,9 @@ export interface ReleaseManifest {
   releaseId: string
   /** Signed RAIN-CERT attesting to the exact Float32 master used for exports. */
   provenance: ProvenanceCertificate
+  senderDpid: string
+  recipientDpid: string
+  targetDsps: string[]
   isrc: string
   upc: string
   title: string
@@ -306,6 +309,13 @@ export interface DdexMetadata {
   year?: string
   isrc: string
   upc: string
+  /** Officially assigned DDEX Party IDs; required for ERN delivery. */
+  senderDpid?: string
+  recipientDpid?: string
+  /** Actual rendered WAV resource details included in the package. */
+  audioResource?: { filename: string; sha256: string; channels: number; sampleRate: number; bitDepth: number; sizeBytes: number }
+  /** Optional validated cover-art resource included in the package. */
+  artworkResource?: { filename: string; sha256: string; width: number; height: number; format: 'image/jpeg' | 'image/png'; sizeBytes: number }
   /** ISWC for the underlying composition. TASK B enrichment. */
   iswc?: string
   /** ISO-8601 release date (YYYY-MM-DD). */
