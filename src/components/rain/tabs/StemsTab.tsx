@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Loader2, Mic2, Volume2, Play, Square, Download, X, FileArchive, Sparkles, Cpu } from 'lucide-react'
+import { Loader2, Mic2, Volume2, Play, Square, Download, X, FileArchive, Sparkles } from 'lucide-react'
 import type { StemKey } from '@/lib/rain/types'
 import { STEM_SEPARATION_CAPABILITY, type StemResult } from '@/lib/rain/stems'
 import { useSessionStore } from '@/lib/rain/store'
@@ -95,6 +95,10 @@ export function StemsTab() {
   }, [])
 
   const handleSeparate = useCallback(async () => {
+    if (!STEM_SEPARATION_CAPABILITY.neuralModelAvailable) {
+      setErrorMsg(STEM_SEPARATION_CAPABILITY.reason)
+      return
+    }
     if (!fileName || isSeparating) return
     setIsSeparating(true)
     setErrorMsg(null)
@@ -283,7 +287,7 @@ export function StemsTab() {
             />
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4 text-[10px] font-mono">
-            {BS_ROFORMER_PASSES.map((s, i) => {
+            {PLANNED_SEPARATION_PASSES.map((s, i) => {
               const passLabels = ['BS-RoFormer', 'MelBand', 'Spectral Band-Split', 'Dereverb']
               const active = progress.stage && passLabels[i].split(' ').some((w) =>
                 progress.stage.toLowerCase().includes(w.toLowerCase())
