@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { bootstrapEnterpriseAdmin, loginWithPassword } from '@/lib/rain/auth'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
@@ -15,7 +16,7 @@ export const runtime = 'nodejs'
  * SECURITY FIX (C1): Rate limited to 3 attempts per minute per IP to prevent
  * brute-force race-condition attacks.
  *
- * Body: { email, password, name? }
+ * Body: { email, password, name?, bootstrapSecret }
  */
 export const POST = withCsrf(async (req: NextRequest) => {
   // Rate limit: 3 bootstrap attempts per minute per IP (conservative)
@@ -29,12 +30,26 @@ export const POST = withCsrf(async (req: NextRequest) => {
     )
   }
 
-  let body: { email?: unknown; password?: unknown; name?: unknown }
+  let body: { email?: unknown; password?: unknown; name?: unknown; bootstrapSecret?: unknown }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
+  const configuredSecret = process.env.RAIN_ADMIN_BOOTSTRAP_SECRET
+  if (!configuredSecret || configuredSecret.length < 32) {
+    return NextResponse.json(
+      { error: 'Admin bootstrap is disabled: configure RAIN_ADMIN_BOOTSTRAP_SECRET with at least 32 characters.' },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
+  const suppliedSecret = typeof body.bootstrapSecret === 'string' ? body.bootstrapSecret : ''
+  const expectedDigest = createHash('sha256').update(configuredSecret, 'utf8').digest()
+  const suppliedDigest = createHash('sha256').update(suppliedSecret, 'utf8').digest()
+  if (!timingSafeEqual(suppliedDigest, expectedDigest)) {
+    return NextResponse.json({ error: 'Invalid bootstrap credentials.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+  }
+
   const email = typeof body.email === 'string' ? body.email : ''
   const password = typeof body.password === 'string' ? body.password : ''
   const name = typeof body.name === 'string' ? body.name : undefined
