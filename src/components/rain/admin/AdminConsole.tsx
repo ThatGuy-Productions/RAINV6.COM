@@ -104,6 +104,11 @@ interface StatsResponse {
       anonymousSessions: number
       anonymousRenders: number
       anonymousExports: number
+      paywallShown: number
+      checkoutStarted: number
+      aieComputations: number
+      aieExports: number
+      visibleStudioHours: number
     }
     avgFeatureDepth: number
   } | null
@@ -1294,6 +1299,29 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
                   )}
                   color="#F97316"
                 />
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2">
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Visible studio hours*</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.visibleStudioHours.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">AIE computations</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.aieComputations}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">AIE exports</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.aieExports}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Unlock paywalls shown</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.paywallShown}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Checkout intent</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.checkoutStarted}</div>
+                  </div>
+                </div>
+                <div className="mt-2 text-[10px] text-muted-foreground/60">*Visible studio hours are a rate-limited, visible-tab estimate—not verified human work time. Checkout intent is not a completed or paid conversion.</div>
                 {stats.beta.funnel.signups === 0 &&
                   stats.beta.funnel.sessionsCreated === 0 && (
                     <div className="mt-2 text-[11px] text-muted-foreground/60 italic">
