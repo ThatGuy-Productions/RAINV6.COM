@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { unzipSync } from 'fflate'
 import { NextRequest, NextResponse } from 'next/server'
 import { withCsrf } from '@/lib/rain/csrf'
 import { validateIsrc, validateUpc } from '@/lib/rain/metadata-validation'
@@ -115,6 +116,57 @@ export const POST = withCsrf(async (req: NextRequest) => {
   if (actualPackageSha256 !== packageSha256.toLowerCase()) {
     return NextResponse.json(
       { ok: false, requiresCredentials: false, error: 'Package SHA-256 does not match the submitted ZIP bytes' },
+      { status: 422 },
+    )
+  }
+
+  // Inspect the ZIP server-side rather than trusting the browser's claim that
+  // its contents match the manifest. Verify the embedded manifest and every
+  // declared asset byte/hash before any external provider receives the file.
+  let zipEntries: Record<string, Uint8Array>
+  try {
+    zipEntries = unzipSync(new Uint8Array(packageBytes))
+  } catch {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Submitted package is not a valid ZIP archive' },
+      { status: 422 },
+    )
+  }
+
+  const embeddedManifestBytes = zipEntries['manifest.json']
+  const ernXmlBytes = zipEntries['ern.xml']
+  const checksumsBytes = zipEntries['checksums.txt']
+  if (!embeddedManifestBytes || !ernXmlBytes || !checksumsBytes) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'ZIP must contain manifest.json, ern.xml, and checksums.txt' },
+      { status: 422 },
+    )
+  }
+
+  try {
+    const embeddedManifest = JSON.parse(new TextDecoder().decode(embeddedManifestBytes))
+    if (JSON.stringify(embeddedManifest) !== JSON.stringify(manifest)) {
+      return NextResponse.json(
+        { ok: false, requiresCredentials: false, error: 'Embedded ZIP manifest does not match the submitted manifest' },
+        { status: 422 },
+      )
+    }
+  } catch {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'Embedded manifest.json is invalid JSON' },
+      { status: 422 },
+    )
+  }
+
+  const embeddedAssetsValid = (manifest.assets as Array<{ filename: string; sizeBytes: number; sha256: string }>).every((asset) => {
+    const bytes = zipEntries[asset.filename]
+    if (!bytes || bytes.byteLength !== asset.sizeBytes) return false
+    const digest = createHash('sha256').update(bytes).digest('hex')
+    return digest === asset.sha256.toLowerCase()
+  })
+  if (!embeddedAssetsValid) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'One or more ZIP assets do not match the manifest size or SHA-256' },
       { status: 422 },
     )
   }
