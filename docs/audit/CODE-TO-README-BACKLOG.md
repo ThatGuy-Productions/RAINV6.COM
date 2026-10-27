@@ -16,7 +16,7 @@ The README remains the target specification. This backlog is a work tracker, not
 
 - [ ] **P0.5 Audio acceptance suite:** add repeatable fixtures and browser-level tests for supported file decoding, render completion, stage failures, valid WAV/MP3 export, independent decode, and output measurements.
 - [ ] **P0.6 DSP regression:** verify LUFS, true peak, clipping, stereo/channel handling, and determinism against independently calculated reference values and documented tolerances.
-- [ ] **P0.7 Stage wiring:** trace every advertised stage to executed code and confirm failures propagate rather than being swallowed or replaced by successful-looking defaults.
+- [ ] **P0.7 Stage wiring (in progress):** fixed source-channel initialization order, passed real spectral features/genre/platform into groove analysis, guarded optional overrides, and aligned multiband processing/presets to the canonical three-band ProcessingParams schema. Still must validate all 16 stages against real audio fixtures and prove failure propagation.
 - [ ] **P0.8 Stem-separation truth:** the current source describes a TypeScript DSP approximation, not a shipped BS-RoFormer neural model. Implement a real, licensed model path and quality tests before asserting BS-RoFormer separation.
 
 ## P1 — Provenance and distribution
