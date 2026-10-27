@@ -679,104 +679,106 @@ function defaultParams(): ProcessingParams {
 // These fields survive applyMacrosToParams and actually affect the render.
 const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   electronic: {
-    // Fast attack/release for loud, punchy electronic — squashes transients
-    mb_attack_low: 2.0, mb_attack_mid: 1.0, mb_attack_high: 0.5,
-    mb_release_low: 80.0, mb_release_high: 30.0,
-    mid_gain: -0.5, // slight center reduction for wider image
+    mb_attack_low: 2, mb_attack_mid: 1, mb_attack_high: 0.5,
+    mb_release_low: 80, mb_release_mid: 60, mb_release_high: 30,
+    mid_gain: -0.5,
   },
   hiphop: {
-    // Fast low-band attack for tight kick, slow mid for vocal presence
-    mb_attack_low: 1.5, mb_attack_mid: 8.0, mb_attack_high: 1.0,
-    mb_release_low: 60.0, mb_release_high: 40.0,
-    mid_gain: 1.0, // center emphasis for vocals
+    mb_attack_low: 1.5, mb_attack_mid: 8, mb_attack_high: 1,
+    mb_release_low: 60, mb_release_mid: 100, mb_release_high: 40,
+    mid_gain: 1,
   },
   rock: {
-    // Medium attack for punchy drums, fast high release for cymbals
-    mb_attack_low: 3.0, mb_attack_mid: 5.0, mb_attack_high: 2.0,
-    mb_release_low: 100.0, mb_release_high: 35.0,
-    mid_gain: -1.0, // reduce center mud, widen guitars
+    mb_attack_low: 3, mb_attack_mid: 5, mb_attack_high: 2,
+    mb_release_low: 100, mb_release_mid: 120, mb_release_high: 35,
+    mid_gain: -1,
   },
   pop: {
-    // Balanced — moderate attack for natural transients
-    mb_attack_low: 5.0, mb_attack_mid: 10.0, mb_attack_high: 3.0,
-    mb_release_low: 120.0, mb_release_high: 45.0,
-    mid_gain: 0.5, // slight vocal emphasis
+    mb_attack_low: 5, mb_attack_mid: 10, mb_attack_high: 3,
+    mb_release_low: 120, mb_release_mid: 140, mb_release_high: 45,
+    mid_gain: 0.5,
   },
   classical: {
-    // Slow attack/release for maximum dynamics preservation
-    mb_attack_low: 15.0, mb_attack_mid: 20.0, mb_attack_high: 12.0,
-    mb_release_low: 250.0, mb_release_high: 100.0,
-    mid_gain: 0.0,
+    mb_attack_low: 15, mb_attack_mid: 20, mb_attack_high: 12,
+    mb_release_low: 250, mb_release_mid: 300, mb_release_high: 100,
+    mid_gain: 0,
   },
   jazz: {
-    // Gentle — slow attack, medium release for natural feel mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_release_low: 180.0, mb_release_high: 70.0,
-    mid_gain: 0.0,
+    mb_attack_low: 10, mb_attack_mid: 15, mb_attack_high: 8,
+    mb_release_low: 180, mb_release_mid: 200, mb_release_high: 70,
+    mid_gain: 0,
+  },
+  folk: {
+    mb_attack_low: 8, mb_attack_mid: 12, mb_attack_high: 6,
+    mb_release_low: 180, mb_release_mid: 220, mb_release_high: 60,
+    mid_gain: 0.25,
   },
   amapiano: {
-    // Deep, log-drum-forward: fast low attack for tight kick, slow mid for
-    // shaker/groove presence, wide stereo for synth pads + keys mb_attack_low: 1.5, mb_attack_mid: 12.0, mb_attack_high: 5.0, mb_release_low: 55.0, mb_release_high: 45.0,
-    mid_gain: 0.0, // wide mix — don't center-bias
-    stereo_width: 1.25, // wide synth pads and stereo log drums
+    mb_attack_low: 1.5, mb_attack_mid: 12, mb_attack_high: 5,
+    mb_release_low: 55, mb_release_mid: 80, mb_release_high: 45,
+    mid_gain: 0,
+    stereo_width: 1.25,
     analog_saturation: true,
     saturation_drive: 0.15,
-    saturation_mode: 'tape' as const,
+    saturation_mode: 'tape',
   },
   gospel: {
-    // Vocal-forward: strong center for choir/lead, moderate compression
-    // with long release for sustained notes and dynamic builds mb_attack_low: 6.0, mb_attack_mid: 10.0, mb_attack_high: 5.0, mb_release_low: 150.0, mb_release_high: 60.0,
-    mid_gain: 1.5, // center emphasis for choir + lead vocals
-    stereo_width: 1.1, // slightly wider for organ/piano
+    mb_attack_low: 6, mb_attack_mid: 10, mb_attack_high: 5,
+    mb_release_low: 150, mb_release_mid: 180, mb_release_high: 60,
+    mid_gain: 1.5,
+    stereo_width: 1.1,
   },
   afrobeats: {
-    // Percussive + melodic: tight kick via fast low attack, wide mid for
-    // layered percussion, warm saturation for vintage afro-groove mb_attack_low: 2.0, mb_attack_mid: 6.0, mb_attack_high: 3.0, mb_release_low: 70.0, mb_release_high: 40.0,
-    mid_gain: -0.5, // de-emphasize center for wide percussion field
+    mb_attack_low: 2, mb_attack_mid: 6, mb_attack_high: 3,
+    mb_release_low: 70, mb_release_mid: 100, mb_release_high: 40,
+    mid_gain: -0.5,
     stereo_width: 1.2,
     analog_saturation: true,
     saturation_drive: 0.25,
-    saturation_mode: 'tape' as const,
+    saturation_mode: 'tape',
   },
   afro_house: {
-    // Driving 4/4: tight all-band attack, punchy mid for percussive
-    // layers, clean highs for shakers and rides mb_attack_low: 2.0, mb_attack_mid: 4.0, mb_attack_high: 2.0, mb_release_low: 80.0, mb_release_high: 35.0,
-    mid_gain: -1.0, // wide soundstage for house
+    mb_attack_low: 2, mb_attack_mid: 4, mb_attack_high: 2,
+    mb_release_low: 80, mb_release_mid: 100, mb_release_high: 35,
+    mid_gain: -1,
     stereo_width: 1.3,
     analog_saturation: true,
     saturation_drive: 0.2,
-    saturation_mode: 'tube' as const,
+    saturation_mode: 'tube',
   },
   gqom: {
-    // Minimal, raw, bass-heavy: fast low attack with high ratio for
-    // crushing sub-bass, slow high attack to preserve raw percussion edge mb_attack_low: 1.0, mb_attack_mid: 3.0, mb_attack_high: 15.0, mb_release_low: 40.0, mb_release_high: 25.0,
+    mb_attack_low: 1, mb_attack_mid: 3, mb_attack_high: 15,
+    mb_release_low: 40, mb_release_mid: 60, mb_release_high: 25,
     mid_gain: -0.5,
     stereo_width: 1.15,
-    analog_saturation: false, // keep it raw and digital
+    analog_saturation: false,
   },
   metal: {
-    // Aggressive, fast: tight attack across all bands for palm-muted
-    // precision, fast release for clarity in dense arrangements mb_attack_low: 2.0, mb_attack_mid: 3.0, mb_attack_high: 1.5, mb_release_low: 50.0, mb_release_high: 25.0,
-    mid_gain: -2.0, // push guitars to sides, leave kick/snare center
+    mb_attack_low: 2, mb_attack_mid: 3, mb_attack_high: 1.5,
+    mb_release_low: 50, mb_release_mid: 70, mb_release_high: 25,
+    mid_gain: -2,
   },
   rnb: {
-    // Smooth + punchy: moderate attack, vocal-forward mid, clean highs mb_attack_low: 4.0, mb_attack_mid: 8.0, mb_attack_high: 3.0, mb_release_low: 100.0, mb_release_high: 50.0,
-    mid_gain: 1.0, // vocal emphasis
+    mb_attack_low: 4, mb_attack_mid: 8, mb_attack_high: 3,
+    mb_release_low: 100, mb_release_mid: 120, mb_release_high: 50,
+    mid_gain: 1,
     stereo_width: 1.15,
   },
   country: {
-    // Natural, acoustic-forward: slow attack, moderate ratio for
-    // transparent dynamics — preserves guitar picking and vocal nuance mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_release_low: 200.0, mb_release_high: 80.0,
+    mb_attack_low: 10, mb_attack_mid: 15, mb_attack_high: 8,
+    mb_release_low: 200, mb_release_mid: 220, mb_release_high: 80,
     mid_gain: 0.5,
   },
   reggae: {
-    // Bass-forward dub: slow low attack for sub weight, fast high for
-    // clean skank guitar and hi-hat clarity mb_attack_low: 8.0, mb_attack_mid: 12.0, mb_attack_high: 4.0, mb_release_low: 150.0, mb_release_high: 45.0,
-    mid_gain: 0.0,
+    mb_attack_low: 8, mb_attack_mid: 12, mb_attack_high: 4,
+    mb_release_low: 150, mb_release_mid: 180, mb_release_high: 45,
+    mid_gain: 0,
     stereo_width: 1.2,
   },
   ambient: {
-    // No compression — max dynamics preservation. Slow attack + low
-    // ratio = near-transparent; wide stereo for pads and drones mb_attack_low: 20.0, mb_attack_mid: 25.0, mb_attack_high: 15.0, mb_release_low: 300.0, mb_release_high: 120.0,
-    mid_gain: 0.0,
+    mb_attack_low: 20, mb_attack_mid: 25, mb_attack_high: 15,
+    mb_release_low: 300, mb_release_mid: 350, mb_release_high: 120,
+    mid_gain: 0,
     stereo_width: 1.4,
   },
 }
@@ -793,6 +795,8 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   }
   const overrides = GENRE_OVERRIDES[genre] ?? {}
   Object.assign(params, overrides)
+  const genreSaturationOverride = overrides.analog_saturation
+  const genreSaturationModeOverride = overrides.saturation_mode
   // Apply macro overrides (macros are authoritative source of truth post-heuristic)
   params.macro_brighten = macros.brighten
   params.macro_glue = macros.glue
@@ -801,8 +805,16 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   params.macro_warmth = macros.warmth
   params.macro_space = macros.space
   params.macro_repair = macros.repair
-  // Macros drive derived params
+  // Macros drive derived params. Explicit genre saturation choices remain
+  // authoritative: warmth must not silently turn Gqom's clean-digital profile
+  // into saturation or replace Afro House's tube mode with tape.
   applyMacrosToParams(params)
+  if (typeof genreSaturationOverride === 'boolean') {
+    params.analog_saturation = genreSaturationOverride
+  }
+  if (genreSaturationModeOverride) {
+    params.saturation_mode = genreSaturationModeOverride
+  }
   return params
 }
 
