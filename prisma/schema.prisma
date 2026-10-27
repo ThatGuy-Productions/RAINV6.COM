@@ -30,8 +30,9 @@ model Account {
   lastActiveAt DateTime @default(now())
   sessions     Session[]
   renders      Render[]
-  authTokens   AuthToken[]
-  events       Event[]
+  authTokens         AuthToken[]
+  passwordResetTokens PasswordResetToken[]
+  events             Event[]
 }
 
 /// Authentication session tokens (distinct from mastering `Session`).
@@ -48,6 +49,21 @@ model AuthToken {
   ip        String?
 
   @@index([userId])
+  @@index([expiresAt])
+}
+
+
+/// Single-use password-reset tokens. Only the SHA-256 token hash is stored.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, used])
   @@index([expiresAt])
 }
 
