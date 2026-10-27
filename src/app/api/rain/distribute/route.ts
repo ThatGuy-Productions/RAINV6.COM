@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { unzipSync } from 'fflate'
+import { XMLValidator } from 'fast-xml-parser'
 import { verifyProvenance } from '@/lib/rain/provenance'
 import type { ProvenanceCertificate } from '@/lib/rain/types'
 import { NextRequest, NextResponse } from 'next/server'
@@ -188,6 +189,35 @@ export const POST = withCsrf(async (req: NextRequest) => {
   } catch {
     return NextResponse.json(
       { ok: false, requiresCredentials: false, error: 'Embedded manifest.json is invalid JSON' },
+      { status: 422 },
+    )
+  }
+
+  const ernXml = new TextDecoder().decode(ernXmlBytes)
+  const xmlWellFormed = XMLValidator.validate(ernXml)
+  const xmlHasRequiredStructure =
+    ernXml.includes('NewReleaseMessage') &&
+    ernXml.includes('MessageHeader') &&
+    ernXml.includes('ReleaseList') &&
+    ernXml.includes('ResourceList') &&
+    ernXml.includes('DealList') &&
+    (ernXml.includes('ern/43') || ernXml.includes('ern:43'))
+  const xmlEscape = (value: string) => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+  if (
+    xmlWellFormed !== true ||
+    !xmlHasRequiredStructure ||
+    !ernXml.includes(xmlEscape(manifest.isrc as string)) ||
+    !ernXml.includes(xmlEscape(manifest.upc as string)) ||
+    !ernXml.includes(xmlEscape(manifest.title as string)) ||
+    !ernXml.includes(xmlEscape(manifest.artist as string))
+  ) {
+    return NextResponse.json(
+      { ok: false, requiresCredentials: false, error: 'DDEX ERN XML is malformed or does not contain the validated release metadata and required ERN structure' },
       { status: 422 },
     )
   }
