@@ -266,7 +266,7 @@ function fnv1a32(input: string): number {
  *                  same session without collisions.
  * @returns A 12-character ISRC string (no dashes).
  */
-export function generateIsrc(sessionId: string, registrant = '2XX', counter = 0): string {
+export function generateIsrc(sessionId = crypto.randomUUID(), registrant = '2XX', counter = 0): string {
   const year = new Date().getFullYear() % 100
   const hash = fnv1a32(`${sessionId}:isrc:${counter}`)
   const designation = (hash % 100000).toString().padStart(5, '0')
@@ -289,7 +289,7 @@ export function generateIsrc(sessionId: string, registrant = '2XX', counter = 0)
  *                  same session without collisions.
  * @returns A 12-digit UPC string with a valid EAN-13 check digit.
  */
-export function generateUpc(sessionId: string, counter = 0): string {
+export function generateUpc(sessionId = crypto.randomUUID(), counter = 0): string {
   const hash = fnv1a32(`${sessionId}:upc:${counter}`)
   // Use a simple LCG to generate 11 deterministic digits from the hash seed.
   // This spreads the 32-bit hash entropy across all digit positions.
