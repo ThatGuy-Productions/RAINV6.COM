@@ -35,6 +35,7 @@
  */
 
 import { audioBufferToWav, audioBufferToMp3 } from './audio-engine'
+import { XMLValidator } from 'fast-xml-parser'
 import { validateIsrc, validateUpc } from './metadata-validation'
 import { hashFloat32Channels, verifyProvenance } from './provenance'
 import type { ExportOptions } from './audio-engine'
@@ -544,58 +545,42 @@ export function validateIsrcFormat(isrc: string): boolean {
 }
 
 export function validateDdex(xml: string): DdexValidationResult {
+  const wellFormed = XMLValidator.validate(xml)
+  if (wellFormed !== true) {
+    const message = typeof wellFormed === 'object' && 'err' in wellFormed
+      ? String((wellFormed as { err?: { msg?: string } }).err?.msg ?? 'XML parse error')
+      : 'XML parse error'
+    return { ok: false, errors: [`XML not well-formed: ${message.slice(0, 240)}`] }
+  }
+
   const errors: string[] = []
-  if (typeof DOMParser === 'undefined') {
-    // Server-side path is not used for validation (the browser builds the
-    // package). If we ever need server-side validation, we can parse via a
-    // regex sanity pass; for now, surface the limitation honestly.
-    errors.push('DOMParser not available in this environment')
-    return { ok: false, errors }
+  // ERN 4.3.2 required-field sanity gate. XMLValidator checks well-formedness;
+  // this is not a substitute for official XSD/profile validation.
+  const hasTag = (tag: string) => new RegExp(
+    `<(?:[A-Za-z_][\\w.-]*:)?${tag}(?:\\s[^>]*)?>`,
+  ).test(xml)
+  const tagText = (tag: string): string => {
+    const match = new RegExp(
+      `<(?:[A-Za-z_][\\w.-]*:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[A-Za-z_][\\w.-]*:)?${tag}>`,
+    ).exec(xml)
+    return match?.[1]?.replace(/<[^>]+>/g, '').trim() ?? ''
   }
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  const parseError = doc.getElementsByTagName('parsererror')[0]
-  if (parseError) {
-    errors.push(`XML not well-formed: ${parseError.textContent?.slice(0, 200) ?? 'parse error'}`)
-    return { ok: false, errors }
-  }
-  // Required elements per ERN 4.3.2 NewReleaseMessage.
+
   const required = [
-    { tag: 'MessageId', parent: 'MessageHeader' },
-    { tag: 'MessageCreatedDateTime', parent: 'MessageHeader' },
-    { tag: 'ResourceReference', parent: 'SoundRecording' },
-    { tag: 'ISRC', parent: 'SoundRecording' },
-    { tag: 'ReferenceTitle', parent: 'SoundRecording' },
-    { tag: 'Duration', parent: 'SoundRecording' },
-    { tag: 'UPC', parent: 'ReleaseId' },
-    { tag: 'DisplayArtist', parent: 'Release' },
-    { tag: 'AIInvolvement', parent: 'Release' },
+    'NewReleaseMessage', 'MessageHeader', 'MessageId', 'MessageCreatedDateTime',
+    'ResourceList', 'SoundRecording', 'ResourceReference', 'ISRC', 'ReferenceTitle',
+    'Duration', 'ReleaseList', 'Release', 'ReleaseId', 'UPC', 'DisplayArtist',
+    'AIInvolvement', 'DealList',
   ]
-  for (const { tag } of required) {
-    if (!doc.getElementsByTagName(tag).length) {
-      errors.push(`Missing required element: <${tag}>`)
-    }
+  for (const tag of required) {
+    if (!hasTag(tag)) errors.push(`Missing required element: <${tag}>`)
   }
-  // ISRC format check.
-  const isrcEl = doc.getElementsByTagName('ISRC')[0]
-  if (isrcEl) {
-    const isrc = (isrcEl.textContent ?? '').trim()
-    if (!validateIsrcFormat(isrc)) {
-      errors.push(`ISRC '${isrc}' does not match ISO 3901 (CC-XXX-YY-NNNNN)`)
-    }
-  }
-  // UPC check digit.
-  const upcEl = doc.getElementsByTagName('UPC')[0]
-  if (upcEl) {
-    const upc = (upcEl.textContent ?? '').trim()
-    if (!validateUpcCheckDigit(upc)) {
-      errors.push(`UPC '${upc}' check digit is invalid`)
-    }
-  }
-  // Root element must be ern:NewReleaseMessage.
-  const root = doc.documentElement
-  if (!root || root.localName !== 'NewReleaseMessage') {
-    errors.push('Root element must be NewReleaseMessage (ern namespace)')
-  }
+
+  const isrc = tagText('ISRC')
+  if (isrc && !validateIsrc(isrc)) errors.push(`Invalid ISRC format: ${isrc}`)
+  const upc = tagText('UPC')
+  if (upc && !validateUpc(upc)) errors.push(`Invalid UPC/EAN check digit: ${upc}`)
+
   return { ok: errors.length === 0, errors }
 }
 
