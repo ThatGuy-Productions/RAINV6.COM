@@ -1795,19 +1795,18 @@ export function generateCustodyCertificate(opts: {
 
   // Link 2: Processing Engine
   const defaultStages = [
-    'Format Normalization (48 kHz, 64-bit float)',
-    'Provenance Record (ITU-R BS.1770-4)',
-    'Feature Extraction (43-dim vector)',
-    'AI Inference (RainNet v2)',
-    'Reference Matching',
-    'Spectral Repair',
+    'Format normalization and source decoding',
+    'Signal analysis and feature extraction',
+    'RainNet inference or explicit heuristic fallback',
+    'Reference matching',
+    'Spectral repair',
     'Source separation skipped — verified neural model unavailable',
-    'Per-stem repair/processing skipped — no neural stems produced',
-    'Master Bus (EQ, MB Comp, Stereo, Life)',
-    'Loudness Targeting (27 platform targets)',
-    'True-Peak Limiting',
-    'QC Validation (18 checks)',
-    'Output Packaging (24-bit WAV / 320 kbps MP3)',
+    'Per-stem repair skipped — no neural stems produced',
+    'Per-stem processing skipped — no neural stems produced',
+    'Master bus (EQ, three-band compression, stereo, groove, saturation)',
+    'Loudness targeting',
+    'True-peak limiting',
+    'QC validation',
   ]
   chain.push({
     index: chainIdx++,
