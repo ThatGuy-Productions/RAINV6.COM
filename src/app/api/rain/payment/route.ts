@@ -170,7 +170,7 @@ async function handleCreate(
 
   // ── Validate required fields ────────────────────────────────────────────
   const userSessionId = typeof body.userSessionId === 'string' ? body.userSessionId.slice(0, 128) : ''
-  const provider = typeof body.provider === 'string' ? body.provider as PaymentMethod : ''
+  const providerInput = typeof body.provider === 'string' ? body.provider : ''
   const amountCents = typeof body.amountCents === 'number' ? Math.round(body.amountCents) : 0
   const returnUrl = typeof body.returnUrl === 'string' ? body.returnUrl : ''
   const cancelUrl = typeof body.cancelUrl === 'string' ? body.cancelUrl : ''
@@ -183,12 +183,14 @@ async function handleCreate(
   }
 
   const validProviders: PaymentMethod[] = ['payfast', 'ozow', 'stripe']
-  if (!validProviders.includes(provider)) {
+  if (!validProviders.includes(providerInput as PaymentMethod)) {
     return NextResponse.json(
       { ok: false, error: `Invalid payment provider. Must be one of: ${validProviders.join(', ')}.`, stage: 'validate' },
       { status: 400, headers: corsHeaders(origin) },
     )
   }
+
+  const provider = providerInput as PaymentMethod
 
   // ── Create isolated payment session ─────────────────────────────────────
   const result = isolation.createSession(userSessionId, provider, amountCents, req)
