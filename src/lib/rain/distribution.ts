@@ -743,7 +743,7 @@ export async function buildDistributionPackage(
   }
   const parsedReleaseDate = new Date(`${metadata.releaseDate}T00:00:00.000Z`)
   if (
-    !/^\\d{4}-\\d{2}-\\d{2}$/.test(metadata.releaseDate) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.releaseDate) ||
     !Number.isFinite(parsedReleaseDate.getTime()) ||
     parsedReleaseDate.toISOString().slice(0, 10) !== metadata.releaseDate
   ) {
