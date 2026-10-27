@@ -3,14 +3,10 @@
 /**
  * RAIN V6 — Landing Page Beta Velocity Section
  *
- * Shows REAL aggregate beta metrics pulled from the public /api/rain/stats
- * endpoint — no fabricated numbers. Counts animate up when scrolled into
- * view. Replaces the hardcoded "12,847 hours mastered" fabrication in the
- * testimonials section with honest, live data.
- *
- * On a fresh database the counts will be 0 — the section handles this
- * gracefully with a "Be the first" message rather than showing empty
- * counters.
+ * Shows aggregate metrics only when the API can substantiate them. The live
+ * beta currently has no reliable retained history for usage hours, work,
+ * exports, or AIE activity; unavailable metrics must never be rendered as 0.
+ * This section explicitly distinguishes missing evidence from measured zero.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -25,16 +21,6 @@ interface BetaStats {
   totalFeedback: number
   changelogEntries: number
   activitySeries: { date: string; count: number }[]
-}
-
-const ZERO_STATS: BetaStats = {
-  totalSignups: 0,
-  totalRenders: 0,
-  totalSessions: 0,
-  totalExports: 0,
-  totalFeedback: 0,
-  changelogEntries: 7,
-  activitySeries: [],
 }
 
 export function LandingBetaVelocity() {
@@ -54,8 +40,9 @@ export function LandingBetaVelocity() {
         const data = (await res.json()) as BetaStats
         if (!cancelled) setStats(data)
       } catch {
-        // Degrade gracefully — show zeros rather than breaking the landing.
-        if (!cancelled) setStats(ZERO_STATS)
+        // Missing telemetry is not a measured zero. Leave stats null so the UI
+        // explicitly reports that historical metrics are unavailable.
+        if (!cancelled) setStats(null)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -88,11 +75,11 @@ export function LandingBetaVelocity() {
             Beta Velocity
           </div>
           <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-3">
-            Real numbers, live from the database.
+            Beta usage evidence
           </h2>
           <p className="text-sm text-muted-foreground max-w-lg mx-auto">
-            No fabricated metrics. Every count below is a real query against the
-            RAIN V6 beta database — updated on every page load.
+            We do not have a reliable retained history of usage hours, completed work,
+            exports, or AIE activity from the current beta. Historical totals are unavailable.
           </p>
         </div>
 
@@ -142,13 +129,19 @@ export function LandingBetaVelocity() {
           />
         </div>
 
-        {/* Empty state */}
-        {!loading && !hasData && (
+        {/* Empty state is shown only when a successful query measured zero activity. */}
+        {!loading && stats && !hasData && (
           <div className="text-center mt-8">
             <p className="text-[13px] text-muted-foreground italic">
-              The beta database is fresh —{' '}
-              <span className="text-[#AAFF00]">be the first to master a track.</span>
+              No recorded activity is present in the queried data source.
             </p>
+          </div>
+        )}
+
+        {!loading && !stats && (
+          <div className="text-center mt-8 rounded-xl border border-rain-border/60 bg-rain-surface-2/30 p-5">
+            <p className="text-sm font-medium">Historical usage metrics unavailable</p>
+            <p className="text-xs text-muted-foreground mt-2">The current beta does not retain enough telemetry to substantiate historical usage totals. This does not mean the platform was unused; it means those totals were not recorded.</p>
           </div>
         )}
 
@@ -159,12 +152,8 @@ export function LandingBetaVelocity() {
 
         {/* Live indicator + honesty note */}
         <div className="flex items-center justify-center gap-2 mt-8">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full rounded-full bg-[#AAFF00] opacity-75 animate-ping" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#AAFF00]" />
-          </span>
           <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            Live · queried on page load · no caching
+            {stats ? 'Database query completed · current recorded data only' : 'Historical telemetry unavailable'}
           </span>
         </div>
       </div>
@@ -211,6 +200,8 @@ function StatCard({
       <div className="text-2xl font-bold font-mono tracking-tight" style={{ color }}>
         {loading ? (
           <span className="inline-block w-10 h-6 rounded bg-white/[0.06] animate-pulse" />
+        ) : value === undefined ? (
+          '—'
         ) : (
           displayValue.toLocaleString()
         )}
