@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "rain-v1",
+  "modelName": "rain_trained.onnx",
+  "externalDataFile": "rain_base.onnx.data",
+  "modelVersion": "2.0.0-trained",
+  "engineVersion": "RAIN V6 RainNet mastering-parameter inference",
+  "createdAt": "2026-07-31T00:00:00Z",
+  "checksums": {
+    "sha256": "b3fd061212a66c7baaf8476266fb444fbb48a27dc549e8157f67b8eda23f9e52",
+    "sha256ExternalData": "d01be6c5a39c873cd8414fb6eb34cc8b5e1d1712472c859b096667cf7d8f7193"
+  },
+  "minimumOnnxRuntimeVersion": "1.24.0",
+  "inputSpec": [
+    {
+      "name": "mel",
+      "dtype": "float32",
+      "shape": [
+        1,
+        1,
+        128,
+        128
+      ]
+    },
+    {
+      "name": "artist_vec",
+      "dtype": "float32",
+      "shape": [
+        1,
+        64
+      ]
+    },
+    {
+      "name": "genre_id",
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "platform_id",
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "simple_mode",
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    }
+  ],
+  "outputSpec": {
+    "name": "processing_params",
+    "dtype": "float32",
+    "shape": [
+      1,
+      46
+    ],
+    "parameterCount": 46
+  },
+  "dspStageMapping": [
+    "eq",
+    "multiband-compression",
+    "loudness",
+    "limiting",
+    "stereo-width",
+    "saturation"
+  ]
+}
