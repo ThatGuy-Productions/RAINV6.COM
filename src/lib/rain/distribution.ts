@@ -471,7 +471,7 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
   ].filter(Boolean).join('\n')
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ern:NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/43" LanguageAndScriptCode="en">
+<ern:NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/43" xmlns="http://ddex.net/xml/ern/43" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" LanguageAndScriptCode="en">
   <MessageHeader>
     <MessageId>${messageId}</MessageId>
     <MessageCreatedDateTime>${created}</MessageCreatedDateTime>
