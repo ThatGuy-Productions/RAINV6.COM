@@ -52,7 +52,7 @@ describe('beta entitlement policy', () => {
 
   test('blocks export number 31 even when 750 credits remain', () => {
     expect(paid(750, 30)).toMatchObject({
-      canStartFullCapabilityRender: true,
+      canStartFullCapabilityRender: false,
       canExport: false,
       monthlyCreditsRemaining: 750,
       paidRendersRemainingByCredits: 30,
