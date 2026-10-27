@@ -81,21 +81,20 @@ export async function verifyModelManifest(
     const modelBytes = await modelResponse.arrayBuffer()
     if (await sha256Hex(modelBytes) !== manifest.checksums.sha256.toLowerCase()) return false
 
-    if (manifest.externalDataFile !== undefined) {
-      // ONNX external-data companion must belong to the selected graph; do
-      // not allow a manifest to accidentally validate another model's weights.
-      if (
-        typeof manifest.externalDataFile !== 'string' ||
-        manifest.externalDataFile !== `${modelName}.data` ||
-        !isSha256Hex(manifest.checksums?.sha256ExternalData)
-      ) return false
+    // Both shipped RainNet candidates use ONNX external tensor data. Require
+    // a matching companion filename and hash; graph-only verification would
+    // leave the majority of model weights unauthenticated.
+    if (
+      typeof manifest.externalDataFile !== 'string' ||
+      manifest.externalDataFile !== `${modelName}.data` ||
+      !isSha256Hex(manifest.checksums?.sha256ExternalData)
+    ) return false
 
-      const dataPath = `/models/${manifest.externalDataFile}`
-      const dataResponse = await fetch(dataPath, { cache: 'no-store' })
-      if (!dataResponse.ok) return false
-      const dataBytes = await dataResponse.arrayBuffer()
-      if (await sha256Hex(dataBytes) !== manifest.checksums.sha256ExternalData.toLowerCase()) return false
-    }
+    const dataPath = `/models/${manifest.externalDataFile}`
+    const dataResponse = await fetch(dataPath, { cache: 'no-store' })
+    if (!dataResponse.ok) return false
+    const dataBytes = await dataResponse.arrayBuffer()
+    if (await sha256Hex(dataBytes) !== manifest.checksums.sha256ExternalData.toLowerCase()) return false
 
     return true
   } catch {
