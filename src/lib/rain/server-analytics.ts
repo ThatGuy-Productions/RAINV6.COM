@@ -24,6 +24,8 @@ export type EventType =
   | 'tab_viewed'
   | 'feedback_submitted'
   | 'referral_signup'
+  | 'beta_paywall_shown'
+  | 'beta_checkout_started'
 
 interface TrackEventInput {
   userId?: string | null
