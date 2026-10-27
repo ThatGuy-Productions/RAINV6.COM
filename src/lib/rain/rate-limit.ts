@@ -1,9 +1,10 @@
 /**
- * RAIN V6 — In-memory token-bucket rate limiter for API routes.
+ * RAIN V6 — Secondary in-process token bucket for API route handlers.
  *
- * Per-IP bucket: `RATE_LIMIT_RPM` requests per minute, refilled continuously.
- * Suitable for single-instance deploys (Next.js dev server / single container).
- * For multi-instance, swap with Redis or Upstash.
+ * Production routes must also be covered by the shared-store Upstash limiter in
+ * middleware.ts. This helper cannot provide a cross-instance security boundary;
+ * fail closed in production if a route reaches it without the shared guard.
+ * Development/test use remains process-local.
  *
  * Usage:
  *   import { checkRateLimit } from '@/lib/rain/rate-limit'
@@ -49,6 +50,13 @@ export function checkRateLimit(
   keyPrefix: string,
   rpm: number = RATE_LIMIT_RPM_DEFAULT,
 ): RateLimitResult {
+  if (process.env.NODE_ENV === 'production') {
+    // This synchronous helper cannot safely call the shared Redis store. The
+    // shared middleware guard must enforce production limits before the route.
+    // Fail closed if a production route reaches this helper without that guard.
+    return { ok: false, remaining: 0, retryAfter: 1 }
+  }
+
   const now = Date.now()
   sweep(now)
 
