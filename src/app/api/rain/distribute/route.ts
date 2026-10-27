@@ -367,10 +367,11 @@ export const POST = withCsrf(async (req: NextRequest) => {
     const providerExplicitFailure =
       providerPayload?.ok === false ||
       providerPayload?.success === false ||
+      (Array.isArray(providerPayload?.errors) && providerPayload.errors.length > 0) ||
       ['failed', 'error', 'rejected', 'invalid'].includes(providerStatus)
 
     if (providerResp.ok && !providerExplicitFailure) {
-      const status = ['delivered', 'complete', 'completed', 'published'].includes(providerStatus)
+      const status = ['delivered', 'published'].includes(providerStatus)
         ? 'delivered'
         : 'submitted'
       return NextResponse.json({
