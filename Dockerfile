@@ -12,9 +12,11 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder /app/node_modules/@prisma/engines ./node_modules/@prisma/engines
 COPY --from=builder /app/package.json ./
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/rain/admin/status || exit 1
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "case \"$DATABASE_URL\" in postgres://*|postgresql://*) ;; *) echo \"ERROR: DATABASE_URL must point to durable PostgreSQL\" >&2; exit 1 ;; esac; node ./node_modules/prisma/build/index.js migrate deploy && node server.js"]
