@@ -115,20 +115,11 @@ if [ -d "public" ]; then
     cp -r public "$BUILD_DIR/next-service-dist/"
 fi
 
-# Copy test database into build artifact (production starts from this snapshot)
-if [ -f "./db/custom.db" ]; then
-    echo "Copying test database snapshot to build artifact..."
-    mkdir -p "$BUILD_DIR/db"
-    cp -r ./db/. "$BUILD_DIR/db/"
+# The application artifact must NEVER contain a database snapshot.
+# Accounts, saved projects, render records, and events live in the external
+# PostgreSQL service configured at deployment. Bundling SQLite here caused
+# accounts to reset to the build-time snapshot after redeploys.
 
-    echo "Syncing build artifact database schema..."
-    DATABASE_URL="file:$BUILD_DIR/db/custom.db" bun run db:push
-    echo "Build artifact database ready"
-    ls -lah "$BUILD_DIR/db"
-else
-    echo "ERROR: Test database file ./db/custom.db not found — cannot produce production package"
-    exit 1
-fi
 
 if [ -f "Caddyfile" ]; then
     echo "  - Copying Caddyfile"
