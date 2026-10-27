@@ -316,7 +316,7 @@ export function generateUpc(sessionId = crypto.randomUUID(), counter = 0): strin
  */
 export function createProvenanceSigningPayload(
   cert: Pick<ProvenanceCertificate, 'certId' | 'inputHash' | 'outputHash' | 'wasmHash' | 'signedAt' | 'algorithm' | 'manifest'>,
-): Uint8Array {
+): ArrayBuffer {
   return new TextEncoder().encode(JSON.stringify({
     algorithm: cert.algorithm,
     certId: cert.certId,
@@ -325,7 +325,7 @@ export function createProvenanceSigningPayload(
     outputHash: cert.outputHash,
     signedAt: cert.signedAt,
     wasmHash: cert.wasmHash,
-  }))
+  })).buffer as ArrayBuffer
 }
 
 export async function generateProvenance(opts: {
