@@ -1054,3 +1054,46 @@ Verification:
 - Server running on port 3000, HTTP 200 ✓
 
 Files changed: src/lib/rain/tier-gate.ts (C3 fix), src/app/api/rain/admin/status/route.ts (C2 fix), src/app/api/rain/admin/bootstrap/route.ts (C1 fix), src/lib/db.ts (H10 fix), src/app/api/rain/stats/route.ts (variable rename).
+
+
+---
+
+Task ID: 21
+Agent: RAIN V6 remediation
+Task: Repair production route-level rate limiting and add fail-closed acceptance tests.
+
+Work Log:
+- Reviewed the security backlog and found a production availability defect in `src/lib/rain/rate-limit.ts`: the synchronous helper returned `ok: false` unconditionally in production. Therefore, every request reaching a route-level check was rejected even if the outer middleware had allowed it.
+- Replaced the helper with an asynchronous shared Upstash Redis REST counter using an atomic Redis script. Route-specific keys are SHA-256 hashed before storage. Production fails closed when Redis configuration is missing or the shared service errors; process-local token buckets remain development/test only.
+- Updated Assist, Suggest, Admin Bootstrap, Payment, and PaymentIsolation call sites to await the shared limiter. Payment session creation is now asynchronous. Store outages return 503; genuine quota exhaustion returns 429.
+- Added `tests/lib/rate-limit-production.test.ts` covering missing configuration, allowed requests, over-limit requests, and store outage.
+- CI evidence: workflow run 40579683223 passed lint, typecheck, Prisma, build, and tests; the production limiter tests passed. The later full run 40580144179 also passed all five CI jobs.
+
+Stage Summary:
+- The prior unconditional production rejection is fixed.
+- Automated tests use mocked Upstash responses; this does not replace validation against a configured live Redis service or a multi-instance deployment.
+
+Remaining:
+- Complete whole-app route coverage audit and verify trusted proxy/client-IP handling.
+- Confirm production environment variables and run cross-instance acceptance tests against the actual shared store.
+
+---
+
+Task ID: 22
+Agent: RAIN V6 remediation
+Task: Bind all material RAIN-CERT certificate claims into the Ed25519 signature while retaining legacy verification.
+
+Work Log:
+- Added `createProvenanceSigningPayload()` in `src/lib/rain/provenance.ts`. New certificates sign a canonical JSON payload containing algorithm, certificate ID, input hash, manifest, output hash, signing timestamp, and engine identifier.
+- Added the signed manifest marker `org.rain.cert.signature-payload` version 2. Verification selects the v2 payload for new certificates and retains the previous output-hash-plus-manifest verifier for legacy certificates.
+- Added `tests/lib/provenance-verification.test.ts` for valid signatures, legacy signature compatibility, modified manifest/output hash/certificate metadata, and malformed signature/public-key handling.
+- CI evidence: workflow run 40580144179 passed lint, TypeScript, Prisma validation, production build, and automated tests: 142 passed, 0 failed.
+
+Stage Summary:
+- New RAIN-CERT signatures now detect edits to certificate metadata that was previously outside the signed message.
+- This is cryptographic integrity against the embedded key, not an independent trust authority or proof of legal ownership.
+
+Remaining:
+- Add browser-based IndexedDB key lifecycle/rotation and legacy-key migration tests.
+- Verify all export UI paths attach the intended certificate and independently inspect exported bytes.
+- Continue P0 mastering/model-runtime and P1 DDEX/provider acceptance work; this commit does not make the product production-ready.
