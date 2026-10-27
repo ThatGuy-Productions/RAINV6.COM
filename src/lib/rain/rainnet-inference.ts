@@ -82,9 +82,11 @@ export async function verifyModelManifest(
     if (await sha256Hex(modelBytes) !== manifest.checksums.sha256.toLowerCase()) return false
 
     if (manifest.externalDataFile !== undefined) {
+      // ONNX external-data companion must belong to the selected graph; do
+      // not allow a manifest to accidentally validate another model's weights.
       if (
         typeof manifest.externalDataFile !== 'string' ||
-        manifest.externalDataFile.length === 0 ||
+        manifest.externalDataFile !== `${modelName}.data` ||
         !isSha256Hex(manifest.checksums?.sha256ExternalData)
       ) return false
 
