@@ -1,7 +1,8 @@
 'use client'
 
 /**
- * RAIN V6 — BS-RoFormer 4-Pass Source Separator
+ * RAIN V6 — Experimental DSP-derived stem approximation.
+ * This is not a neural BS-RoFormer implementation and must not be marketed as one.
  *
  * Implements the canonical 4-pass cascade per the official tech spec
  * (Pasted Content_1783542076605.txt, "Source Separation: BS-RoFormer"):
@@ -91,6 +92,12 @@ import { applyBiquad, designBiquad, fftInPlace, type BiquadCoef } from './dsp'
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+export const STEM_SEPARATION_CAPABILITY = {
+  neuralModelAvailable: false,
+  implementation: 'dsp-approximation',
+  reason: 'A licensed BS-RoFormer ONNX model and its verified weights are not bundled in this repository. The existing TypeScript routine is only a DSP approximation and is disabled in the product UI.',
+} as const
 
 export interface StemResult {
   key: StemKey
