@@ -307,8 +307,26 @@ export function generateUpc(sessionId = crypto.randomUUID(), counter = 0): strin
 }
 
 // ---------------------------------------------------------------------------
-// RAIN-CERT generation
+// RAIN-CERT signing payload and generation
 // ---------------------------------------------------------------------------
+
+/**
+ * Canonical payload for new RAIN-CERT signatures. Bind all certificate claims,
+ * not only the output hash and manifest, so metadata edits are detectable too.
+ */
+export function createProvenanceSigningPayload(
+  cert: Pick<ProvenanceCertificate, 'certId' | 'inputHash' | 'outputHash' | 'wasmHash' | 'signedAt' | 'algorithm' | 'manifest'>,
+): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({
+    algorithm: cert.algorithm,
+    certId: cert.certId,
+    inputHash: cert.inputHash,
+    manifest: cert.manifest,
+    outputHash: cert.outputHash,
+    signedAt: cert.signedAt,
+    wasmHash: cert.wasmHash,
+  }))
+}
 
 export async function generateProvenance(opts: {
   inputBuffer: ArrayBuffer
@@ -351,8 +369,11 @@ export async function generateProvenance(opts: {
     }
   }
 
-  // Build C2PA manifest
+  // Certificate metadata is included in the v2 signed payload.
   const now = new Date().toISOString()
+  const certId = `RAIN-CERT-${outputHash.slice(0, 16).toUpperCase()}`
+
+  // Build C2PA manifest
   const manifest: C2PAManifest = {
     version: '2.2',
     claimGenerator: `RAIN/${'6.0.0-rc1'}`,
@@ -364,6 +385,7 @@ export async function generateProvenance(opts: {
     assertions: [
       { label: 'c2pa.actions.v2', data: { actions: ['mastered', 'dsp', 'analyzed'] } },
       { label: 'org.rain.cert.level', data: { level: 'RAIN-CERT-1', algorithm: 'Ed25519' } },
+      { label: 'org.rain.cert.signature-payload', data: { version: 2, fields: ['algorithm', 'certId', 'inputHash', 'manifest', 'outputHash', 'signedAt', 'wasmHash'] } },
       // AUDIT-M8 FIX: watermark assertion was a bare type tag implying an
       // AudioSeal 16-bit watermark was embedded. No watermarking is performed
       // (AudioSeal requires a neural model we don't ship). Now honestly states
@@ -374,10 +396,12 @@ export async function generateProvenance(opts: {
     ],
   }
 
-  // AUDIT-M8 FIX: comment said "CBOR-encoded (RFC 8949)" but we use JSON.
-  // The manifest is JSON-serialised for signing (matches verifyProvenance).
-  const manifestJson = JSON.stringify(manifest)
-  const message = new TextEncoder().encode(outputHash + manifestJson)
+  // New certificates bind every material certificate claim. verifyProvenance
+  // retains the legacy verifier for older certificates without the v2 marker.
+  const message = createProvenanceSigningPayload({
+    certId, inputHash, outputHash, wasmHash: engineHash, signedAt: now,
+    algorithm: 'Ed25519', manifest,
+  })
   const signatureBuf = await crypto.subtle.sign('Ed25519', keys.privateKey, message)
   const signature = bufToHex(signatureBuf)
 
@@ -385,8 +409,6 @@ export async function generateProvenance(opts: {
   // Use btoa directly — Buffer is not defined in the browser and the `Buffer ?`
   // ternary throws a ReferenceError before the fallback runs.
   const publicKey = btoa(JSON.stringify(pubJwk))
-
-  const certId = `RAIN-CERT-${outputHash.slice(0, 16).toUpperCase()}`
 
   return {
     certId,
@@ -408,8 +430,13 @@ export async function verifyProvenance(cert: ProvenanceCertificate): Promise<boo
   try {
     const pubJwk = JSON.parse(atob(cert.publicKey))
     const publicKey = await crypto.subtle.importKey('jwk', pubJwk, { name: 'Ed25519' }, true, ['verify'])
-    const manifestJson = JSON.stringify(cert.manifest)
-    const message = new TextEncoder().encode(cert.outputHash + manifestJson)
+    const hasV2Payload = cert.manifest.assertions.some(assertion =>
+      assertion.label === 'org.rain.cert.signature-payload' &&
+      (assertion.data as { version?: unknown }).version === 2,
+    )
+    const message = hasV2Payload
+      ? createProvenanceSigningPayload(cert)
+      : new TextEncoder().encode(cert.outputHash + JSON.stringify(cert.manifest))
     const sigBytes = hexToBuf(cert.signature)
     // Must await — returning the promise without await defeats the try/catch
     // (async function semantics: `return p` ≠ `return await p` for error handling).
