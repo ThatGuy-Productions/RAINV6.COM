@@ -1,10 +1,9 @@
 // RAIN V6 — Prisma schema (Wave 3 P2-1)
 //
-// Sandbox provider is `sqlite` (Next.js-only environment). Production uses
-// PostgreSQL 18 (per spec) with row-level security policies. The model shape
-// below mirrors the production PostgreSQL schema; only the JSON-typed columns
-// (`inputMetadata`, `renderSettings`) are stored as `String` because SQLite
-// has no native JSON type. Production migrations will switch these to `Json`.
+// PostgreSQL is the canonical durable store for deployed accounts, saved work,
+// authentication sessions, renders, and telemetry. Do not package a database
+// file into the application image: deployments must provide a managed/durable
+// PostgreSQL DATABASE_URL and apply versioned migrations before rollout.
 //
 // 4 spec-mandated tables: Account, Session, Render, InferenceJob.
 
@@ -13,7 +12,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -74,7 +73,7 @@ model Session {
   name            String   @default("Untitled")
   inputFileHash   String?
   inputMetadata   String?  // JSON string (SQLite has no JSON type)
-  renderSettings  String?  // JSON string
+  renderSettings  String?  // JSON-encoded settings, kept as text for compatibility
   rainDspWasmHash String?
   status          String   @default("draft") // draft|inferring|rendered|archived
   createdAt       DateTime @default(now())
