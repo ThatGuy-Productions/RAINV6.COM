@@ -897,7 +897,7 @@ class RainAudioEngine {
     //     callback is supplied) the in-pipeline run is skipped — Stages 8/9
     //     then also skip with an honest label, and the render continues to
     //     operate on `inChannels` directly.
-    wrappedOnProgress?.(7, 16, 'BS-RoFormer Separation')
+    wrappedOnProgress?.(7, 16, 'Source Separation skipped — neural model unavailable')
     checkCancel()
     let separatedStems: import('./stems').StemResult[] | null = null
     let stemsSkipReason: string | null = null
@@ -913,48 +913,12 @@ class RainAudioEngine {
         }
       }
 
-      // P3-BSROFORMER: in-pipeline BS-RoFormer 4-pass source separation.
-      // Operates on the ORIGINAL input (not the in-progress mastered signal)
-      // — stems represent the source material, not the master. Skip if audio
-      // exceeds the 60s memory cap OR no onStemsReady callback was supplied
-      // (the Stems tab handles long audio on demand).
-      if (!onStemsReady) {
-        stemsSkipReason = 'no stem callback'
-      } else if (!this.inputBuffer) {
-        stemsSkipReason = 'no input loaded'
-      } else if (this.inputBuffer.length > 60 * this.inputBuffer.sampleRate) {
-        stemsSkipReason = 'audio > 60s, run from Stems tab'
-      } else {
-        try {
-          const stemInputs: Float32Array[] = []
-          for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
-            stemInputs.push(this.inputBuffer.getChannelData(c).slice())
-          }
-          const { runStemSeparation } = await import('./stems')
-          const stems = await runStemSeparation(
-            stemInputs,
-            this.inputBuffer.sampleRate,
-            // Lightweight progress — Stage 7 is one of 16, so the macro
-            // progress bar already reflects it. We do not bubble BS-RoFormer's
-            // internal pass percentages up through the mastering UI (they'd
-            // be confusing during a render). The Stems tab shows them when
-            // invoked directly.
-            undefined,
-            signal,
-          )
-          separatedStems = stems
-          onStemsReady(stems)
-        } catch (err) {
-          // Don't fail the render if stem separation fails — log and
-          // continue. The user can re-run from the Stems tab.
-          const e = err as Error
-          if (e.name !== 'CancelledError') {
-            console.warn('[BS-RoFormer] in-pipeline separation failed:', e.message)
-            stemsSkipReason = 'separation failed'
-          }
-          // Re-throw cancellation so the render aborts as expected.
-          if (signal?.aborted) throw err
-        }
+      // No licensed neural BS-RoFormer model is bundled. The available
+      // TypeScript routine is a DSP approximation, not true source separation,
+      // so never publish its output as neural stems or silently mark Stage 7 done.
+      stemsSkipReason = 'licensed neural BS-RoFormer model not bundled'
+      if (onStemsReady) {
+        console.warn('[stems] Stage 7 skipped: verified neural separation model is unavailable.')
       }
     }
     await sleep(0)
@@ -1409,16 +1373,9 @@ class RainAudioEngine {
     onProgress?: (stage: string, pct: number) => void,
     signal?: AbortSignal,
   ): Promise<import('./stems').StemResult[]> {
-    if (!this.inputBuffer) throw new Error('No input loaded — load a track first')
-    const sampleRate = this.inputBuffer.sampleRate
-    const channels: Float32Array[] = []
-    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
-      channels.push(this.inputBuffer.getChannelData(c).slice())
-    }
-    // Dynamic import keeps stems.ts (which has its own FFT/RoPE/correlation
-    // code) out of the initial bundle when the Stems tab is never opened.
-    const { runStemSeparation } = await import('./stems')
-    return runStemSeparation(channels, sampleRate, onProgress, signal)
+    throw new Error(
+      'Neural 12-stem separation is unavailable: this repository does not bundle a licensed, verified BS-RoFormer model. The internal DSP approximation is not exposed as neural separation.',
+    )
   }
 
   /**
