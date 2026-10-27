@@ -374,6 +374,24 @@ const DEFAULT_PLATFORM_ID = 0
 let _ortSession: InferenceSession | null = null
 let _ortBackend: string | null = null
 
+export type RainNetBackend = 'webgpu' | 'wasm'
+
+/** Attempt backends in priority order; a backend is selected only after its
+ * session creation succeeds. Exported to make fallback behaviour testable. */
+export async function createWithBackendFallback<T>(
+  create: (backend: RainNetBackend) => Promise<T>,
+): Promise<{ session: T; backend: RainNetBackend }> {
+  const failures: string[] = []
+  for (const backend of ['webgpu', 'wasm'] as const) {
+    try {
+      return { session: await create(backend), backend }
+    } catch (error) {
+      failures.push(`${backend}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  throw new Error(`WebGPU and WASM session creation failed. ${failures.join('; ')}`)
+}
+
 /**
  * Dynamically import onnxruntime-web and create an InferenceSession.
  * The model is fetched from /models/rain_base.onnx (cached by the browser).
@@ -407,17 +425,15 @@ async function getOrCreateSession(): Promise<InferenceSession> {
       continue
     }
 
-    for (const backend of ['webgpu', 'wasm'] as const) {
-      try {
-        const session = await ort.InferenceSession.create(candidate.modelPath, {
-          executionProviders: [backend],
-        })
-        _ortSession = session
-        _ortBackend = backend
-        return session
-      } catch (error) {
-        failures.push(`${candidate.modelPath} (${backend}): ${error instanceof Error ? error.message : String(error)}`)
-      }
+    try {
+      const loaded = await createWithBackendFallback((backend) =>
+        ort.InferenceSession.create(candidate.modelPath, { executionProviders: [backend] }),
+      )
+      _ortSession = loaded.session
+      _ortBackend = loaded.backend
+      return loaded.session
+    } catch (error) {
+      failures.push(`${candidate.modelPath}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
