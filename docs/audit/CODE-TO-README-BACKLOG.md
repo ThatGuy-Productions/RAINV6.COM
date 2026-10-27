@@ -7,7 +7,7 @@ The README remains the target specification. This backlog is a work tracker, not
 
 ## P0 — Correct integrity and security gaps
 
-- [ ] **P0.1 RainNet model integrity:** replace the manifest field-presence check with a real SHA-256 comparison against fetched model bytes; reject placeholder/malformed hashes. Establish correct manifest/model pairing and calculate the real hash from the exact artifact. Add tests for valid, missing, placeholder, and mismatched hashes.
+- [ ] **P0.1 RainNet model integrity (in progress):** implemented SHA-256 checks for ONNX graph and declared external weights; added valid, missing/placeholder, and tamper tests; populated base/trained manifests with Git LFS OIDs and enabled LFS checkout in the CI build job. Still must confirm CI fetches actual LFS objects, validate binary input/output signatures, and pass browser inference tests.
 - [ ] **P0.2 Private signing-key storage:** stop serializing the Ed25519 private key as JWK in IndexedDB. Store a non-extractable CryptoKey, retain/export the public key as required, and safely migrate or invalidate legacy key records. Test signing, verification, and tampering.
 - [ ] **P0.3 Shared rate limiting:** replace in-memory production enforcement in middleware and library paths with an atomic shared store (for example Upstash Redis REST when configured); establish an explicit safe production response when no shared store is configured. Trust forwarded client IP headers only behind a known proxy.
 - [ ] **P0.4 Authentication/admin review:** trace all auth and admin routes, verify server-side role checks and session expiry, and add tests for unauthenticated and non-admin access.
