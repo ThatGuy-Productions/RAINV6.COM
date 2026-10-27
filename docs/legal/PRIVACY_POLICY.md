@@ -61,7 +61,7 @@ We generate a random UUIDv4 per browser (see `src/lib/rain/anon-id.ts`) and stor
 
 ### 3.2 Local Processing Data and Server-Persisted Account Records
 
-The following data is generated during use and stored exclusively in your browser:
+The following table distinguishes browser-local processing data from account and operational records that may be stored server-side:
 
 | Data Category | Storage Location | Purpose | Server Access |
 |---------------|------------------|---------|---------------|
@@ -101,7 +101,7 @@ RAIN V6 performs **all audio processing entirely within your browser.** This arc
 
 ### 4.2 No Server-Side Audio Processing
 
-**At no point are your audio files uploaded to, processed by, or accessible from any external server.** The Service is a client-side web application that operates entirely within your browser's security sandbox.
+The account and saved-project APIs described in this policy do not upload source audio. Audio processing itself is performed in the browser; account credentials, authentication metadata, saved project settings/metadata, and limited operational event records may be stored server-side.
 
 ### 4.3 What Servers Do
 
@@ -230,7 +230,7 @@ The Service employs the following cryptographic measures:
 As a browser-based application, RAIN is subject to the security limitations of the browser platform. We do not:
 
 - Encrypt IndexedDB data at rest (browser standard limitation)
-- Implement server-side authentication (no accounts in Beta)
+- Guaranteeing end-to-end encryption for server-side account and project metadata (not currently claimed)
 - Provide end-to-end encrypted messaging or storage services
 
 ## 9. Children's Privacy
