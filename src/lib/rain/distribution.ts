@@ -807,8 +807,8 @@ export async function buildDistributionPackage(
   validation: DdexValidationResult
 }> {
   // Never package fabricated fallback metadata or local test identifiers.
-  if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.releaseDate) {
-    throw new Error('Release title, artist, genre, and release date are required before distribution.')
+  if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.label?.trim() || !metadata.releaseDate) {
+    throw new Error('Release title, artist, label, genre, and release date are required before distribution.')
   }
   const parsedReleaseDate = new Date(`${metadata.releaseDate}T00:00:00.000Z`)
   if (
@@ -818,48 +818,16 @@ export async function buildDistributionPackage(
   ) {
     throw new Error('Release date must be a real calendar date in YYYY-MM-DD format.')
   }
+  const dpidPattern = /^[A-Z0-9]{18}$/
+  if (!dpidPattern.test(metadata.senderDpid) || !dpidPattern.test(metadata.recipientDpid)) {
+    throw new Error('Official 18-character DDEX sender and recipient Party IDs are required. Configure the registered IDs before distribution.')
+  }
   const compactIsrc = metadata.isrc?.replace(/[-\s]/g, '').toUpperCase() ?? ''
   if (!metadata.isrc || !validateIsrc(metadata.isrc) || compactIsrc.startsWith('US2XX')) {
     throw new Error('A registered ISRC is required. Local test identifiers cannot be distributed.')
   }
   if (!metadata.upc || !validateUpc(metadata.upc)) {
     throw new Error('A registered UPC/EAN with a valid check digit is required before distribution.')
-  }
-
-  // 1) Build + validate the DDEX XML first — fail fast if metadata is bad.
-  const ddexXml = buildDdexErnXml({
-    title: metadata.title,
-    artist: metadata.artist,
-    album: metadata.album,
-    genre: metadata.genre,
-    genreSubgenre: metadata.genreSubgenre,
-    year: metadata.year,
-    isrc: metadata.isrc,
-    upc: metadata.upc,
-    iswc: metadata.iswc,
-    releaseDate: metadata.releaseDate,
-    originalReleaseDate: metadata.originalReleaseDate,
-    releaseType: metadata.releaseType,
-    label: metadata.label,
-    distributor: metadata.distributor,
-    pLine: metadata.pLine,
-    cLine: metadata.cLine,
-    publisher: metadata.publisher,
-    pro: metadata.pro,
-    masterOwner: metadata.masterOwner,
-    language: metadata.language,
-    explicitLyrics: metadata.explicitLyrics,
-    parentalAdvisory: metadata.parentalAdvisory,
-    territories: metadata.territories,
-    contributors: metadata.contributors,
-    durationSeconds: metadata.durationSeconds ?? audioBuffer.duration,
-    aiDisclosure: metadata.aiDisclosure,
-    targetDsps: metadata.targetDsps,
-    dspLabels: metadata.dspLabels,
-  })
-  const validation = validateDdex(ddexXml)
-  if (!validation.ok) {
-    throw new Error(`DDEX validation failed: ${validation.errors.join('; ')}`)
   }
 
   // 2) Require a valid RAIN-CERT for this exact Float32 master, then embed
@@ -900,8 +868,6 @@ export async function buildDistributionPackage(
   //    30-100 MB master sizes we deal with).
   const wavBytes = new Uint8Array(await wavBlob.arrayBuffer())
   const mp3Bytes = new Uint8Array(await mp3Blob.arrayBuffer())
-  const ernBytes = new TextEncoder().encode(ddexXml)
-
   const safeTitle = metadata.title
     .replace(/[^a-zA-Z0-9-_]+/g, '_')
     .slice(0, 64) || 'rain-release'
@@ -929,6 +895,7 @@ export async function buildDistributionPackage(
 
   // 5) Optional artwork.
   let artworkMeta: ReleaseManifest['artwork']
+  let artworkResource: DdexMetadata['artworkResource']
   if (artworkFile) {
     const art = await validateArtwork(artworkFile)
     if (!art.ok) {
@@ -946,14 +913,75 @@ export async function buildDistributionPackage(
       data: artBytes,
     })
     artworkMeta = { width: art.dimensions[0], height: art.dimensions[1], format: art.format }
+    artworkResource = {
+      filename: `artwork/cover.${ext}`,
+      sha256: artSha,
+      width: art.dimensions[0],
+      height: art.dimensions[1],
+      format: art.format,
+      sizeBytes: artBytes.byteLength,
+    }
   }
 
-  // 6) Build the manifest (without `data` for each asset — manifest.json
+  // 6) Build the DDEX ERN 4.3.2 XML only after the actual delivery files
+  // and their hashes are known. Missing registered DPIDs or file metadata
+  // causes a hard failure; never emit synthetic values.
+  const ddexXml = buildDdexErnXml({
+    title: metadata.title,
+    artist: metadata.artist,
+    album: metadata.album,
+    genre: metadata.genre,
+    genreSubgenre: metadata.genreSubgenre,
+    year: metadata.year,
+    isrc: metadata.isrc,
+    upc: metadata.upc,
+    senderDpid: metadata.senderDpid,
+    recipientDpid: metadata.recipientDpid,
+    audioResource: {
+      filename: `assets/${safeTitle}.wav`,
+      sha256: wavSha,
+      channels: audioBuffer.numberOfChannels,
+      sampleRate: audioBuffer.sampleRate,
+      bitDepth: 24,
+      sizeBytes: wavBytes.byteLength,
+    },
+    artworkResource,
+    iswc: metadata.iswc,
+    releaseDate: metadata.releaseDate,
+    originalReleaseDate: metadata.originalReleaseDate,
+    releaseType: metadata.releaseType,
+    label: metadata.label,
+    distributor: metadata.distributor,
+    pLine: metadata.pLine,
+    cLine: metadata.cLine,
+    publisher: metadata.publisher,
+    pro: metadata.pro,
+    masterOwner: metadata.masterOwner,
+    language: metadata.language,
+    explicitLyrics: metadata.explicitLyrics,
+    parentalAdvisory: metadata.parentalAdvisory,
+    territories: metadata.territories,
+    contributors: metadata.contributors,
+    durationSeconds: metadata.durationSeconds ?? audioBuffer.duration,
+    aiDisclosure: metadata.aiDisclosure,
+    targetDsps: metadata.targetDsps,
+    dspLabels: metadata.dspLabels,
+  })
+  const validation = validateDdex(ddexXml)
+  if (!validation.ok) {
+    throw new Error(`DDEX structural validation failed: ${validation.errors.join('; ')}. Full XSD/profile validation is still required before live delivery.`)
+  }
+  const ernBytes = new TextEncoder().encode(ddexXml)
+
+  // 7) Build the manifest (without `data` for each asset — manifest.json
   //    never embeds bytes, only the hash + metadata).
   const releaseId = `RAIN-RLS-${metadata.isrc}-${Date.now().toString(36)}`
   const manifest: ReleaseManifest = {
     releaseId,
     provenance,
+    senderDpid: metadata.senderDpid,
+    recipientDpid: metadata.recipientDpid,
+    targetDsps: metadata.targetDsps ?? [],
     isrc: metadata.isrc,
     upc: metadata.upc,
     title: metadata.title,
@@ -992,7 +1020,7 @@ export async function buildDistributionPackage(
   const manifestBytes = new TextEncoder().encode(manifestJson)
   const manifestSha = await sha256Bytes(manifestBytes)
 
-  // 7) checksums.txt — one line per release asset, DDEX XML, and manifest.
+  // 8) checksums.txt — one line per release asset, DDEX XML, and manifest.
   const ernSha = await sha256Bytes(ernBytes)
   const checksumsLines = assets.map((a) => `${a.sha256}  ${a.filename}`)
   checksumsLines.push(`${ernSha}  ern.xml`)
