@@ -63,7 +63,7 @@ This means RAIN does process a limited category of personal/account data on its 
 
 ### 3.1 Processing Activities
 
-The Service performs the following processing activities, all of which occur **entirely within the User's browser:**
+The following audio-processing activities occur in the User's browser. Account authentication, saved-project metadata, render records, and limited operational event records may be processed on the server as described in Section 2.3.
 
 | Processing Activity | Purpose | Data Involved | Location |
 |--------------------|---------|--------------|----------|
