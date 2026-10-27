@@ -109,6 +109,9 @@ interface StatsResponse {
       aieComputations: number
       aieExports: number
       visibleStudioHours: number
+      audioHoursProcessed: number
+      renderHours: number
+      exportHours: number
     }
     avgFeatureDepth: number
   } | null
@@ -1299,10 +1302,22 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
                   )}
                   color="#F97316"
                 />
-                <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2">
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
                   <div className="rounded-lg border border-rain-border/50 p-3">
                     <div className="text-[10px] text-muted-foreground">Visible studio hours*</div>
                     <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.visibleStudioHours.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Audio hours processed</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.audioHoursProcessed.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Render compute hours</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.renderHours.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-lg border border-rain-border/50 p-3">
+                    <div className="text-[10px] text-muted-foreground">Export processing hours</div>
+                    <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.exportHours.toFixed(2)}</div>
                   </div>
                   <div className="rounded-lg border border-rain-border/50 p-3">
                     <div className="text-[10px] text-muted-foreground">AIE computations</div>
@@ -1321,7 +1336,7 @@ export function AdminConsole({ onClose }: AdminConsoleProps) {
                     <div className="mt-1 text-xl font-bold font-mono">{stats.beta.funnel.checkoutStarted}</div>
                   </div>
                 </div>
-                <div className="mt-2 text-[10px] text-muted-foreground/60">*Visible studio hours are a rate-limited, visible-tab estimate—not verified human work time. Checkout intent is not a completed or paid conversion.</div>
+                <div className="mt-2 text-[10px] text-muted-foreground/60">*Visible studio hours are a rate-limited visible-tab estimate; audio/render/export durations are client-reported telemetry. None is independently verified human work time. Checkout intent is not a completed or paid conversion.</div>
                 {stats.beta.funnel.signups === 0 &&
                   stats.beta.funnel.sessionsCreated === 0 && (
                     <div className="mt-2 text-[11px] text-muted-foreground/60 italic">
