@@ -31,11 +31,12 @@ export async function GET(req: NextRequest) {
       unlockAmountCents: 4900,
       currency: 'ZAR',
       historicalDataComplete: false,
-      checkoutConfigured: Boolean(
-        process.env.PAYFAST_MERCHANT_ID && process.env.PAYFAST_MERCHANT_KEY ||
-        process.env.OZOW_SITE_CODE && process.env.OZOW_PRIVATE_KEY ||
-        process.env.STRIPE_SECRET_KEY,
-      ),
+      // Environment-variable presence is not proof that a verified checkout
+      // integration exists. Keep this false until a provider callback/webhook,
+      // durable payment ledger and sandbox acceptance tests are implemented.
+      checkoutConfigured: false,
+      checkoutAvailable: false,
+      paymentStatus: 'not_live',
     }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (error) {
     console.error('[api/rain/beta-access] count failed:', error)
