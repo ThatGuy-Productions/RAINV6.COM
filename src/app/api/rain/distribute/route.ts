@@ -82,7 +82,7 @@ export const POST = withCsrf(async (req: NextRequest) => {
     manifest.ddexVersion !== '4.3.2' ||
     typeof manifest.isrc !== 'string' ||
     !validateIsrc(manifest.isrc) ||
-    manifest.isrc.replace(/[-\\s]/g, '').toUpperCase().startsWith('US2XX') ||
+    manifest.isrc.replace(/[-\s]/g, '').toUpperCase().startsWith('US2XX') ||
     typeof manifest.upc !== 'string' ||
     !validateUpc(manifest.upc) ||
     !Array.isArray(manifest.assets) ||
