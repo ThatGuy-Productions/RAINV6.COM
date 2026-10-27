@@ -219,7 +219,7 @@ export function MasteringTab() {
         // Reset the within-stage indicator — real stage boundary reached.
         stageStartRef.current = Date.now()
         setProcessingStageProgress(0)
-      }, abortController.signal, simpleMode
+      }, abortController.signal, simpleMode)
 
       // Clear the progress interval
       if (progressIntervalRef.current) {
