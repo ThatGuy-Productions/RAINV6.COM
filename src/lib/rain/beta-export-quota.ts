@@ -1,5 +1,12 @@
 import { getAnonId } from '@/lib/rain/anon-id'
 
+/**
+ * LEGACY UX GATE ONLY. This currently counts exports, whereas the confirmed
+ * beta policy grants two full-capability use credits and then permits 30
+ * successful exports/month after a verified R49 unlock. Do not treat this
+ * helper as the canonical policy or a security boundary. Replace its callers
+ * with the durable entitlement workflow before the new policy is enabled.
+ */
 const LOCAL_EXPORT_COUNT_KEY = 'rain_beta_successful_exports_v1'
 const FREE_EXPORT_LIMIT = 2
 
