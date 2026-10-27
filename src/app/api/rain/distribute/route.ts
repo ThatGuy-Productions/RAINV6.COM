@@ -12,6 +12,9 @@ export const maxDuration = 60
 
 interface ReleaseManifestInput {
   releaseId?: unknown
+  senderDpid?: unknown
+  recipientDpid?: unknown
+  targetDsps?: unknown
   isrc?: unknown
   upc?: unknown
   title?: unknown
@@ -89,6 +92,9 @@ export const POST = withCsrf(async (req: NextRequest) => {
   if (
     typeof manifest.releaseId !== 'string' ||
     !manifest.releaseId.trim() ||
+    typeof manifest.senderDpid !== 'string' || !/^[A-Z0-9]{18}$/.test(manifest.senderDpid) ||
+    typeof manifest.recipientDpid !== 'string' || !/^[A-Z0-9]{18}$/.test(manifest.recipientDpid) ||
+    !Array.isArray(manifest.targetDsps) || manifest.targetDsps.length === 0 ||
     typeof manifest.title !== 'string' ||
     !manifest.title.trim() ||
     typeof manifest.artist !== 'string' ||
@@ -202,12 +208,22 @@ export const POST = withCsrf(async (req: NextRequest) => {
   const ernXml = new TextDecoder().decode(ernXmlBytes)
   const xmlWellFormed = XMLValidator.validate(ernXml)
   const xmlHasRequiredStructure =
+    ernXml.includes('ern/432') &&
+    ernXml.includes('AvsVersionId="4"') &&
     ernXml.includes('NewReleaseMessage') &&
     ernXml.includes('MessageHeader') &&
+    ernXml.includes('MessageSender') &&
+    ernXml.includes('MessageRecipient') &&
+    ernXml.includes('PartyList') &&
     ernXml.includes('ReleaseList') &&
     ernXml.includes('ResourceList') &&
-    ernXml.includes('DealList') &&
-    (ernXml.includes('ern/43') || ernXml.includes('ern:43'))
+    ernXml.includes('ReleaseList') &&
+    ernXml.includes('TrackRelease') &&
+    ernXml.includes('ICPN') &&
+    ernXml.includes('ContainsAI') &&
+    ernXml.includes('DeliveryFile') &&
+    ernXml.includes('ReleaseDeal') &&
+    ernXml.includes('DealList')
   const xmlEscape = (value: string) => value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -220,7 +236,9 @@ export const POST = withCsrf(async (req: NextRequest) => {
     !ernXml.includes(xmlEscape(manifest.isrc as string)) ||
     !ernXml.includes(xmlEscape(manifest.upc as string)) ||
     !ernXml.includes(xmlEscape(manifest.title as string)) ||
-    !ernXml.includes(xmlEscape(manifest.artist as string))
+    !ernXml.includes(xmlEscape(manifest.artist as string)) ||
+    !ernXml.includes(xmlEscape(manifest.senderDpid as string)) ||
+    !ernXml.includes(xmlEscape(manifest.recipientDpid as string))
   ) {
     return NextResponse.json(
       { ok: false, requiresCredentials: false, error: 'DDEX ERN XML is malformed or does not contain the validated release metadata and required ERN structure' },
