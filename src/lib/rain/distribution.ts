@@ -545,10 +545,10 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
       <Type>MusicalWorkSoundRecording</Type>
       <SoundRecordingEdition>
         <ResourceId><ISRC>${escapeXml(meta.isrc)}</ISRC></ResourceId>
+        ${meta.iswc ? `<WorkId><ISWC>${escapeXml(meta.iswc)}</ISWC></WorkId>` : ''}
         ${pLineBlock}
         ${audioDetails}
       </SoundRecordingEdition>
-      ${meta.iswc ? `<WorkId><ISWC>${escapeXml(meta.iswc)}</ISWC></WorkId>` : ''}
       <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
       <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
       <DisplayArtistName ApplicableTerritoryCode="Worldwide">${artist}</DisplayArtistName>
