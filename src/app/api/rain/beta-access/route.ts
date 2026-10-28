@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/rain/auth'
 import { loadBetaEntitlement } from '@/lib/rain/beta-entitlement'
+import { getPaymentReadiness } from '@/lib/rain/payment-readiness'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -8,18 +9,15 @@ export const dynamic = 'force-dynamic'
 /**
  * GET /api/rain/beta-access
  *
- * Server-authoritative beta entitlement snapshot.
+ * Server-authoritative beta entitlement snapshot + payment readiness.
  *
  * Policy (operator-confirmed):
  *   - Two free full-capability renders (each includes one export).
- *   - After both are consumed, a verified R49.00 ZAR unlock is required.
+ *   - After both are consumed, a verified once-off R49.00 ZAR unlock is required.
  *   - Paid beta: 1 500 credits/month at 25 credits/render + hard cap of
  *     30 successful exports/month.
- *
- * Checkout is intentionally unavailable until a real provider, verified
- * webhook, and durable payment/entitlement ledger are implemented.
- * Browser-local encoding means this gate is authoritative for product UX
- * and telemetry, not cryptographic proof that a file left the device.
+ *   - Unlock lasts for the beta stage only; commercial launch ends it.
+ *   - Checkout stays unavailable until public URL + PayFast live switch.
  */
 export async function GET(req: NextRequest) {
   const user = await getSessionUser(req).catch(() => null)
@@ -33,13 +31,14 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const snapshot = await loadBetaEntitlement({
-      userId: user?.id ?? null,
-      anonId,
-    })
+    const [snapshot, readiness] = await Promise.all([
+      loadBetaEntitlement({
+        userId: user?.id ?? null,
+        anonId,
+      }),
+      Promise.resolve(getPaymentReadiness()),
+    ])
 
-    // Backward-compatible fields for existing clients that still read
-    // exportsUsed / unlockRequired, plus the full policy decision.
     const exportsUsedForLegacy = snapshot.hasVerifiedR49Unlock
       ? snapshot.successfulExportsThisMonth
       : snapshot.completedFreeRenders
@@ -47,7 +46,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         ...snapshot,
-        // Legacy aliases (do not invent history; these mirror the decision).
+        // Override hardcoded not_live flags with the real readiness gate.
+        checkoutConfigured: readiness.credentialsPresent && readiness.publicUrlConfirmed,
+        checkoutAvailable: readiness.checkoutAvailable,
+        paymentStatus: readiness.paymentStatus,
+        paymentProvider: readiness.provider,
+        paymentBlockers: readiness.blockers,
         exportsUsed: exportsUsedForLegacy,
         exportsRemaining: snapshot.hasVerifiedR49Unlock
           ? snapshot.monthlyExportsRemaining ?? 0

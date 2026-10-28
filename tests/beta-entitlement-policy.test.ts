@@ -2,9 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import {
   BETA_CREDITS_PER_RENDER,
   BETA_FREE_RENDER_ALLOWANCE,
+  BETA_HOLDER_COMMERCIAL_DISCOUNT_NOTE,
   BETA_MONTHLY_CREDIT_ALLOWANCE,
   BETA_MONTHLY_EXPORT_LIMIT,
   BETA_UNLOCK_AMOUNT_CENTS,
+  BETA_UNLOCK_CURRENCY,
+  BETA_UNLOCK_ENTITLEMENT_KIND,
   evaluateBetaEntitlement,
 } from '../src/lib/rain/beta-entitlement-policy'
 
@@ -22,12 +25,15 @@ const paid = (monthlyCreditsUsed: number, successfulExportsThisMonth: number) =>
 })
 
 describe('beta entitlement policy', () => {
-  test('defines confirmed allowances', () => {
+  test('defines confirmed allowances and once-off unlock', () => {
     expect(BETA_FREE_RENDER_ALLOWANCE).toBe(2)
     expect(BETA_MONTHLY_CREDIT_ALLOWANCE).toBe(1500)
     expect(BETA_CREDITS_PER_RENDER).toBe(25)
     expect(BETA_MONTHLY_EXPORT_LIMIT).toBe(30)
     expect(BETA_UNLOCK_AMOUNT_CENTS).toBe(4900)
+    expect(BETA_UNLOCK_CURRENCY).toBe('ZAR')
+    expect(BETA_UNLOCK_ENTITLEMENT_KIND).toBe('beta_r49_unlock')
+    expect(BETA_HOLDER_COMMERCIAL_DISCOUNT_NOTE).toContain('discounted commercial fee')
   })
 
   test('allows two full-capability free renders, each with an included export', () => {
