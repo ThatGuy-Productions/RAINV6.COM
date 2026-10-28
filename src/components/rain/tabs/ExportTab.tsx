@@ -267,6 +267,13 @@ export function ExportTab() {
         // and reports per-toggle ✓/✗.
         const result = await verifyExportedMp3(blob, options)
         setVerification(result)
+        // Fail closed: never deliver a file when its embedded-field checks do not
+        // match the selected export contract. These checks currently verify field
+        // presence, not Ed25519 authenticity or audio-hash binding (see audit doc).
+        if (!result.ok) {
+          const failed = Object.entries(result.checks).filter(([, check]) => !check.ok).map(([key]) => key)
+          throw new Error(`MP3 export integrity check failed (${failed.join(', ')}). No file was downloaded.`)
+        }
 
         if (options.attachCertificate && rainCert) {
           // Sidecar path: ZIP the MP3 + the cert.json together. The cert.json
@@ -296,6 +303,13 @@ export function ExportTab() {
       const blob = audioEngine.exportWav(bitDepth, rainCert, options)
       const result = await verifyExportedWav(blob, options)
       setVerification(result)
+      // Fail closed: never deliver a file when its embedded-field checks do not
+      // match the selected export contract. These checks currently verify field
+      // presence, not Ed25519 authenticity or audio-hash binding (see audit doc).
+      if (!result.ok) {
+        const failed = Object.entries(result.checks).filter(([, check]) => !check.ok).map(([key]) => key)
+        throw new Error(`WAV export integrity check failed (${failed.join(', ')}). No file was downloaded.`)
+      }
 
       if (options.attachCertificate && rainCert) {
         const audioBytes = new Uint8Array(await blob.arrayBuffer())
@@ -514,7 +528,7 @@ export function ExportTab() {
             <SummaryRow label="Fingerprint" value={previewFlag(embedFingerprint && !!fingerprint, isWav ? 'LIST/INFO IFPR ✓' : 'TXXX ✓')} />
             <SummaryRow label="Metadata tags" value={previewFlag(embedMetadata, isWav ? 'INAM/IART/...' : 'TIT2/TPE1/...')} />
             <SummaryRow label="Sidecar cert" value={previewFlag(attachCertificate && !!rainCert, '.cert.json (ZIP) ✓')} />
-            <SummaryRow label="Watermark" value="LSB steganographic ✓" />
+            <SummaryRow label="Watermark" value="Not embedded (AudioSeal unavailable)" />
           </div>
           <button
             onClick={handleExport}
