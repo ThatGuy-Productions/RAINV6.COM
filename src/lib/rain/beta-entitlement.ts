@@ -56,7 +56,7 @@ function startOfUtcMonth(now = new Date()): Date {
 
 function identityWhere(userId: string | null, anonId: string | null) {
   if (userId && anonId) {
-    return { OR: [{ userId }, { userId: null, anonId }] as const }
+    return { OR: [{ userId }, { userId: null, anonId }] }
   }
   if (userId) return { userId }
   if (anonId) return { userId: null, anonId }
