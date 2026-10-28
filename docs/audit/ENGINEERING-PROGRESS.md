@@ -13,6 +13,7 @@ Updated continuously while executing the engineering plan.
 - [x] `POST /api/rain/render` preflight gate + ledger complete on success
 - [x] Reserved rows count against allowance (anti double-spend)
 - [x] R49 recorded as **once-off, beta-stage only**; commercial discount for holders at launch
+- [x] Anonymous UsageRecord/Event attach on register (`attachAnonymousUsageToAccount`)
 
 ### Payment (W3 — non-live)
 - [x] Provider choice: **PayFast**
@@ -23,12 +24,17 @@ Updated continuously while executing the engineering plan.
 - [ ] Live sandbox end-to-end (blocked on confirmed public URL)
 - [ ] Grant entitlement only after verified ITN in live mode (code path ready, switch off)
 
+### Identity / CI (W0–W1 partial)
+- [x] CI runs on `codex/**` branches as well as main / release-candidate
+- [x] Prisma schema includes Payment, Entitlement, UsageRecord
+- [ ] Production PostgreSQL apply evidence on real host
+
 ### Models (W6 partial)
 - [x] LFS objects for rain_base / rain_trained present and size-matched
 
 ### Still open (need environment or larger feature work)
 - [ ] Production PostgreSQL + migration apply evidence on real host (W1)
-- [ ] Full CI green on PR head (W0)
+- [ ] Full CI green evidence on latest PR head (observe Actions)
 - [ ] Browser E2E export / 16-stage gate evidence (W5)
 - [ ] Real neural stems (W7) — must not claim until model path exists
 - [ ] C2PA / DDEX delivery proof (W8–W9)
@@ -43,3 +49,12 @@ Updated continuously while executing the engineering plan.
 - Checkout unavailable
 - Live ITN returns 503 and grants nothing until readiness
 - Amount fixed at 4900 cents server-side
+- Free allowance survives signup when anonId is sent
+
+## Recent commits (this session)
+- Entitlement policy wiring + UsageRecord ledger
+- Reserve/complete/release + `/api/rain/usage`
+- R49 once-off decision docs
+- Payment readiness + non-live docs
+- PayFast ITN + unlock create path
+- CI on codex branches + anon usage attach on register
