@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/rain/auth'
+import { loadBetaEntitlement, recordCompletedUsage } from '@/lib/rain/beta-entitlement'
 import { trackEvent } from '@/lib/rain/server-analytics'
 
 export const runtime = 'nodejs'
@@ -10,14 +11,14 @@ const FORMATS = new Set(['wav24', 'wav16', 'mp3_320', 'atmos'])
 /**
  * POST /api/rain/render
  *
- * Persists a client-reported render/export event. The browser performs local
- * audio encoding, so this endpoint cannot independently prove that a file was
- * downloaded. Treat these events as usage telemetry, not cryptographic proof
- * of output or a tamper-proof entitlement boundary.
+ * Persists a client-reported render/export event and updates the durable
+ * UsageRecord ledger. The browser performs local audio encoding, so this
+ * endpoint cannot independently prove that a file was downloaded. Treat
+ * these events as usage telemetry + quota accounting, not cryptographic
+ * proof of output.
  *
- * Authenticated Render rows are written only when the session belongs to the
- * caller and a supported format plus SHA-256-shaped output hash are supplied.
- * Event and Render writes for authenticated users are transactional.
+ * Server-side entitlement is checked before the write. Exhausted free
+ * allowance or paid monthly limits return 402.
  */
 export async function POST(req: NextRequest) {
   const user = await getSessionUser(req).catch(() => null)
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
   if (body.kind !== 'render' && body.kind !== 'export') {
     return NextResponse.json({ error: 'kind must be render or export' }, { status: 400 })
   }
-  const kind = body.kind
+  const kind = body.kind as 'render' | 'export'
   const sessionId = typeof body.sessionId === 'string' && body.sessionId.length > 0
     ? body.sessionId.slice(0, 128)
     : undefined
@@ -51,12 +52,18 @@ export async function POST(req: NextRequest) {
   const anonId = typeof body.anonId === 'string' && body.anonId.length > 0
     ? body.anonId.slice(0, 128)
     : null
+  const operationId = typeof body.operationId === 'string' && body.operationId.length > 0
+    ? body.operationId.slice(0, 128)
+    : (validOutputHash ? outputFileHash : null)
 
   if (kind === 'export' && (!format || !FORMATS.has(format))) {
     return NextResponse.json({ error: 'A supported export format is required.' }, { status: 400 })
   }
   if (outputFileHash && !validOutputHash) {
     return NextResponse.json({ error: 'outputFileHash must be a 64-character SHA-256 hex digest.' }, { status: 400 })
+  }
+  if (!user && !anonId) {
+    return NextResponse.json({ error: 'An anonymous beta ID or signed-in account is required.' }, { status: 400 })
   }
 
   // A signed-in user may not attach a render to another account's project.
@@ -70,6 +77,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Server-authoritative entitlement gate.
+  let entitlement
+  try {
+    entitlement = await loadBetaEntitlement({
+      userId: user?.id ?? null,
+      anonId,
+    })
+  } catch (err) {
+    console.error('[api/rain/render] entitlement load failed:', err)
+    return NextResponse.json({ error: 'Beta entitlement could not be verified.' }, { status: 503 })
+  }
+
+  if (kind === 'render' && !entitlement.canStartFullCapabilityRender) {
+    return NextResponse.json({
+      error: 'Full-capability render not allowed under current beta entitlement.',
+      reason: entitlement.reason,
+      entitlement,
+    }, { status: 402 })
+  }
+  if (kind === 'export' && !entitlement.canExport) {
+    return NextResponse.json({
+      error: 'Export not allowed under current beta entitlement.',
+      reason: entitlement.reason,
+      entitlement,
+    }, { status: 402 })
+  }
+
   const eventType = kind === 'export' ? 'export_completed' : 'render_completed'
   const metadata = {
     sessionId: user ? sessionId ?? null : null,
@@ -81,6 +115,30 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Ledger write first so subsequent entitlement reads see the consumption.
+    // Free path: each successful export (or render when reported alone) consumes
+    // one use_credit. Paid path: render consumes use_credit; export counts separately.
+    if (kind === 'render' || kind === 'export') {
+      await recordCompletedUsage({
+        userId: user?.id ?? null,
+        anonId,
+        kind: 'use_credit',
+        operationId: operationId ? `use:${operationId}` : null,
+        format: format ?? null,
+        metadata: { ...metadata, source: 'render_route' },
+      })
+    }
+    if (kind === 'export') {
+      await recordCompletedUsage({
+        userId: user?.id ?? null,
+        anonId,
+        kind: 'export',
+        operationId: operationId ? `export:${operationId}` : null,
+        format: format ?? null,
+        metadata: { ...metadata, source: 'render_route' },
+      })
+    }
+
     if (!user) {
       const recorded = await trackEvent({
         userId: null,
@@ -100,6 +158,7 @@ export async function POST(req: NextRequest) {
         renderId: null,
         anonymous: true,
         evidence: 'client-reported',
+        reason: entitlement.reason,
       }, { status: 200 })
     }
 
@@ -142,6 +201,7 @@ export async function POST(req: NextRequest) {
       renderId: result.renderId,
       anonymous: false,
       evidence: 'client-reported',
+      reason: entitlement.reason,
     }, { status: 201 })
   } catch (err) {
     console.error('[api/rain/render] failed to persist usage event:', err)

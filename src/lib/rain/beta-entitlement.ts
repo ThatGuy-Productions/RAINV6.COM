@@ -1,5 +1,5 @@
 /**
- * Server-side beta entitlement loader.
+ * Server-side beta entitlement loader and usage ledger writer.
  *
  * Loads durable counters and a verified R49 unlock, then applies the pure
  * policy in beta-entitlement-policy.ts. Never trusts browser-supplied
@@ -19,6 +19,7 @@
  * Checkout remains disabled until a real provider + webhook path exists.
  */
 
+import { createHash, randomBytes } from 'crypto'
 import { db } from '@/lib/db'
 import {
   BETA_CREDITS_PER_RENDER,
@@ -51,6 +52,16 @@ export interface BetaEntitlementSnapshot extends BetaEntitlementDecision {
   paymentStatus: 'not_live'
   /** Whether UsageRecord rows were present for this identity. */
   usageLedgerPresent: boolean
+}
+
+export interface RecordUsageInput {
+  userId: string | null
+  anonId: string | null
+  kind: 'use_credit' | 'export'
+  /** Client-supplied operation id or output hash for idempotency. */
+  operationId?: string | null
+  format?: string | null
+  metadata?: Record<string, unknown>
 }
 
 function startOfUtcMonth(now = new Date()): Date {
@@ -187,6 +198,61 @@ export async function loadBetaEntitlement(
     checkoutAvailable: false,
     paymentStatus: 'not_live',
     usageLedgerPresent,
+  }
+}
+
+function buildIdempotencyKey(input: RecordUsageInput): string {
+  const seed = [
+    input.kind,
+    input.userId ?? 'anon',
+    input.anonId ?? '',
+    input.operationId ?? '',
+    input.format ?? '',
+  ].join('|')
+  if (input.operationId && input.operationId.length >= 16) {
+    return createHash('sha256').update(seed).digest('hex').slice(0, 64)
+  }
+  // No stable operation id — still unique per call so we do not collide,
+  // but retries without operationId will count again (documented limitation).
+  return createHash('sha256')
+    .update(`${seed}|${randomBytes(16).toString('hex')}`)
+    .digest('hex')
+    .slice(0, 64)
+}
+
+/**
+ * Persist a completed usage row. Idempotent when operationId is supplied.
+ * Returns { created: true } on insert, { created: false } on duplicate key.
+ */
+export async function recordCompletedUsage(input: RecordUsageInput): Promise<{ created: boolean; id: string | null }> {
+  if (!input.userId && !input.anonId) {
+    return { created: false, id: null }
+  }
+  const idempotencyKey = buildIdempotencyKey(input)
+  const now = new Date()
+  try {
+    const row = await db.usageRecord.create({
+      data: {
+        userId: input.userId,
+        anonId: input.anonId,
+        kind: input.kind,
+        status: 'completed',
+        idempotencyKey,
+        operationId: input.operationId ?? null,
+        format: input.format ?? null,
+        completedAt: now,
+        metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      },
+      select: { id: true },
+    })
+    return { created: true, id: row.id }
+  } catch (err: unknown) {
+    // Unique constraint on idempotencyKey → already recorded.
+    const message = err instanceof Error ? err.message : String(err)
+    if (message.includes('Unique constraint') || message.includes('idempotencyKey')) {
+      return { created: false, id: null }
+    }
+    throw err
   }
 }
 
