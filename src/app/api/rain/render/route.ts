@@ -87,9 +87,35 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Beta entitlement could not be verified.' }, { status: 503 })
   }
 
-  // If the client already reserved, allow completion even if a concurrent
-  // tab has since filled the remaining slots (reservation holds the seat).
-  const hasReservation = Boolean(reservationId)
+  // A reservation may bypass a fresh entitlement snapshot only when the
+  // durable ledger proves it belongs to this identity, is still reserved,
+  // and represents the operation being completed. Never trust an ID alone.
+  let hasReservation = false
+  if (reservationId) {
+    const expectedKind = kind === 'render' ? 'use_credit' : 'export'
+    const validReservation = await db.usageRecord.findFirst({
+      where: {
+        id: reservationId,
+        kind: expectedKind,
+        status: 'reserved',
+        ...(user
+          ? { userId: user.id }
+          : { userId: null, anonId }),
+      },
+      select: { id: true },
+    }).catch(() => null)
+
+    if (!validReservation) {
+      return NextResponse.json(
+        { error: 'Reservation is invalid, expired, already completed, or not owned by this identity.' },
+        { status: 409 },
+      )
+    }
+    hasReservation = true
+  }
+
+  // A verified reservation holds its slot even if another tab has since
+  // filled the remaining allowance.
   if (!hasReservation) {
     if (kind === 'render' && !entitlement.canStartFullCapabilityRender) {
       return NextResponse.json({
