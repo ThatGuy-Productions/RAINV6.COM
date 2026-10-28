@@ -21,12 +21,14 @@ export const dynamic = 'force-dynamic'
  *   - totalSessions: Session rows (authenticated sessions only)
  *   - totalExports: export_completed Events (includes anonymous)
  *   - totalFeedback: Feedback rows
+ *   - evidenceStatus: distinguishes recorded event history from an empty/unavailable store
  *   - changelogEntries: hardcoded count of WhatsNewPanel entries (matches
  *     the CHANGELOG array length so the landing stays in sync)
  *
- * All counts are real DB queries. On a fresh database they'll read 0 —
- * that's honest, not a bug. The landing section handles the 0-state
- * gracefully ("Be the first to master a track").
+ * All counts are real DB queries. An empty Event table is not proof of zero
+ * real-world use: the live beta previously did not retain reliable history.
+ * In that case the endpoint explicitly marks usage evidence unavailable and
+ * the UI must not present historical metrics as measured zeros.
  */
 export async function GET() {
   try {
@@ -39,13 +41,14 @@ export async function GET() {
     fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13) // inclusive of today
     fourteenDaysAgo.setHours(0, 0, 0, 0)
 
-    const [dbSignups, totalRenders, totalSessions, totalExports, totalFeedback, recentEvents] =
+    const [dbSignups, totalRenders, totalSessions, totalExports, totalFeedback, totalEventRows, recentEvents] =
       await Promise.all([
         db.account.count(),
         db.render.count(),
         db.session.count(),
         db.event.count({ where: { type: 'export_completed' } }),
         db.feedback.count(),
+        db.event.count(),
         db.event.findMany({
           where: {
             createdAt: { gte: fourteenDaysAgo },
@@ -81,6 +84,7 @@ export async function GET() {
         totalSessions,
         totalExports,
         totalFeedback,
+        evidenceStatus: totalEventRows > 0 ? 'recorded_activity_available' : 'no_retained_activity',
         // Matches the CHANGELOG array length in WhatsNewPanel.tsx.
         // When new entries are added, bump this number.
         changelogEntries: 7,
@@ -96,18 +100,17 @@ export async function GET() {
     )
   } catch (err) {
     console.error('[api/rain/stats] failed:', err)
-    // Return zeros rather than a 500 — the landing page should never break
-    // because the stats DB is unavailable.
-    return NextResponse.json({
-      totalSignups: 0,
-      totalRenders: 0,
-      totalSessions: 0,
-      totalExports: 0,
-      totalFeedback: 0,
-      changelogEntries: 7,
-      activitySeries: [],
-      generatedAt: new Date().toISOString(),
-      error: 'stats unavailable',
-    })
+    // Never turn a storage/instrumentation failure into apparent zero usage.
+    // The landing page treats this as unavailable evidence, not a real count.
+    return NextResponse.json(
+      {
+        error: 'usage metrics unavailable',
+        generatedAt: new Date().toISOString(),
+      },
+      {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store' },
+      },
+    )
   }
 }

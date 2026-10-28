@@ -117,7 +117,7 @@ function hashToken(token: string): string {
 function isHttps(req: NextRequest | null): boolean {
   if (!req) return false
   const xfProto = req.headers.get('x-forwarded-proto')
-  if (xfProto) return xfProto.includes('https')
+  if (xfProto) return xfProto.split(',')[0].trim().toLowerCase() === 'https'
   // Fallback: check the raw URL protocol
   return req.nextUrl.protocol === 'https:'
 }
@@ -203,7 +203,7 @@ export async function getSessionUser(req: NextRequest | null): Promise<AuthUser 
     })
     if (!row) return null
     // Expiry check (defensive — cookies also expire client-side).
-    if (row.expiresAt.getTime() < Date.now()) {
+    if (row.expiresAt.getTime() <= Date.now()) {
       // Clean up the expired token opportunistically.
       await db.authToken.delete({ where: { id: row.id } }).catch(() => {})
       return null

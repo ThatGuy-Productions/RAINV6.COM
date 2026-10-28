@@ -18,13 +18,9 @@ const LLM_MAX_TOKENS_SUGGEST = 400
  *
  * Generate a markdown mastering report based on input/output analysis.
  *
- * TIER GATE (Wave 3 P2-2): requires `independent` tier. The standalone
- * mastering report (deeper than the inline `report` field returned by
- * /api/rain/assist) is an Independent-tier feature (≥ $29/mo). Identity
- * is read from the optional `x-user-id` request header; absent header is
- * treated as Casual. Returns HTTP 403 with `{ error, required, current }`
- * when the caller's tier is below Independent. The MasteringTab "Generate
- * Mastering Report" button handles the 403 by showing an upgrade dialog.
+ * BETA ACCESS POLICY: the standalone mastering report is available to all
+ * users during the full-capability free beta. Do not add tier enforcement or
+ * require an x-user-id header here until the beta policy formally changes.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -34,11 +30,11 @@ export async function POST(req: NextRequest) {
 
     // Rate limit: 15 requests/min per IP — slightly tighter than assist since
     // report generation is more expensive.
-    const rl = checkRateLimit(req, 'suggest', 15)
+    const rl = await checkRateLimit(req, 'suggest', 15)
     if (!rl.ok) {
       return NextResponse.json(
-        { error: 'Too many requests', retryAfter: rl.retryAfter },
-        { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+        { error: rl.unavailable ? 'Rate limiting service unavailable' : 'Too many requests', retryAfter: rl.retryAfter },
+        { status: rl.unavailable ? 503 : 429, headers: { 'Retry-After': String(rl.retryAfter) } },
       )
     }
 

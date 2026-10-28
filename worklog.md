@@ -1054,3 +1054,240 @@ Verification:
 - Server running on port 3000, HTTP 200 ✓
 
 Files changed: src/lib/rain/tier-gate.ts (C3 fix), src/app/api/rain/admin/status/route.ts (C2 fix), src/app/api/rain/admin/bootstrap/route.ts (C1 fix), src/lib/db.ts (H10 fix), src/app/api/rain/stats/route.ts (variable rename).
+
+
+---
+
+Task ID: 21
+Agent: RAIN V6 remediation
+Task: Repair production route-level rate limiting and add fail-closed acceptance tests.
+
+Work Log:
+- Reviewed the security backlog and found a production availability defect in `src/lib/rain/rate-limit.ts`: the synchronous helper returned `ok: false` unconditionally in production. Therefore, every request reaching a route-level check was rejected even if the outer middleware had allowed it.
+- Replaced the helper with an asynchronous shared Upstash Redis REST counter using an atomic Redis script. Route-specific keys are SHA-256 hashed before storage. Production fails closed when Redis configuration is missing or the shared service errors; process-local token buckets remain development/test only.
+- Updated Assist, Suggest, Admin Bootstrap, Payment, and PaymentIsolation call sites to await the shared limiter. Payment session creation is now asynchronous. Store outages return 503; genuine quota exhaustion returns 429.
+- Added `tests/lib/rate-limit-production.test.ts` covering missing configuration, allowed requests, over-limit requests, and store outage.
+- CI evidence: workflow run 40579683223 passed lint, typecheck, Prisma, build, and tests; the production limiter tests passed. The later full run 40580144179 also passed all five CI jobs.
+
+Stage Summary:
+- The prior unconditional production rejection is fixed.
+- Automated tests use mocked Upstash responses; this does not replace validation against a configured live Redis service or a multi-instance deployment.
+
+Remaining:
+- Complete whole-app route coverage audit and verify trusted proxy/client-IP handling.
+- Confirm production environment variables and run cross-instance acceptance tests against the actual shared store.
+
+---
+
+Task ID: 22
+Agent: RAIN V6 remediation
+Task: Bind all material RAIN-CERT certificate claims into the Ed25519 signature while retaining legacy verification.
+
+Work Log:
+- Added `createProvenanceSigningPayload()` in `src/lib/rain/provenance.ts`. New certificates sign a canonical JSON payload containing algorithm, certificate ID, input hash, manifest, output hash, signing timestamp, and engine identifier.
+- Added the signed manifest marker `org.rain.cert.signature-payload` version 2. Verification selects the v2 payload for new certificates and retains the previous output-hash-plus-manifest verifier for legacy certificates.
+- Added `tests/lib/provenance-verification.test.ts` for valid signatures, legacy signature compatibility, modified manifest/output hash/certificate metadata, and malformed signature/public-key handling.
+- CI evidence: workflow run 40580144179 passed lint, TypeScript, Prisma validation, production build, and automated tests: 142 passed, 0 failed.
+
+Stage Summary:
+- New RAIN-CERT signatures now detect edits to certificate metadata that was previously outside the signed message.
+- This is cryptographic integrity against the embedded key, not an independent trust authority or proof of legal ownership.
+
+Remaining:
+- Add browser-based IndexedDB key lifecycle/rotation and legacy-key migration tests.
+- Verify all export UI paths attach the intended certificate and independently inspect exported bytes.
+- Continue P0 mastering/model-runtime and P1 DDEX/provider acceptance work; this commit does not make the product production-ready.
+
+
+---
+
+Task ID: 23
+Agent: RAIN V6 remediation
+Task: Close first-admin bootstrap takeover risk and add authentication primitive acceptance tests.
+
+Findings:
+- The public first-run Admin Door allowed anyone to create the first Enterprise admin if they reached the endpoint before the legitimate operator. Rate limiting alone did not establish that the caller was authorized to claim the first-admin account.
+- HTTPS detection used `x-forwarded-proto.includes('https')`, which could incorrectly treat a value such as `nothttps` as HTTPS.
+
+Changes:
+- `POST /api/rain/admin/bootstrap` now requires a server-only `RAIN_ADMIN_BOOTSTRAP_SECRET` with at least 32 characters. Missing/weak configuration disables bootstrap with 503; an invalid secret returns 403 before any admin account is created.
+- Added `src/lib/rain/bootstrap-secret.ts` to perform fixed-size SHA-256 digest comparison with `timingSafeEqual`. The secret is never exposed through a public environment variable.
+- Added a bootstrap-secret field to the first-admin setup form and passed it through the auth context. Added the empty variable and security instructions to `.env.example`.
+- Session cookie HTTPS detection now parses the first forwarded protocol value exactly; the session expiry boundary now treats `expiresAt <= Date.now()` as expired.
+- Added `tests/lib/bootstrap-secret.test.ts` and `tests/lib/auth-security.test.ts` for missing/weak/wrong/correct bootstrap secrets, salted scrypt verification, secure cookie attributes, clearing cookies, and spoof-like protocol values.
+- Fixed CI test setup to run `bunx prisma generate` before tests that import the database-backed auth module. The first test attempt exposed this CI isolation issue; the workflow was corrected.
+
+Verification:
+- Workflow run 40581180438 passed all five jobs: lint, typecheck, Prisma validation, production build, and tests.
+- Automated suite: 148 passed, 0 failed.
+- These are unit tests. Full database-backed registration/login/logout/reset, persisted session expiry/revocation, CSRF route coverage, and role checks remain to be validated.
+
+Stage Summary:
+- First-admin creation is no longer an unauthenticated race to claim a public setup endpoint; it requires an out-of-band deployment secret.
+- Configure `RAIN_ADMIN_BOOTSTRAP_SECRET` in the deployment secret store before initial admin setup. Do not add it to `NEXT_PUBLIC_*` variables or commit its value.
+
+Remaining:
+- Finish P0.4 integration tests across every sensitive route.
+- Continue the core release blockers: real ONNX inference validation, genuine neural stem separation, full mastering acceptance, official DDEX XSD/profile validation, and live distribution-provider sandbox tests.
+
+
+---
+
+Task ID: 24
+Agent: RAIN V6 remediation
+Task: Incorporate operator clarification on live-beta persistence, usage evidence, and full-capability beta access.
+
+Operator clarification (2026-10-27):
+- Live beta accounts do not persist beyond the session.
+- The deployed beta does not retain reliable usage history for session/work hours, completed work, exports, or AIE activity. Historical values therefore cannot be substantiated from platform telemetry.
+- Every user receives the full available product capability during the free-beta stage. The beta must not be described as a limited-feature free tier.
+
+Audit interpretation:
+- This is an operational statement from the product operator. The repository contains Prisma account/session/render/event models and analytics helpers, but those source files alone do not prove that the live deployment has persistent storage configured or that instrumentation is wired into the deployed user paths.
+- Do not equate a missing retained record with no product usage. Do not estimate or fabricate historical usage to fill the evidence gap.
+- Keep README as the target specification. Record the gap as implementation/deployment work rather than quietly weakening the target requirements.
+- Preserve the free-beta full-capability policy across product features. Authentication and authorization protections for administrative/security-sensitive endpoints remain mandatory; full product capability does not mean anonymous access to administrative controls.
+
+Required next work:
+1. Inspect the actual deployed beta environment, persistence configuration, migrations, and event/render/export/AIE call sites.
+2. Establish a privacy-conscious, clearly disclosed, minimal durable telemetry model for future sessions; do not attempt to reconstruct unavailable historical metrics.
+3. Verify that every user-facing capability remains available to all beta users and remove/defer commercial tier restrictions during the beta, without weakening admin/API security.
+4. Add end-to-end tests proving anonymous/free-beta access to product workflows, accurate future event counting, failure-safe telemetry, and no fabricated dashboard values.
+5. Update the release evidence pack to distinguish operator-reported product usage from platform-measured metrics.
+
+Documentation updates:
+- Added the live-beta persistence and full-capability policy to `docs/audit/FEATURE-TRUTH-MATRIX.md`.
+- Added P0.0 telemetry and beta access-policy acceptance criteria to `docs/audit/CODE-TO-README-BACKLOG.md`.
+
+Status:
+- Clarification recorded in the remediation branch.
+- Deployment behaviour and end-to-end instrumentation are not yet independently verified. No historical metrics have been invented.
+
+
+---
+
+Task ID: 25
+Agent: RAIN V6 remediation
+Task: Align beta UI and public usage metrics with the operator's full-access/no-retained-history clarification.
+
+Changes:
+- Removed obsolete paid-tier language from the Mastering tab's report feature labels.
+- Removed the stale Independent-tier upgrade prompt from the Mastering Report dialog. The report/AIE are available to all users during the free beta; a 403 is now treated as an actual request failure, not proof that the user must pay.
+- Changed `GET /api/rain/stats` so a database/instrumentation failure returns HTTP 503 and an unavailable marker rather than synthetic zero counts.
+- Updated the landing-page Beta Velocity section so a failed metrics request displays an explicit historical-telemetry-unavailable message rather than a grid of zeros.
+- Changed the empty-data state to explain that no retained activity rows are not evidence that nobody used the product.
+- Kept enterprise/admin routes separately gated; unrestricted beta product capability does not grant administrative access.
+
+Acceptance notes:
+- The source repository contains analytics schema/helpers, but the operator reports that the deployed beta has no reliable retained history for session/work hours, completed work, exports, or AIE activity. Code presence is not proof of deployed instrumentation.
+- No historical metrics were fabricated or backfilled.
+- CI must pass on the latest head before this change is considered verified. Deployed environment/persistence, event wiring, and end-to-end beta access still require validation.
+
+Remaining:
+- Add tests for the public stats endpoint's unavailable response and the landing page's unavailable/empty states.
+- Audit all visible UI and product routes for stale tier restrictions while preserving admin authorization.
+- Implement a minimal, privacy-conscious, disclosed telemetry path for future usage only, after deployment/storage/consent requirements are confirmed.
+
+
+---
+
+Task ID: 26
+Agent: RAIN V6 remediation
+Task: Begin correcting account/session data loss and implement the two-free-export R49 beta conversion flow.
+
+Operator requirements:
+- Persistent accounts and durable user work are required. Losing account continuity at the end of a session is a P0 product defect, not an accepted beta limitation.
+- The live beta has no reliable retained history for usage hours, completed work, exports, or AIE activity. Historical values are unknown; never invent or backfill them.
+- Every user should have full product capability during beta. The first two successful exports are free; subsequent exports should offer a R49.00 unlock. This is a conversion experiment for funder evidence, not a reduction in feature access.
+
+Changes made on this branch:
+- Added owner-scoped GET/POST/PUT support to `/api/rain/session`: signed-in users can list saved projects, retrieve one project, create a project record, and update its metadata/settings. The API rejects oversized/invalid JSON, checks ownership on reads/writes, and never uploads the source audio file.
+- Added debounced autosave while a signed-in user works, plus autosave after a successful render. A Saved Projects panel lists account-owned projects and restores metadata/macros/genre/platform/simple-mode settings. Source audio remains browser-local and must be reselected when returning.
+- Added `GET /api/rain/beta-access`, which counts recorded successful exports from the durable Event table and reports the two-export allowance plus the planned R49.00 amount.
+- Removed the sign-up-required-before-export gate. All users retain the product's available feature access; both the main Export tab and the quick WAV export check the two-free-export allowance before generating another export. A browser-local counter is used conservatively if a durable event write fails; the gate remains a UX measure, not a security boundary.
+- Updated public pricing copy to describe two free exports followed by a R49.00 unlock.
+- Added a transparent unlock-interest modal and server-side `beta_paywall_shown` / `beta_checkout_started` events. The modal explicitly says checkout is not live and does not take payment.
+- Added conversion funnel event types. A client-side intent event can never mark an account as paid.
+
+Important limitations / blockers:
+- The repository schema has now been changed to PostgreSQL, a versioned initial migration has been added, CI runs against PostgreSQL, and `tests/integration/persistent-account.test.ts` verifies account, auth-token, project settings, and usage-event rows from a second independent database connection. This proves DB persistence when the integration test is enabled; it does not prove that the live deployment has a durable `DATABASE_URL`, applied migrations, backups, or a successful cross-deploy restart.
+- A basic saved-project list and settings-restore UI is now present. Full browser end-to-end testing is still needed for sign-in, autosave during editing, cross-session list/load, and reselecting the matching source audio.
+- The two-export gate is currently a client UX gate because audio export is performed locally in the browser. It can be bypassed by a modified client and must not be described as tamper-proof enforcement.
+- No payment has been integrated or taken. The current payment engine is ephemeral and beta-mode zero-priced. Configure a real provider, verified callback/webhook, persistent entitlement/payment record, idempotency, refunds/failure handling, and tests before charging R49 or counting paid conversions.
+- AIE vector computation and signed-vector export now emit dedicated server events without uploading the vector or source audio. Admin funnel metrics include AIE counts, distinct users shown the R49 paywall, distinct checkout-intent users, visible-studio-hour estimates, and client-reported audio/render/export durations. The quota decision has dedicated unit tests for the first two exports, the post-two-export gate, and local fallback when event writes fail. These are future measurements only after deployed database writes succeed; visible-tab hours are estimates, not verified human work.
+- Do not report historical usage metrics as zero or as measured data where the old deployment did not retain them. Future evidence starts only after persistence and event writes are verified.
+
+Verification:
+- Verified GitHub Actions run `40588375006` on commit `e3c736b1`: lint, typecheck, PostgreSQL schema validation, production build, and tests all passed; test output was **156 passed, 0 failed**. The PostgreSQL integration test ran with `RUN_DB_INTEGRATION_TESTS=1` and confirmed account, auth-token, project-settings, and event rows were visible from a second DB connection. This does not establish that the live deployment has correct database secrets/backups or that a real payment provider is connected; run CI again on any subsequent code changes.
+
+
+---
+
+Task ID: 27
+Agent: RAIN V6 remediation
+Task: Correct session-only account persistence by replacing the packaged SQLite snapshot architecture with durable PostgreSQL and versioned migrations.
+
+Operator correction:
+- Account continuity is a major product defect. Accounts must persist beyond the browser/session and remain available after application restarts and redeployments.
+- Do not describe session-only accounts as acceptable beta behaviour. Do not fabricate historical account, hours, saved-work, export, or AIE metrics that were not retained.
+
+Repository findings:
+- Authentication code already persists Account and AuthToken rows, and the schema includes saved Session metadata, Render rows, and Event records.
+- The canonical Prisma schema was still using SQLite while production documentation described PostgreSQL.
+- The custom production build copied a build-time SQLite database into the deployment package; each redeployment could therefore restore an old snapshot rather than continue using the live database.
+- The previous incident report records a destructive schema push that lost approximately 135 accounts; those historical records are unrecoverable. This remediation does not claim to restore them.
+
+Changes:
+- Switched `prisma/schema.prisma` to PostgreSQL as the canonical database provider.
+- Added the initial versioned PostgreSQL migration and migration provider lock file.
+- Replaced the schema-push script with `db:migrate`, `db:migrate:deploy`, and `db:migrate:status` commands.
+- Updated the development startup path to require a PostgreSQL `DATABASE_URL` and apply versioned migrations.
+- Removed the build-time database snapshot from `.zscripts/build.sh`; deployment packages must not contain a production database copy.
+- Updated the custom deployment package to include Prisma CLI/engines and migrations, then apply migrations before starting Next.js.
+- Updated the Docker runtime to reject missing/non-PostgreSQL `DATABASE_URL` and apply migrations before serving requests.
+- Updated CI to validate the PostgreSQL schema, start a PostgreSQL service, apply migrations, and enable a persistence integration test.
+- Added `tests/integration/persistent-account.test.ts`, which creates an account, login token, saved project metadata, and export event, then reads them through an independent database connection.
+- Corrected README, master dossier, developer handbook, backlog, and truth-matrix claims that treated SQLite snapshots or no-account architecture as the target.
+- Updated the privacy policy to distinguish browser-local audio/AIE/provenance keys from server-side account/security/project/event metadata.
+- Marked the DPA as a draft pending hosting/sub-processor details, retention/deletion policy, data-subject request handling, and legal review.
+
+Verification status:
+- Earlier CI on commit `4ea1e692` had lint, typecheck, and Prisma validation passing; production build was still running when this entry was written.
+- The PostgreSQL migration and integration test must pass on the latest branch head before code-level acceptance.
+- This proves only database durability across independent connections in CI. Actual live deployment persistence remains unverified until the deployment receives a durable managed PostgreSQL service and secret `DATABASE_URL`, migrations run successfully, and a user is tested across browser/app restarts and a redeploy.
+- Configure automated backups and perform a restore test before declaring account persistence production-ready.
+- The end-user saved-project restore/reselect-source workflow and a production retention/deletion policy remain release gates. Source audio stays browser-local under the saved-project API; only project settings/metadata are persisted.
+- Historical metrics from before durable instrumentation remain unknown and must not be reconstructed or presented as measured.
+
+Stage Summary:
+- The codebase no longer treats a database file baked into the application build as the production account store.
+- Account persistence is now designed around a durable external PostgreSQL database with versioned migrations.
+- **Not yet declared complete:** live deployment configuration, cross-redeploy end-to-end proof, backup/restore, saved-project restore UI, and final legal review remain required.
+
+
+---
+
+Task ID: 28
+Agent: RAIN V6 remediation
+Task: Start full-stack engineering fix programme against the operator-confirmed beta entitlement policy.
+
+Operator-confirmed policy (2026-10-27):
+- Two free full-capability use credits per beta identity.
+- After those are consumed, gated use requires R49.00 payment/unlock.
+- Paid beta receives full capability subject to 30 successful exports per month.
+- Commercial launch moves to the full tiered subscription model.
+- Credit unit and R49 duration/renewal are not yet specified; no assumption is made.
+
+Changes:
+- Added docs/audit/ENGINEERING-FIX-PLAN.md with W0–W12 workstreams, dependency order, P0/P1/P2 release gates and acceptance evidence.
+- Added Payment, Entitlement and UsageRecord Prisma models and a new additive migration. The original initial migration was restored unchanged to preserve migration immutability.
+- Added a pure beta entitlement policy helper and Bun unit tests for two free use credits and the 30-export paid monthly limit. The helper is not yet wired into the live UI/quota path.
+- Updated README, backlog, truth matrix, deployment checklist and PR description to stop presenting the old two-export client gate as the confirmed product policy.
+- Marked the existing browser-local export counter as a legacy UX gate pending replacement by the durable entitlement workflow.
+- Hardened POST /api/rain/render: rejects invalid event kinds/formats/hash shapes, checks authenticated project ownership, writes authenticated Render/Event rows in one transaction, and only returns telemetryRecorded=true after a successful database write. Event metadata explicitly says the event is client-reported and the output was not independently verified.
+
+Validation:
+- GitHub Actions run 40591606706: lint, TypeScript and Prisma validation passed; production build passed. The PostgreSQL integration test was still running when this entry was written.
+- Latest head at time of entry: 5692495504b3de655e40a65a05ee001d14962210. CI run 40591834699 is in progress and must be checked for the final test result.
+- No merge performed. PR #3 remains draft; branch comparison is diverged (340 commits ahead, 2 behind). Reconcile the divergence only after reviewing the two missing base commits and current CI.
+- Live deployment database, real payment provider, webhook verification, monthly export enforcement, and end-user cross-redeploy persistence remain unverified.

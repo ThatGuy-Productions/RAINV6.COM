@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Box, Download, Headphones, Keyboard, Layers, Loader2, Moon, Music2, Pause, Play, Shield, Sun, Target, Upload, UserCircle, X, Zap } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
+import { getAnonId } from '@/lib/rain/anon-id'
 import { RAIN_BRAND, MACROS } from '@/lib/rain/constants'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
   type SpatialConfig,
   type SpatialResult,
   computeVbapGains,
-  exportAtmosPackage,
+  exportSpatialPackage,
   exportSpatialBwf,
   generateAdmXml,
   getBedSpeakers,
@@ -41,7 +42,7 @@ export function SpatialTab() {
 
   const [isProcessing, setIsProcessing] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
-  const [isExportingAtmos, setIsExportingAtmos] = useState(false)
+  const [isExportingSpatialPackage, setIsExportingSpatialPackage] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [progress, setProgress] = useState<{ stage: string; pct: number }>({ stage: '', pct: 0 })
   const [result, setResult] = useState<SpatialResult | null>(null)
@@ -190,14 +191,14 @@ export function SpatialTab() {
     }
   }, [result, metadata, fileName, bedFormat])
 
-  // ----- Export Atmos package (full-source .zip: .atmos.wav + ADM XML sidecar
+  // ----- Export experimental ADM BWF spatial draft (.zip: .spatial-bwf.wav + XML sidecar
   //       + spatial.json + README.txt + MANIFEST.json with real SHA-256).
-  const handleExportAtmos = useCallback(async () => {
+  const handleExportSpatialPackage = useCallback(async () => {
     if (!result) return
-    setIsExportingAtmos(true)
+    setIsExportingSpatialPackage(true)
     try {
       await new Promise((r) => setTimeout(r, 0))
-      const blob = await exportAtmosPackage(
+      const blob = await exportSpatialPackage(
         result,
         {
           title: metadata?.title || fileName || 'RAIN Spatial Master',
@@ -208,15 +209,15 @@ export function SpatialTab() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${(metadata?.title || fileName || 'rain-spatial').replace(/\s+/g, '_')}_${bedFormat}_atmos.zip`
+      a.download = `${(metadata?.title || fileName || 'rain-spatial').replace(/\s+/g, '_')}_${bedFormat}_spatial-adm-draft.zip`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (e) {
-      setError((e as Error).message || 'Atmos export failed')
+      setError((e as Error).message || 'Spatial package export failed')
     } finally {
-      setIsExportingAtmos(false)
+      setIsExportingSpatialPackage(false)
     }
   }, [result, metadata, fileName, bedFormat, outputMode, objects, width, centerFocus, objectPos, objectElevation])
 
@@ -259,7 +260,7 @@ export function SpatialTab() {
               Spatial Audio Engine
             </div>
             <div className="text-sm font-semibold">
-              Real HRTF + M/S + Bed Upmix · {outputMode === 'STEREO' ? 'Stereo' : outputMode === 'BINAURAL' ? 'Binaural' : 'Multichannel'} monitoring · Atmos export
+              Real HRTF + M/S + Bed Upmix · {outputMode === 'STEREO' ? 'Stereo' : outputMode === 'BINAURAL' ? 'Binaural' : 'Multichannel'} monitoring · Spatial package export
             </div>
           </div>
           <Box className="w-5 h-5 text-rain-accent" />
@@ -273,9 +274,7 @@ export function SpatialTab() {
         <p className="text-[10px] text-muted-foreground mt-3 leading-relaxed">
           Real per-speaker HRTF synthesis (Woodworth ITD + head-shadow lowpass + pinna high-shelf + shoulder
           reflection) convolved via Web Audio <code className="text-rain-accent">ConvolverNode</code> in an
-          offline context. Real M/S stereo enhancement + Haas/allpass upmix to 5.1 / 7.1 / 7.1.4. Real ADM
-          BWF (ITU-R BS.2076-2) XML with bed + dynamic Objects metadata. Atmos export produces a real ZIP
-          with the .atmos.wav file + audioDefinitionModelBwf.xml sidecar. No external libraries, no stubs.
+          offline context. Real M/S stereo enhancement + Haas/allpass upmix to 5.1 / 7.1 / 7.1.4. ADM BWF (ITU-R BS.2076-2) XML with bed + dynamic Objects metadata. The ZIP is an experimental spatial draft, not a Dolby Atmos-certified deliverable; validate it in a compatible renderer before commercial use.
         </p>
       </div>
 
@@ -338,7 +337,7 @@ export function SpatialTab() {
               />
               <div className="flex justify-between text-[9px] font-mono text-muted-foreground mt-1">
                 <span>0 (bed only)</span>
-                <span>16 (Atmos consumer)</span>
+                <span>16 (spatial objects)</span>
                 <span>32 (max)</span>
               </div>
             </div>
@@ -458,12 +457,12 @@ export function SpatialTab() {
             {isExporting ? 'Encoding…' : `Download BWF (${outputChannelCount}ch ADM)`}
           </button>
           <button
-            onClick={handleExportAtmos}
-            disabled={!result || isExportingAtmos}
+            onClick={handleExportSpatialPackage}
+            disabled={!result || isExportingSpatialPackage}
             className="flex items-center gap-2 px-4 py-2 rounded-md text-xs font-mono uppercase border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {isExportingAtmos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-            {isExportingAtmos ? 'Packaging…' : 'Export Atmos (.zip)'}
+            {isExportingSpatialPackage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {isExportingSpatialPackage ? 'Packaging…' : 'Export ADM BWF Spatial Draft (.zip)'}
           </button>
           {!hasProcessed && !fileName && (
             <span className="text-[10px] font-mono text-muted-foreground">Load a track first.</span>
@@ -509,7 +508,7 @@ export function SpatialTab() {
         {result?.truncated && (
           <div className="mt-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-300 leading-relaxed">
             <strong>Preview truncated:</strong> the Spatial tab monitors the first 60s of your{' '}
-            {result.inputSeconds.toFixed(1)}s track for real-time HRTF preview. The Atmos export
+            {result.inputSeconds.toFixed(1)}s track for real-time HRTF preview. The Spatial package export
             processes the full track (up to 6 min) — no truncation on export.
           </div>
         )}
@@ -1017,6 +1016,12 @@ export function AIETab() {
       const next = await updateVoiceVectorFromBuffer(buf)
       setVoice(next)
       setExportStatus(null)
+      if (next) {
+        void fetch('/api/rain/aie-activity', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'aie_vector_computed', anonId: getAnonId(), sessions: next.sessions, stability: next.stability }),
+        }).catch(() => {})
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Voice vector computation failed')
     } finally {
@@ -1038,6 +1043,12 @@ export function AIETab() {
         try {
           const next = await updateVoiceVectorFromBuffer(buf)
           if (!cancelled) setVoice(next)
+          if (!cancelled && next) {
+            void fetch('/api/rain/aie-activity', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ event: 'aie_vector_computed', anonId: getAnonId(), sessions: next.sessions, stability: next.stability }),
+            }).catch(() => {})
+          }
         } catch {
           // fall through — persisted vector remains visible
         }
@@ -1063,6 +1074,10 @@ export function AIETab() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
       setExportStatus(`Exported · sig ${payload.signature.slice(0, 12)}…`)
+      void fetch('/api/rain/aie-activity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: 'aie_vector_exported', anonId: getAnonId(), sessions: voice.sessions, stability: voice.stability }),
+      }).catch(() => {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed')
       setExportStatus(null)

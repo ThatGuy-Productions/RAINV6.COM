@@ -16,19 +16,18 @@ import {
 } from 'lucide-react'
 import { useSessionStore } from '@/lib/rain/store'
 import { DSP_DELIVERY_PARTNERS } from '@/lib/rain/constants'
-import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+import { validateIsrc, validateUpc, validateMetadata } from '@/lib/rain/metadata-validation'
 import { notifyInfo, notifyError, notifySuccess, notifyWarning } from '@/lib/rain/notifications'
 import { audioEngine } from '@/lib/rain/audio-engine'
 import {
-  buildDdexErnXml,
   buildDistributionPackage,
+  buildDdexErnXml,
   deleteDeliveryJob,
   loadDeliveryJobs,
   persistDeliveryJob,
   submitToLabelGrid,
   updateDeliveryJob,
   validateArtwork,
-  validateDdex,
   type DeliveryJob,
   type DeliveryJobStatus,
 } from '@/lib/rain/distribution'
@@ -58,6 +57,7 @@ export function DistributeTab() {
   const metadata = useSessionStore((s) => s.metadata)
   const setMetadata = useSessionStore((s) => s.setMetadata)
   const hasProcessed = useSessionStore((s) => s.hasProcessed)
+  const rainCert = useSessionStore((s) => s.rainCert)
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['spotify', 'apple_music', 'youtube', 'tidal'])
   const [disclosure, setDisclosure] = useState<Record<DisclosureKey, DisclosureValue>>({
     vocals: 'assisted',
@@ -74,6 +74,14 @@ export function DistributeTab() {
   const [submittingJobId, setSubmittingJobId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [lastBuildSha, setLastBuildSha] = useState<string | null>(null)
+  const [identifiersConfirmed, setIdentifiersConfirmed] = useState(false)
+  const compactIsrc = metadata.isrc.replace(/[-\\s]/g, '').toUpperCase()
+  const isrcFormatValid = validateIsrc(metadata.isrc) && !compactIsrc.startsWith('US2XX')
+  const upcFormatValid = validateUpc(metadata.upc)
+
+  useEffect(() => {
+    setIdentifiersConfirmed(false)
+  }, [metadata.isrc, metadata.upc])
 
   const refreshJobs = useCallback(async () => {
     const loaded = await loadDeliveryJobs()
@@ -84,25 +92,23 @@ export function DistributeTab() {
     refreshJobs()
   }, [refreshJobs])
 
-  const handleGenerateIdentifiers = () => {
-    setMetadata({ isrc: generateIsrc(), upc: generateUpc() })
-  }
-
-  // Build the DDEX ERN 4.3.2 XML string from the current metadata, selected
-  // platforms, and AI disclosure state. Memoised so the preview doesn't
-  // regenerate MessageId / MessageCreatedDateTime on every render.
+  // Preview only: a structurally complete DDEX ERN requires the actual rendered
+  // asset hashes and registered Party IDs. The package builder supplies those
+  // after encoding; this preview must not be treated as delivery-ready.
   const ddexXml = useMemo(() => {
     return buildDdexErnXml({
-      title: metadata.title || 'Untitled',
-      artist: metadata.artist || 'Unknown Artist',
+      title: metadata.title,
+      artist: metadata.artist,
       album: metadata.album,
       genre: metadata.genre,
       genreSubgenre: metadata.genreSubgenre,
       year: metadata.year,
-      isrc: metadata.isrc || 'USXXX2400001',
-      upc: metadata.upc || '000000000000',
+      isrc: metadata.isrc,
+      upc: metadata.upc,
+      senderDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '',
+      recipientDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '',
       iswc: metadata.iswc,
-      releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+      releaseDate: metadata.releaseDate,
       originalReleaseDate: metadata.originalReleaseDate,
       releaseType: metadata.releaseType,
       label: metadata.label,
@@ -125,7 +131,6 @@ export function DistributeTab() {
     })
   }, [metadata, disclosure, selectedPlatforms])
 
-  const ddexValidation = useMemo(() => validateDdex(ddexXml), [ddexXml])
 
   const handleArtworkSelected = async (file: File | null) => {
     if (!file) return
@@ -157,8 +162,33 @@ export function DistributeTab() {
   // compute SHA-256 over every asset, ZIP everything, persist to the
   // IndexedDB delivery queue, and trigger a download.
   const handleBuildPackage = async () => {
-    if (!metadata.isrc) {
-      notifyError('ISRC required', 'Generate or enter an ISRC before packaging.')
+    if (!isrcFormatValid) {
+      notifyError('Registered ISRC required', 'Enter an officially assigned ISRC. RAIN-generated local test identifiers cannot be distributed.')
+      return
+    }
+    if (!upcFormatValid) {
+      notifyError('Registered UPC required', 'Enter a GS1-registered UPC/EAN with a valid check digit before packaging.')
+      return
+    }
+    if (!identifiersConfirmed) {
+      notifyError('Confirm identifier registration', 'Confirm that the ISRC and UPC are officially assigned to this release before building a distribution package.')
+      return
+    }
+    if (!metadata.title.trim() || !metadata.artist.trim() || !metadata.genre || !metadata.releaseDate) {
+      notifyError('Release metadata incomplete', 'Enter the real release title, primary artist, genre, and release date before packaging.')
+      return
+    }
+    const metadataIssues = validateMetadata(metadata)
+    if (metadataIssues.length > 0) {
+      notifyError('Metadata validation failed', metadataIssues.map((issue) => issue.message).join(' '))
+      return
+    }
+    if (!/^[A-Z0-9]{18}$/.test(process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '') || !/^[A-Z0-9]{18}$/.test(process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '')) {
+      notifyError('Official DDEX Party IDs required', 'Configure NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID and NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID with registered IDs before distribution.')
+      return
+    }
+    if (!rainCert) {
+      notifyError('RAIN-CERT required', 'Generate and verify provenance for the current master before building a distribution package.')
       return
     }
     if (!hasProcessed) {
@@ -173,21 +203,15 @@ export function DistributeTab() {
       notifyError('No processed buffer', 'Mastering pipeline has no output to package.')
       return
     }
-    if (!ddexValidation.ok) {
-      notifyError(
-        'DDEX validation failed',
-        ddexValidation.errors.join('; '),
-      )
-      return
-    }
+
     setBuildStatus('packaging')
     setBuildError(null)
     try {
       const result = await buildDistributionPackage(
         processedBuffer,
         {
-          title: metadata.title || 'Untitled',
-          artist: metadata.artist || 'Unknown Artist',
+          title: metadata.title,
+          artist: metadata.artist,
           album: metadata.album,
           genre: metadata.genre,
           // TASK B: pass through the new Ditto-standard fields from the
@@ -196,8 +220,10 @@ export function DistributeTab() {
           year: metadata.year,
           isrc: metadata.isrc,
           upc: metadata.upc,
+          senderDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_SENDER_DPID ?? '',
+          recipientDpid: process.env.NEXT_PUBLIC_RAIN_DDEX_RECIPIENT_DPID ?? '',
           iswc: metadata.iswc,
-          releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
+          releaseDate: metadata.releaseDate,
           originalReleaseDate: metadata.originalReleaseDate,
           releaseType: metadata.releaseType,
           label: metadata.label,
@@ -223,6 +249,7 @@ export function DistributeTab() {
           targetDsps: selectedPlatforms,
           dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
         },
+        rainCert,
         artwork?.file,
       )
 
@@ -273,90 +300,26 @@ export function DistributeTab() {
     if (job.status === 'submitting') return
     setSubmittingJobId(job.id)
     try {
-      const ddexXml = buildDdexErnXml({
-        title: metadata.title || 'Untitled',
-        artist: metadata.artist || 'Unknown Artist',
-        album: metadata.album,
-        genre: metadata.genre,
-        genreSubgenre: metadata.genreSubgenre,
-        year: metadata.year,
-        isrc: metadata.isrc || 'USXXX2400001',
-        upc: metadata.upc || '000000000000',
-        iswc: metadata.iswc,
-        releaseDate: metadata.releaseDate || new Date().toISOString().slice(0, 10),
-        releaseType: metadata.releaseType,
-        label: metadata.label,
-        distributor: metadata.distributor,
-        pLine: metadata.copyrightHolder,
-        cLine: metadata.copyrightYear
-          ? `${metadata.copyrightYear} ${metadata.copyrightHolder ?? metadata.publisher ?? metadata.artist ?? ''}`.trim()
-          : undefined,
-        publisher: metadata.publisher,
-        pro: metadata.pro,
-        masterOwner: metadata.masterOwner,
-        language: metadata.language,
-        explicitLyrics: metadata.explicitLyrics,
-        territories: metadata.territories,
-        contributors: metadata.contributors,
-        aiDisclosure: metadata.aiDisclosure ?? disclosure,
-        targetDsps: selectedPlatforms,
-        dspLabels: Object.fromEntries(DSP_DELIVERY_PARTNERS.map((p) => [p.slug, p.label])),
-      })
-
-      const resp = await fetch('/api/rain/distribute/finalize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ddexXml,
-          manifest: job.manifest,
-          packageSha256: job.packageSha256,
-          packageSizeBytes: job.packageSizeBytes,
-          aiDisclosure: metadata.aiDisclosure ?? disclosure,
-          sessionId: useSessionStore.getState().sessionId ?? undefined,
-        }),
-      })
-
-      const body = await resp.json()
-
-      if (!body.ok) {
-        notifyError('Delivery failed', body.error || `HTTP ${resp.status}`)
-        // Update local job status
-        await updateDeliveryJob(job.id, {
-          status: 'failed',
-          error: body.error || `HTTP ${resp.status}`,
-          providerResponse: body.providerResponse,
-        })
+      const result = await submitToLabelGrid(job)
+      if (!result.ok) {
+        if (result.requiresCredentials) {
+          notifyWarning('Package validated — provider configuration required', result.error)
+        } else {
+          notifyError('Submission failed', result.error)
+        }
         await refreshJobs()
         return
       }
 
-      // Real confirmation from the pipeline endpoint
-      if (body.delivery?.status === 'submitted') {
-        notifySuccess(
-          '✓ Delivered — Pipeline Complete',
-          body.message || 'Your release has been submitted to LabelGrid. Streaming platforms will receive it within 24-72 hours.',
-        )
-        await updateDeliveryJob(job.id, {
-          status: 'delivered',
-          submittedAt: Date.now(),
-          deliveredAt: Date.now(),
-          providerResponse: body.delivery.providerResponse,
-        })
-      } else if (body.delivery?.status === 'pending_credentials') {
-        notifyWarning(
-          'Package Validated — Credentials Required',
-          'The release is packaged and validated. Set LABELGRID_API_KEY in .env and restart the server to enable automatic delivery. The package can be submitted at any time.',
-        )
-        // Keep as packaged — ready for retry when credentials are set
-      } else if (body.delivery?.status === 'failed') {
-        notifyError('Delivery Attempted — Failed', body.delivery.providerError || 'The LabelGrid API returned an error. You can retry.')
-        await updateDeliveryJob(job.id, {
-          status: 'failed',
-          error: body.delivery.providerError,
-          providerResponse: body.delivery.providerResponse,
-        })
+      if (result.status === 'delivered') {
+        notifySuccess('Provider confirmed delivery', result.providerResponse)
+      } else {
+        notifyInfo('Submitted to provider — delivery not yet confirmed', result.providerResponse)
       }
-
+      await refreshJobs()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown submission error'
+      notifyError('Submission failed', message)
       await refreshJobs()
     } finally {
       setSubmittingJobId(null)
@@ -393,21 +356,17 @@ export function DistributeTab() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
           <DdexInfo label="ERN Version" value="4.3.2" />
-          <DdexInfo label="Schema" value="ern/43" />
+          <DdexInfo label="Schema" value="ern/432" />
           <DdexInfo label="Disclosure Fields" value="5 (EU AI Act §50)" />
           <DdexInfo label="Output" value=".zip (ern+manifest+assets)" />
         </div>
-        {!ddexValidation.ok && (
-          <div className="mt-3 text-[10px] font-mono text-orange-400 bg-orange-400/10 rounded p-2 flex items-start gap-2">
-            <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-            <div>
-              <div className="uppercase tracking-wider mb-1">DDEX validation</div>
-              {ddexValidation.errors.map((err, i) => (
-                <div key={i}>· {err}</div>
-              ))}
-            </div>
+        <div className="mt-3 text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded p-2 flex items-start gap-2">
+          <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+          <div>
+            <div className="uppercase tracking-wider mb-1">Draft preview — not schema-certified</div>
+            This preview does not include the rendered WAV's real hash or final package resource references. The package builder adds those after export and runs structural checks. Official ERN 4.3.2 XSD/profile validation is not yet implemented; provider acceptance is not guaranteed.
           </div>
-        )}
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
@@ -423,12 +382,19 @@ export function DistributeTab() {
               <Field label="ISRC" value={metadata.isrc} onChange={(v) => setMetadata({ isrc: v })} placeholder="US-XXX-YY-NNNNN" />
               <Field label="UPC" value={metadata.upc} onChange={(v) => setMetadata({ upc: v })} placeholder="12-digit UPC" />
             </div>
-            <button
-              onClick={handleGenerateIdentifiers}
-              className="text-xs px-3 py-1.5 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors"
-            >
-              Generate ISRC + UPC
-            </button>
+            <div className="text-[10px] text-muted-foreground">
+              Enter identifiers officially issued to this release. RAIN cannot register ISRC or UPC codes.
+            </div>
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={identifiersConfirmed}
+                onChange={(event) => setIdentifiersConfirmed(event.target.checked)}
+                disabled={!isrcFormatValid || !upcFormatValid}
+                className="mt-0.5"
+              />
+              <span>I confirm these are officially assigned identifiers, not locally generated test values.</span>
+            </label>
           </div>
         </div>
 
@@ -567,7 +533,7 @@ export function DistributeTab() {
       <div className="flex flex-wrap justify-end gap-2">
         <button
           onClick={handleBuildPackage}
-          disabled={buildStatus === 'packaging' || !metadata.isrc || !hasProcessed}
+          disabled={buildStatus === 'packaging' || !isrcFormatValid || !upcFormatValid || !identifiersConfirmed || !hasProcessed}
           className="flex items-center gap-2 px-5 py-2.5 rounded-md bg-rain-accent text-black font-semibold text-sm hover:scale-[1.02] active:scale-95 transition-transform disabled:opacity-50 disabled:hover:scale-100"
         >
           {buildStatus === 'packaging' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
@@ -575,7 +541,9 @@ export function DistributeTab() {
         </button>
       </div>
       <div className="text-[10px] text-right text-muted-foreground -mt-2 space-y-0.5">
-        {!metadata.isrc && <div>Generate or enter an ISRC to enable packaging.</div>}
+        {!isrcFormatValid && <div>Enter a registered ISRC (local test identifiers are rejected).</div>}
+        {!upcFormatValid && <div>Enter a registered UPC/EAN with a valid check digit.</div>}
+        {!identifiersConfirmed && isrcFormatValid && upcFormatValid && <div>Confirm identifier registration to enable packaging.</div>}
         {!hasProcessed && <div>Run the mastering pipeline first — the package wraps the rendered master.</div>}
         {buildStatus === 'packaged' && lastBuildSha && (
           <div className="text-rain-accent font-mono">Last package SHA-256: {lastBuildSha.slice(0, 24)}…</div>
@@ -706,7 +674,7 @@ function JobRow({
                 <span className="break-all">{job.error}</span>
               </div>
             )}
-            {job.providerResponse && job.status === 'delivered' && (
+            {job.providerResponse && (job.status === 'delivered' || job.status === 'submitted') && (
               <div className="text-rain-accent mt-1 truncate">
                 Provider: {job.providerResponse.slice(0, 120)}
                 {job.providerResponse.length > 120 ? '…' : ''}
@@ -725,7 +693,7 @@ function JobRow({
               Submit
             </button>
           )}
-          {job.status === 'failed' && (
+          {(job.status === 'failed' || job.status === 'pending_credentials') && (
             <button
               onClick={onRetry}
               className="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 transition-colors flex items-center gap-1"
@@ -785,6 +753,8 @@ function StatusPill({ status }: { status: DeliveryJobStatus }) {
     pending: '#64748B',
     packaged: '#AAFF00',
     submitting: '#F59E0B',
+    submitted: '#60A5FA',
+    pending_credentials: '#F59E0B',
     delivered: '#10B981',
     failed: '#F97316',
   }

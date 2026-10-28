@@ -24,8 +24,10 @@
  *     honestly return `{ ok: false, requiresCredentials: true, error: '...' }`
  *     — no automatic "delivered" state without a 2xx response.
  *
- * The ISRC/UPC generators in `provenance.ts` are reused (they emit real
- * ISO-3901 / EAN-13-checksum-correct identifiers).
+ * Locally generated identifier strings are test fixtures only; syntactic
+ * check digits do not mean an ISRC/UPC has been officially registered. The
+ * package builder rejects local test ISRCs and requires format-valid values;
+ * the UI additionally requires explicit confirmation of official assignment.
  *
  * Spec: TECH-STACK-SPECIFICATION v6.0 — Stage 16 (Distribution). September
  * 2025 EU AI Act Article 50 disclosure fields are embedded in the
@@ -33,6 +35,11 @@
  */
 
 import { audioBufferToWav, audioBufferToMp3 } from './audio-engine'
+import { XMLValidator } from 'fast-xml-parser'
+import { validateIsrc, validateUpc } from './metadata-validation'
+import { hashFloat32Channels, verifyProvenance } from './provenance'
+import type { ExportOptions } from './audio-engine'
+import type { ProvenanceCertificate } from './types'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,6 +61,11 @@ export interface DistributionAsset {
 
 export interface ReleaseManifest {
   releaseId: string
+  /** Signed RAIN-CERT attesting to the exact Float32 master used for exports. */
+  provenance: ProvenanceCertificate
+  senderDpid: string
+  recipientDpid: string
+  targetDsps: string[]
   isrc: string
   upc: string
   title: string
@@ -111,8 +123,10 @@ export type DeliveryJobStatus =
   | 'pending'        // Created locally, not yet packaged.
   | 'packaged'       // ZIP built + persisted; awaiting submission.
   | 'submitting'     // HTTP POST in flight.
-  | 'delivered'      // Provider returned 2xx.
-  | 'failed'         // Provider returned non-2xx OR network error OR credentials missing.
+  | 'submitted'      // Provider accepted the package; final delivery not yet confirmed.
+  | 'pending_credentials' // Package is valid but provider endpoint/credentials are missing.
+  | 'delivered'      // Provider explicitly confirmed final delivery/completion.
+  | 'failed'         // Provider rejected submission or a network/validation error occurred.
 
 export interface DeliveryJob {
   id: string
@@ -134,6 +148,14 @@ export interface DeliveryJob {
 // ---------------------------------------------------------------------------
 // SHA-256 helper (WebCrypto, browser only)
 // ---------------------------------------------------------------------------
+
+function hexToBase64(hex: string): string {
+  if (!/^(?:[a-f0-9]{2})+$/i.test(hex)) throw new Error('Invalid hexadecimal digest')
+  const bytes = Uint8Array.from(hex.match(/.{2}/g) ?? [], (pair) => Number.parseInt(pair, 16))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
 
 async function sha256Bytes(data: Uint8Array): Promise<string> {
   if (typeof crypto === 'undefined' || !crypto.subtle) {
@@ -297,6 +319,13 @@ export interface DdexMetadata {
   year?: string
   isrc: string
   upc: string
+  /** Officially assigned DDEX Party IDs; required for ERN delivery. */
+  senderDpid?: string
+  recipientDpid?: string
+  /** Actual rendered WAV resource details included in the package. */
+  audioResource?: { filename: string; sha256: string; hashSumBase64: string; channels: number; sampleRate: number; bitDepth: number; sizeBytes: number }
+  /** Optional validated cover-art resource included in the package. */
+  artworkResource?: { filename: string; sha256: string; hashSumBase64: string; width: number; height: number; format: 'image/jpeg' | 'image/png'; sizeBytes: number }
   /** ISWC for the underlying composition. TASK B enrichment. */
   iswc?: string
   /** ISO-8601 release date (YYYY-MM-DD). */
@@ -366,143 +395,202 @@ export function buildDdexErnXml(meta: DdexMetadata): string {
   const messageId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
     ? crypto.randomUUID()
     : `rain-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const threadId = `rain-${meta.isrc || 'release'}-${messageId}`
   const created = new Date().toISOString()
-  const title = escapeXml(meta.title || 'Untitled')
-  const artist = escapeXml(meta.artist || 'Unknown Artist')
-  const album = meta.album ? escapeXml(meta.album) : ''
-  const genre = meta.genre ? escapeXml(meta.genre) : ''
+  const title = escapeXml(meta.title || '')
+  const artist = escapeXml(meta.artist || '')
+  const label = escapeXml(meta.label || '')
+  const genre = escapeXml(meta.genre || '')
   const genreSub = meta.genreSubgenre ? escapeXml(meta.genreSubgenre) : ''
-  const year = escapeXml(meta.year || String(new Date().getFullYear()))
-  const releaseDate = meta.releaseDate || new Date().toISOString().slice(0, 10)
-  const originalReleaseDate = meta.originalReleaseDate
-    ? escapeXml(meta.originalReleaseDate)
-    : ''
+  const year = (meta.year || meta.releaseDate?.slice(0, 4) || String(new Date().getFullYear())).slice(0, 4)
+  const releaseDate = meta.releaseDate || ''
   const duration = isoDurationFromSeconds(meta.durationSeconds)
+  const language = meta.language === 'eng' ? 'en' : (meta.language || 'en')
+  const parentalWarning = meta.explicitLyrics === 'explicit'
+    ? 'Explicit'
+    : meta.explicitLyrics === 'clean'
+      ? 'ExplicitContentEdited'
+      : 'NotExplicit'
 
-  // ---- TASK B enrichment: P-line / C-line / language / explicit / territories ----
-  const pLineBlock = meta.pLine
-    ? `    <PLine>${escapeXml(meta.pLine)}</PLine>`
+  const aiValue = (value: string | undefined): 'None' | 'Partly' | 'All' => {
+    if (value === 'generated') return 'All'
+    if (value === 'assisted') return 'Partly'
+    return 'None'
+  }
+  const aiRank = { None: 0, Partly: 1, All: 2 } as const
+  const highestAi = (values: Array<'None' | 'Partly' | 'All'>): 'None' | 'Partly' | 'All' =>
+    values.reduce((best, value) => aiRank[value] > aiRank[best] ? value : best, 'None')
+  const trackContainsAI = highestAi([
+    aiValue(meta.aiDisclosure?.vocals),
+    aiValue(meta.aiDisclosure?.instrumentation),
+    aiValue(meta.aiDisclosure?.composition),
+  ])
+  const releaseContainsAI = highestAi([
+    trackContainsAI,
+    aiValue(meta.aiDisclosure?.mixing),
+    aiValue(meta.aiDisclosure?.mastering),
+    aiValue(meta.aiDisclosure?.artwork),
+  ])
+
+  const pLineYear = meta.pLine?.match(/^\d{4}/)?.[0] ?? year
+  const pLineText = meta.pLine?.replace(/^\d{4}\s*/, '') || label
+  const cLineYear = meta.cLine?.match(/^\d{4}/)?.[0] ?? year
+  const cLineText = meta.cLine?.replace(/^\d{4}\s*/, '') || artist
+  const pLineBlock = meta.pLine || label
+    ? `<PLine><Year>${pLineYear}</Year><PLineText>${escapeXml(pLineText)}</PLineText></PLine>`
     : ''
-  const cLineBlock = meta.cLine
-    ? `    <CLine>${escapeXml(meta.cLine)}</CLine>`
+  const cLineBlock = meta.cLine || artist
+    ? `<CLine><Year>${cLineYear}</Year><CLineText>${escapeXml(cLineText)}</CLineText></CLine>`
     : ''
-  const releaseTypeBlock = meta.releaseType
-    ? `    <ReleaseType>${meta.releaseType}</ReleaseType>`
+  const releaseType = ({
+    single: 'Single',
+    ep: 'EP',
+    album: 'Album',
+    compilation: 'Compilation',
+  } as const)[meta.releaseType ?? 'single']
+
+  const sender = meta.senderDpid
+    ? `<MessageSender><PartyId>${escapeXml(meta.senderDpid)}</PartyId><PartyName LanguageAndScriptCode="en"><FullName>${label}</FullName></PartyName></MessageSender>`
     : ''
-  const labelBlock = meta.label
-    ? `    <LabelName>${escapeXml(meta.label)}</LabelName>`
-    : ''
-  const distributorBlock = meta.distributor
-    ? `    <DistributorName>${escapeXml(meta.distributor)}</DistributorName>`
-    : ''
-  const iswcBlock = meta.iswc
-    ? `      <ISWC>${escapeXml(meta.iswc)}</ISWC>`
-    : ''
-  const languageBlock = meta.language
-    ? `    <LanguageOfPerformance>${escapeXml(meta.language)}</LanguageOfPerformance>`
-    : ''
-  const explicitBlock = meta.explicitLyrics
-    ? `    <ParentalWarningType>${meta.explicitLyrics === 'explicit' ? 'Explicit' : meta.explicitLyrics === 'clean' ? 'Cleaned' : 'NotExplicit'}</ParentalWarningType>`
-    : ''
-  const territoriesBlock = meta.territories && meta.territories.length > 0
-    ? `    <TerritoryCode>${meta.territories.map(escapeXml).join('</TerritoryCode>\n    <TerritoryCode>')}</TerritoryCode>`
-    : ''
-  const publisherBlock = meta.publisher
-    ? `    <Publisher><PartyName><FullName>${escapeXml(meta.publisher)}</FullName></PartyName>${meta.pro ? `<PRO>${escapeXml(meta.pro)}</PRO>` : ''}</Publisher>`
-    : ''
-  const masterOwnerBlock = meta.masterOwner
-    ? `    <MasterOwner>${escapeXml(meta.masterOwner)}</MasterOwner>`
+  const recipient = meta.recipientDpid
+    ? `<MessageRecipient><PartyId>${escapeXml(meta.recipientDpid)}</PartyId><PartyName LanguageAndScriptCode="en"><FullName>LabelGrid</FullName></PartyName></MessageRecipient>`
     : ''
 
-  // ---- Contributors block (TASK B enrichment) ----
-  // Each contributor becomes a <ResourceContributor> with a <Role> + IPI/ISNI.
-  const contributorsBlock = (meta.contributors && meta.contributors.length > 0)
-    ? meta.contributors
-        .map((c) => {
-          const ipi = c.ipi ? `\n        <IPI>${escapeXml(c.ipi)}</IPI>` : ''
-          const isni = c.isni ? `\n        <ISNI>${escapeXml(c.isni)}</ISNI>` : ''
-          const share = typeof c.share === 'number' && !Number.isNaN(c.share)
-            ? `\n        <Share>${c.share}</Share>`
-            : ''
-          return `      <ResourceContributor>\n        <PartyName><FullName>${escapeXml(c.name || '')}</FullName></PartyName>\n        <Role>${escapeXml(c.role)}</Role>${ipi}${isni}${share}\n      </ResourceContributor>`
-        })
-        .join('\n')
+  const audio = meta.audioResource
+  const audioDetails = audio
+    ? `<TechnicalDetails>
+        <TechnicalResourceDetailsReference>T1</TechnicalResourceDetailsReference>
+        <DeliveryFile>
+          <Type>AudioFile</Type>
+          <AudioCodecType UserDefinedValue="WAV">UserDefined</AudioCodecType>
+          <NumberOfChannels>${audio.channels}</NumberOfChannels>
+          <SamplingRate>${audio.sampleRate}</SamplingRate>
+          <BitsPerSample>${audio.bitDepth}</BitsPerSample>
+          <File>
+            <URI>${escapeXml(audio.filename)}</URI>
+            <HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${audio.hashSumBase64}</HashSumValue></HashSum>
+          </File>
+        </DeliveryFile>
+      </TechnicalDetails>`
     : ''
 
-  const disclosureFields = ['vocals', 'instrumentation', 'composition', 'mixing', 'mastering']
-  const disclosureBlock = disclosureFields
-    .map((f) => `      <${f}>${meta.aiDisclosure?.[f] ?? 'none'}</${f}>`)
-    .join('\n')
+  const artwork = meta.artworkResource
+  const artworkXml = artwork
+    ? `<Image>
+        <ResourceReference>A2</ResourceReference>
+        <Type>FrontCoverImage</Type>
+        <ResourceId><ProprietaryId Namespace="RAINV6">${escapeXml(artwork.filename)}</ProprietaryId></ResourceId>
+        <ContainsAI>${aiValue(meta.aiDisclosure?.artwork)}</ContainsAI>
+        <TechnicalDetails>
+          <TechnicalResourceDetailsReference>T2</TechnicalResourceDetailsReference>
+          <ImageCodecType>${artwork.format === 'image/jpeg' ? 'JPEG' : 'PNG'}</ImageCodecType>
+          <ImageHeight>${artwork.height}</ImageHeight>
+          <ImageWidth>${artwork.width}</ImageWidth>
+          <File><URI>${escapeXml(artwork.filename)}</URI><HashSum><Algorithm>SHA-256</Algorithm><HashSumValue>${artwork.hashSumBase64}</HashSumValue></HashSum></File>
+        </TechnicalDetails>
+      </Image>`
+    : ''
 
-  const dsps = meta.targetDsps && meta.targetDsps.length > 0
-    ? meta.targetDsps
-    : ['spotify', 'apple_music', 'youtube', 'tidal']
-  const dealBlock = dsps
-    .map((slug) => {
-      const label = meta.dspLabels?.[slug]
-        ? escapeXml(meta.dspLabels[slug])
-        : escapeXml(slug)
-      return `    <Deal>\n      <DSPName>${label}</DSPName>\n      <CommercialModel>PayAsYouGo</CommercialModel>\n    </Deal>`
-    })
-    .join('\n')
+  const contributorParties = (meta.contributors ?? []).map((contributor, index) => {
+    const ref = `P_CONTRIB_${index + 1}`
+    return `<Party><PartyReference>${ref}</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${escapeXml(contributor.name)}</FullName></PartyName>${contributor.ipi ? `<PartyId><IpiNameNumber>${escapeXml(contributor.ipi)}</IpiNameNumber></PartyId>` : ''}${contributor.isni ? `<PartyId><ISNI>${escapeXml(contributor.isni)}</ISNI></PartyId>` : ''}</Party>`
+  }).join('\n')
+  const contributorXml = (meta.contributors ?? []).map((contributor, index) => {
+    const roleMap: Record<string, string> = {
+      producer: 'StudioProducer',
+      'studio producer': 'StudioProducer',
+      songwriter: 'ComposerLyricist',
+      composer: 'ComposerLyricist',
+      lyricist: 'ComposerLyricist',
+      'mixing engineer': 'MixingEngineer',
+      'mastering engineer': 'MasteringEngineer',
+      performer: 'Performer',
+      vocalist: 'Vocalist',
+    }
+    const rawRole = contributor.role.toLowerCase().trim()
+    const role = roleMap[rawRole] ?? 'UserDefined'
+    const roleValue = role === 'UserDefined'
+      ? `<Value UserDefinedValue="${escapeXml(contributor.role)}">UserDefined</Value>`
+      : `<Value>${role}</Value>`
+    return `<Contributor SequenceNumber="${index + 1}"><ContributorPartyReference>P_CONTRIB_${index + 1}</ContributorPartyReference><Role>${roleValue}</Role><AiContribution>None</AiContribution></Contributor>`
+  }).join('\n')
 
-  // Build optional blocks as a single string for clean insertion.
-  const optionalReleaseBlocks = [
-    releaseTypeBlock,
-    pLineBlock,
-    cLineBlock,
-    labelBlock,
-    distributorBlock,
-    languageBlock,
-    explicitBlock,
-    publisherBlock,
-    masterOwnerBlock,
-    territoriesBlock,
-    originalReleaseDate ? `    <OriginalReleaseDate>${originalReleaseDate}</OriginalReleaseDate>` : '',
-    genreSub ? `    <SubGenre>${genreSub}</SubGenre>` : '',
-  ].filter(Boolean).join('\n')
+  const territoryCodes = (meta.territories?.length ? meta.territories : ['WORLDWIDE'])
+    .map((territory) => territory.toUpperCase() === 'WORLDWIDE' ? '<TerritoryCode>Worldwide</TerritoryCode>' : `<TerritoryCode>${escapeXml(territory.toUpperCase())}</TerritoryCode>`)
+    .join('')
+  const dealFor = (releaseReference: string) => `<ReleaseDeal><DealReleaseReference>${releaseReference}</DealReleaseReference><Deal><DealTerms>${territoryCodes}<ValidityPeriod><StartDate>${releaseDate}</StartDate></ValidityPeriod><CommercialModelType>SubscriptionModel</CommercialModelType><UseType>UserMakeAvailableLabelProvided</UseType></DealTerms></Deal></ReleaseDeal>`
+
+  const releaseResourceItems = [
+    '<ResourceGroupContentItem><SequenceNumber>1</SequenceNumber><ReleaseResourceReference>A1</ReleaseResourceReference></ResourceGroupContentItem>',
+    artwork ? '<ResourceGroupContentItem><SequenceNumber>2</SequenceNumber><ReleaseResourceReference>A2</ReleaseResourceReference></ResourceGroupContentItem>' : '',
+  ].filter(Boolean).join('')
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<ern:NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/43" LanguageAndScriptCode="en">
+<NewReleaseMessage xmlns:ern="http://ddex.net/xml/ern/432" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://ddex.net/xml/ern/432 http://ddex.net/xml/ern/432/release-notification.xsd" AvsVersionId="4" LanguageAndScriptCode="en">
   <MessageHeader>
+    <MessageThreadId>${threadId}</MessageThreadId>
     <MessageId>${messageId}</MessageId>
+    ${sender}
+    ${recipient}
     <MessageCreatedDateTime>${created}</MessageCreatedDateTime>
-    <MessageSender>
-      <PartyName><FullName>RAIN V6 Studio</FullName></PartyName>
-    </MessageSender>
   </MessageHeader>
+  <PartyList>
+    <Party><PartyReference>P_LABEL</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${label}</FullName></PartyName></Party>
+    <Party><PartyReference>P_ARTIST</PartyReference><PartyName LanguageAndScriptCode="en"><FullName>${artist}</FullName></PartyName></Party>
+    ${contributorParties}
+  </PartyList>
   <ResourceList>
     <SoundRecording>
       <ResourceReference>A1</ResourceReference>
-      <ISRC>${meta.isrc}</ISRC>
-${iswcBlock}
-      <ReferenceTitle>${title}</ReferenceTitle>
+      <Type>MusicalWorkSoundRecording</Type>
+      <SoundRecordingEdition>
+        <ResourceId><ISRC>${escapeXml(meta.isrc)}</ISRC></ResourceId>
+        ${meta.iswc ? `<WorkId><ISWC>${escapeXml(meta.iswc)}</ISWC></WorkId>` : ''}
+        ${pLineBlock}
+        ${audioDetails}
+      </SoundRecordingEdition>
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <DisplayArtistName ApplicableTerritoryCode="Worldwide">${artist}</DisplayArtistName>
       <Duration>${duration}</Duration>
-${contributorsBlock ? `      <ResourceContributorList>\n${contributorsBlock}\n      </ResourceContributorList>` : ''}
+      <ParentalWarningType>${parentalWarning}</ParentalWarningType>
+      <ContainsAI>${trackContainsAI}</ContainsAI>
+      <LanguageOfPerformance>${escapeXml(language)}</LanguageOfPerformance>
     </SoundRecording>
+    ${artworkXml}
   </ResourceList>
-  <Release>
-    <ReleaseId>
-      <ISRC>${meta.isrc}</ISRC>
-      <UPC>${meta.upc}</UPC>
-    </ReleaseId>
-    <ReferenceTitle>${title}</ReferenceTitle>
-    <DisplayArtist>
-      <PartyName>
-        <FullName>${artist}</FullName>
-      </PartyName>
-    </DisplayArtist>
-${album ? `    <ReleaseDetails><DisplayTitleText>${album}</DisplayTitleText></ReleaseDetails>\n` : ''}    <Genre>${genre}</Genre>
-    <YearOfOriginalRelease>${year}</YearOfOriginalRelease>
-    <ReleaseDate>${releaseDate}</ReleaseDate>
-${optionalReleaseBlocks ? optionalReleaseBlocks + '\n' : ''}    <AIInvolvement>
-${disclosureBlock}
-    </AIInvolvement>
-  </Release>
+  <ReleaseList>
+    <Release>
+      <ReleaseReference>R0</ReleaseReference>
+      <ReleaseType>${releaseType}</ReleaseType>
+      <ReleaseId><ICPN>${escapeXml(meta.upc)}</ICPN></ReleaseId>
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <DisplayArtist SequenceNumber="1"><ArtistPartyReference>P_ARTIST</ArtistPartyReference><DisplayArtistRole>MainArtist</DisplayArtistRole></DisplayArtist>
+      ${meta.contributors?.length ? contributorXml : ''}
+      <ReleaseLabelReference>P_LABEL</ReleaseLabelReference>
+      ${pLineBlock}
+      ${cLineBlock}
+      <DisplayGenre><GenreText>${genre}</GenreText>${genreSub ? `<SubGenre>${genreSub}</SubGenre>` : ''}</DisplayGenre>
+      <OriginalReleaseDate>${releaseDate}</OriginalReleaseDate>
+      <ParentalWarningType>${parentalWarning}</ParentalWarningType>
+      <ResourceGroup><SequenceNumber>1</SequenceNumber>${releaseResourceItems}</ResourceGroup>
+      <ContainsAI>${releaseContainsAI}</ContainsAI>
+    </Release>
+    <TrackRelease>
+      <ReleaseReference>RT1</ReleaseReference>
+      <ReleaseId><ISRC>${escapeXml(meta.isrc)}</ISRC></ReleaseId>
+      <DisplayTitleText LanguageAndScriptCode="en">${title}</DisplayTitleText>
+      <DisplayTitle LanguageAndScriptCode="en"><TitleText>${title}</TitleText><SubTitle/></DisplayTitle>
+      <ReleaseResourceReference>A1</ReleaseResourceReference>
+      <ReleaseLabelReference>P_LABEL</ReleaseLabelReference>
+    </TrackRelease>
+  </ReleaseList>
   <DealList>
-${dealBlock}
+    ${dealFor('R0')}
+    ${dealFor('RT1')}
   </DealList>
-</ern:NewReleaseMessage>`
+</NewReleaseMessage>`
 }
 
 // ---------------------------------------------------------------------------
@@ -536,58 +624,50 @@ export function validateIsrcFormat(isrc: string): boolean {
 }
 
 export function validateDdex(xml: string): DdexValidationResult {
+  const wellFormed = XMLValidator.validate(xml)
+  if (wellFormed !== true) {
+    const message = typeof wellFormed === 'object' && 'err' in wellFormed
+      ? String((wellFormed as { err?: { msg?: string } }).err?.msg ?? 'XML parse error')
+      : 'XML parse error'
+    return { ok: false, errors: [`XML not well-formed: ${message.slice(0, 240)}`] }
+  }
+
   const errors: string[] = []
-  if (typeof DOMParser === 'undefined') {
-    // Server-side path is not used for validation (the browser builds the
-    // package). If we ever need server-side validation, we can parse via a
-    // regex sanity pass; for now, surface the limitation honestly.
-    errors.push('DOMParser not available in this environment')
-    return { ok: false, errors }
+  // ERN 4.3.2 required-field sanity gate. XMLValidator checks well-formedness;
+  // this is not a substitute for official XSD/profile validation.
+  const hasTag = (tag: string) => new RegExp(
+    `<(?:[A-Za-z_][\\w.-]*:)?${tag}(?:\\s[^>]*)?>`,
+  ).test(xml)
+  const tagText = (tag: string): string => {
+    const match = new RegExp(
+      `<(?:[A-Za-z_][\\w.-]*:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[A-Za-z_][\\w.-]*:)?${tag}>`,
+    ).exec(xml)
+    return match?.[1]?.replace(/<[^>]+>/g, '').trim() ?? ''
   }
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  const parseError = doc.getElementsByTagName('parsererror')[0]
-  if (parseError) {
-    errors.push(`XML not well-formed: ${parseError.textContent?.slice(0, 200) ?? 'parse error'}`)
-    return { ok: false, errors }
-  }
-  // Required elements per ERN 4.3.2 NewReleaseMessage.
+
   const required = [
-    { tag: 'MessageId', parent: 'MessageHeader' },
-    { tag: 'MessageCreatedDateTime', parent: 'MessageHeader' },
-    { tag: 'ResourceReference', parent: 'SoundRecording' },
-    { tag: 'ISRC', parent: 'SoundRecording' },
-    { tag: 'ReferenceTitle', parent: 'SoundRecording' },
-    { tag: 'Duration', parent: 'SoundRecording' },
-    { tag: 'UPC', parent: 'ReleaseId' },
-    { tag: 'DisplayArtist', parent: 'Release' },
-    { tag: 'AIInvolvement', parent: 'Release' },
+    'NewReleaseMessage', 'MessageHeader', 'MessageThreadId', 'MessageId',
+    'MessageSender', 'MessageRecipient', 'MessageCreatedDateTime', 'PartyList',
+    'PartyReference', 'ResourceList', 'SoundRecording', 'ResourceReference',
+    'SoundRecordingEdition', 'ISRC', 'TechnicalDetails', 'DeliveryFile', 'File',
+    'HashSum', 'HashSumValue', 'DisplayTitleText', 'DisplayTitle', 'DisplayArtistName',
+    'Duration', 'ContainsAI', 'ReleaseList', 'Release', 'ReleaseReference',
+    'ReleaseType', 'ReleaseId', 'ICPN', 'DisplayArtist', 'ReleaseLabelReference',
+    'DisplayGenre', 'ResourceGroup', 'TrackRelease', 'DealList', 'ReleaseDeal',
+    'DealReleaseReference', 'DealTerms', 'TerritoryCode', 'ValidityPeriod',
+    'StartDate', 'CommercialModelType', 'UseType',
   ]
-  for (const { tag } of required) {
-    if (!doc.getElementsByTagName(tag).length) {
-      errors.push(`Missing required element: <${tag}>`)
-    }
+  for (const tag of required) {
+    if (!hasTag(tag)) errors.push(`Missing required element: <${tag}>`)
   }
-  // ISRC format check.
-  const isrcEl = doc.getElementsByTagName('ISRC')[0]
-  if (isrcEl) {
-    const isrc = (isrcEl.textContent ?? '').trim()
-    if (!validateIsrcFormat(isrc)) {
-      errors.push(`ISRC '${isrc}' does not match ISO 3901 (CC-XXX-YY-NNNNN)`)
-    }
-  }
-  // UPC check digit.
-  const upcEl = doc.getElementsByTagName('UPC')[0]
-  if (upcEl) {
-    const upc = (upcEl.textContent ?? '').trim()
-    if (!validateUpcCheckDigit(upc)) {
-      errors.push(`UPC '${upc}' check digit is invalid`)
-    }
-  }
-  // Root element must be ern:NewReleaseMessage.
-  const root = doc.documentElement
-  if (!root || root.localName !== 'NewReleaseMessage') {
-    errors.push('Root element must be NewReleaseMessage (ern namespace)')
-  }
+
+  const isrc = tagText('ISRC')
+  if (isrc && !validateIsrc(isrc)) errors.push(`Invalid ISRC format: ${isrc}`)
+  const upc = tagText('ICPN')
+  if (upc && !validateUpc(upc)) errors.push(`Invalid UPC/EAN check digit in ICPN: ${upc}`)
+  const hashSum = tagText('HashSumValue')
+  if (hashSum && !/^[A-Za-z0-9+/]{43}=$/.test(hashSum)) errors.push('SHA-256 HashSumValue must be 32-byte Base64, not hexadecimal.')
+
   return { ok: errors.length === 0, errors }
 }
 
@@ -693,6 +773,8 @@ export async function buildDistributionPackage(
     year?: string
     isrc: string
     upc: string
+    senderDpid: string
+    recipientDpid: string
     /** ISWC for the underlying composition. TASK B enrichment. */
     iswc?: string
     releaseDate?: string
@@ -735,6 +817,7 @@ export async function buildDistributionPackage(
     targetDsps?: string[]
     dspLabels?: Record<string, string>
   },
+  provenance: ProvenanceCertificate,
   artworkFile?: File,
 ): Promise<{
   manifest: ReleaseManifest
@@ -743,57 +826,72 @@ export async function buildDistributionPackage(
   packageBytes: Uint8Array
   validation: DdexValidationResult
 }> {
-  // 1) Build + validate the DDEX XML first — fail fast if metadata is bad.
-  const ddexXml = buildDdexErnXml({
-    title: metadata.title,
-    artist: metadata.artist,
-    album: metadata.album,
-    genre: metadata.genre,
-    genreSubgenre: metadata.genreSubgenre,
-    year: metadata.year,
-    isrc: metadata.isrc,
-    upc: metadata.upc,
-    iswc: metadata.iswc,
-    releaseDate: metadata.releaseDate,
-    originalReleaseDate: metadata.originalReleaseDate,
-    releaseType: metadata.releaseType,
-    label: metadata.label,
-    distributor: metadata.distributor,
-    pLine: metadata.pLine,
-    cLine: metadata.cLine,
-    publisher: metadata.publisher,
-    pro: metadata.pro,
-    masterOwner: metadata.masterOwner,
-    language: metadata.language,
-    explicitLyrics: metadata.explicitLyrics,
-    parentalAdvisory: metadata.parentalAdvisory,
-    territories: metadata.territories,
-    contributors: metadata.contributors,
-    durationSeconds: metadata.durationSeconds ?? audioBuffer.duration,
-    aiDisclosure: metadata.aiDisclosure,
-    targetDsps: metadata.targetDsps,
-    dspLabels: metadata.dspLabels,
-  })
-  const validation = validateDdex(ddexXml)
-  if (!validation.ok) {
-    throw new Error(`DDEX validation failed: ${validation.errors.join('; ')}`)
+  // Never package fabricated fallback metadata or local test identifiers.
+  if (!metadata.title?.trim() || !metadata.artist?.trim() || !metadata.genre?.trim() || !metadata.label?.trim() || !metadata.releaseDate) {
+    throw new Error('Release title, artist, label, genre, and release date are required before distribution.')
+  }
+  const parsedReleaseDate = new Date(`${metadata.releaseDate}T00:00:00.000Z`)
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(metadata.releaseDate) ||
+    !Number.isFinite(parsedReleaseDate.getTime()) ||
+    parsedReleaseDate.toISOString().slice(0, 10) !== metadata.releaseDate
+  ) {
+    throw new Error('Release date must be a real calendar date in YYYY-MM-DD format.')
+  }
+  if (!metadata.targetDsps?.length) {
+    throw new Error('Select at least one distribution target before building the package.')
+  }
+  const dpidPattern = /^[A-Z0-9]{18}$/
+  if (!dpidPattern.test(metadata.senderDpid) || !dpidPattern.test(metadata.recipientDpid)) {
+    throw new Error('Official 18-character DDEX sender and recipient Party IDs are required. Configure the registered IDs before distribution.')
+  }
+  const compactIsrc = metadata.isrc?.replace(/[-\s]/g, '').toUpperCase() ?? ''
+  if (!metadata.isrc || !validateIsrc(metadata.isrc) || compactIsrc.startsWith('US2XX')) {
+    throw new Error('A registered ISRC is required. Local test identifiers cannot be distributed.')
+  }
+  if (!metadata.upc || !validateUpc(metadata.upc)) {
+    throw new Error('A registered UPC/EAN with a valid check digit is required before distribution.')
   }
 
-  // 2) Render WAV + MP3. These call the real encoders in audio-engine.ts
-  //    (audioBufferToWav appends a RIFF INFO chunk + TPDF dither; audioBufferToMp3
-  //    runs real LAME + ID3v2.3 tag). We pass null provenance here because the
-  //    distribution package attests to its own SHA-256s via the manifest; the
-  //    RAIN-CERT provenance flow lives on the Provenance tab and is orthogonal.
-  const wavBlob = audioBufferToWav(audioBuffer, 24, null)
-  const mp3Blob = audioBufferToMp3(audioBuffer, 320, null)
+  // 2) Require a valid RAIN-CERT for this exact Float32 master, then embed
+  // the certificate, signature, fingerprint, and release metadata into both
+  // delivery formats. The ZIP manifest is additional integrity evidence, not
+  // a substitute for audio-embedded provenance.
+  if (!await verifyProvenance(provenance)) {
+    throw new Error('RAIN-CERT signature is invalid. Regenerate provenance before distribution.')
+  }
+  const outputChannels = Array.from(
+    { length: audioBuffer.numberOfChannels },
+    (_, channel) => audioBuffer.getChannelData(channel),
+  )
+  const outputHash = await hashFloat32Channels(outputChannels)
+  if (outputHash !== provenance.outputHash) {
+    throw new Error('RAIN-CERT does not attest to the current master. Regenerate provenance after the last render.')
+  }
+
+  const exportOptions: ExportOptions = {
+    embedProvenance: true,
+    embedSignature: true,
+    embedFingerprint: true,
+    embedMetadata: true,
+    attachCertificate: false,
+    metadata: {
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      year: metadata.year,
+      isrc: metadata.isrc,
+      comment: 'RAIN V6 mastered export with embedded RAIN-CERT provenance',
+    },
+  }
+  const wavBlob = audioBufferToWav(audioBuffer, 24, provenance, exportOptions)
+  const mp3Blob = audioBufferToMp3(audioBuffer, 320, provenance, exportOptions)
 
   // 3) Convert Blobs to Uint8Array (one copy each — fine for the typical
   //    30-100 MB master sizes we deal with).
   const wavBytes = new Uint8Array(await wavBlob.arrayBuffer())
   const mp3Bytes = new Uint8Array(await mp3Blob.arrayBuffer())
-  const ernBytes = new TextEncoder().encode(ddexXml)
-
-  const safeTitle = (metadata.title || 'rain-release')
+  const safeTitle = metadata.title
     .replace(/[^a-zA-Z0-9-_]+/g, '_')
     .slice(0, 64) || 'rain-release'
 
@@ -820,6 +918,7 @@ export async function buildDistributionPackage(
 
   // 5) Optional artwork.
   let artworkMeta: ReleaseManifest['artwork']
+  let artworkResource: DdexMetadata['artworkResource']
   if (artworkFile) {
     const art = await validateArtwork(artworkFile)
     if (!art.ok) {
@@ -837,13 +936,77 @@ export async function buildDistributionPackage(
       data: artBytes,
     })
     artworkMeta = { width: art.dimensions[0], height: art.dimensions[1], format: art.format }
+    artworkResource = {
+      filename: `artwork/cover.${ext}`,
+      sha256: artSha,
+      hashSumBase64: hexToBase64(artSha),
+      width: art.dimensions[0],
+      height: art.dimensions[1],
+      format: art.format,
+      sizeBytes: artBytes.byteLength,
+    }
   }
 
-  // 6) Build the manifest (without `data` for each asset — manifest.json
+  // 6) Build the DDEX ERN 4.3.2 XML only after the actual delivery files
+  // and their hashes are known. Missing registered DPIDs or file metadata
+  // causes a hard failure; never emit synthetic values.
+  const ddexXml = buildDdexErnXml({
+    title: metadata.title,
+    artist: metadata.artist,
+    album: metadata.album,
+    genre: metadata.genre,
+    genreSubgenre: metadata.genreSubgenre,
+    year: metadata.year,
+    isrc: metadata.isrc,
+    upc: metadata.upc,
+    senderDpid: metadata.senderDpid,
+    recipientDpid: metadata.recipientDpid,
+    audioResource: {
+      filename: `assets/${safeTitle}.wav`,
+      sha256: wavSha,
+      hashSumBase64: hexToBase64(wavSha),
+      channels: audioBuffer.numberOfChannels,
+      sampleRate: audioBuffer.sampleRate,
+      bitDepth: 24,
+      sizeBytes: wavBytes.byteLength,
+    },
+    artworkResource,
+    iswc: metadata.iswc,
+    releaseDate: metadata.releaseDate,
+    originalReleaseDate: metadata.originalReleaseDate,
+    releaseType: metadata.releaseType,
+    label: metadata.label,
+    distributor: metadata.distributor,
+    pLine: metadata.pLine,
+    cLine: metadata.cLine,
+    publisher: metadata.publisher,
+    pro: metadata.pro,
+    masterOwner: metadata.masterOwner,
+    language: metadata.language,
+    explicitLyrics: metadata.explicitLyrics,
+    parentalAdvisory: metadata.parentalAdvisory,
+    territories: metadata.territories,
+    contributors: metadata.contributors,
+    durationSeconds: metadata.durationSeconds ?? audioBuffer.duration,
+    aiDisclosure: metadata.aiDisclosure,
+    targetDsps: metadata.targetDsps,
+    dspLabels: metadata.dspLabels,
+  })
+  const validation = validateDdex(ddexXml)
+  if (!validation.ok) {
+    throw new Error(`DDEX structural validation failed: ${validation.errors.join('; ')}. Full XSD/profile validation is still required before live delivery.`)
+  }
+  const ernBytes = new TextEncoder().encode(ddexXml)
+
+  // 7) Build the manifest (without `data` for each asset — manifest.json
   //    never embeds bytes, only the hash + metadata).
   const releaseId = `RAIN-RLS-${metadata.isrc}-${Date.now().toString(36)}`
   const manifest: ReleaseManifest = {
     releaseId,
+    provenance,
+    senderDpid: metadata.senderDpid,
+    recipientDpid: metadata.recipientDpid,
+    targetDsps: metadata.targetDsps ?? [],
     isrc: metadata.isrc,
     upc: metadata.upc,
     title: metadata.title,
@@ -851,7 +1014,7 @@ export async function buildDistributionPackage(
     album: metadata.album ?? '',
     genre: metadata.genre ?? '',
     genreSubgenre: metadata.genreSubgenre,
-    releaseDate: metadata.releaseDate ?? new Date().toISOString().slice(0, 10),
+    releaseDate: metadata.releaseDate,
     originalReleaseDate: metadata.originalReleaseDate,
     releaseType: metadata.releaseType,
     label: metadata.label,
@@ -882,8 +1045,10 @@ export async function buildDistributionPackage(
   const manifestBytes = new TextEncoder().encode(manifestJson)
   const manifestSha = await sha256Bytes(manifestBytes)
 
-  // 7) checksums.txt — one line per asset + the manifest itself.
+  // 8) checksums.txt — one line per release asset, DDEX XML, and manifest.
+  const ernSha = await sha256Bytes(ernBytes)
   const checksumsLines = assets.map((a) => `${a.sha256}  ${a.filename}`)
+  checksumsLines.push(`${ernSha}  ern.xml`)
   checksumsLines.push(`${manifestSha}  manifest.json`)
   const checksumsTxt = checksumsLines.join('\n') + '\n'
   const checksumsBytes = new TextEncoder().encode(checksumsTxt)
@@ -895,7 +1060,7 @@ export async function buildDistributionPackage(
     filename: 'ern.xml',
     mimeType: 'application/xml',
     sizeBytes: ernBytes.byteLength,
-    sha256: await sha256Bytes(ernBytes),
+    sha256: ernSha,
     data: ernBytes,
   })
   assets.push({
@@ -1116,6 +1281,7 @@ export async function deleteDeliveryJob(id: string): Promise<void> {
 
 export interface SubmitResultOk {
   ok: true
+  status: 'submitted' | 'delivered'
   providerResponse: string
 }
 export interface SubmitResultFail {
@@ -1140,9 +1306,11 @@ export type SubmitResult = SubmitResultOk | SubmitResultFail
  *          The client surfaces this honestly — the package IS built and IS
  *          ready, but no delivery has been attempted.
  *        - If present → the server makes a real `fetch()` to
- *          `LABELGRID_API_URL` (default `https://api.labelgrid.com/v1/deliveries`)
- *          with `Authorization: Bearer <key>` and forwards the multipart body.
- *          2xx → `{ ok: true, providerResponse }`. Non-2xx →
+ *          `LABELGRID_API_URL` (must be explicitly configured from the verified
+ *          provider API docs) with `Authorization: Bearer <key>` and forwards
+ *          the multipart body.
+ *          2xx → `{ ok: true, status: 'submitted' }` unless the provider explicitly
+ *          confirms delivery. Non-2xx or explicit provider failure →
  *          `{ ok: false, error: <provider body>, requiresCredentials: false }`.
  *   4. The client updates the DeliveryJob status accordingly.
  *
@@ -1172,6 +1340,7 @@ export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult>
     const fd = new FormData()
     fd.append('jobId', job.id)
     fd.append('manifest', JSON.stringify(job.manifest))
+    fd.append('packageSha256', job.packageSha256)
     fd.append('package', new Blob([pkg.buffer as ArrayBuffer], { type: 'application/zip' }), `${job.manifest.releaseId}.zip`)
 
     const resp = await fetch('/api/rain/distribute', {
@@ -1181,23 +1350,30 @@ export async function submitToLabelGrid(job: DeliveryJob): Promise<SubmitResult>
     const body = await resp.json().catch(() => ({ error: 'Non-JSON provider response' })) as {
       ok?: boolean
       providerResponse?: string
+      status?: 'submitted' | 'delivered'
       error?: string
       requiresCredentials?: boolean
     }
 
     if (resp.ok && body.ok) {
+      const status = body.status === 'delivered' ? 'delivered' : 'submitted'
       await updateDeliveryJob(job.id, {
-        status: 'delivered',
-        deliveredAt: Date.now(),
-        providerResponse: body.providerResponse ?? 'Delivered',
+        status,
+        submittedAt: Date.now(),
+        ...(status === 'delivered' ? { deliveredAt: Date.now() } : {}),
+        providerResponse: body.providerResponse ?? 'Provider accepted submission; delivery not yet confirmed',
       })
-      return { ok: true, providerResponse: body.providerResponse ?? 'Delivered' }
+      return {
+        ok: true,
+        status,
+        providerResponse: body.providerResponse ?? 'Provider accepted submission; delivery not yet confirmed',
+      }
     }
 
     const requiresCredentials = body.requiresCredentials === true
     const errMsg = body.error ?? `Provider returned HTTP ${resp.status}`
     await updateDeliveryJob(job.id, {
-      status: 'failed',
+      status: requiresCredentials ? 'pending_credentials' : 'failed',
       error: errMsg,
       providerResponse: body.providerResponse,
     })

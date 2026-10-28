@@ -24,6 +24,11 @@ export type EventType =
   | 'tab_viewed'
   | 'feedback_submitted'
   | 'referral_signup'
+  | 'beta_paywall_shown'
+  | 'beta_checkout_started'
+  | 'aie_vector_computed'
+  | 'aie_vector_exported'
+  | 'studio_heartbeat'
 
 interface TrackEventInput {
   userId?: string | null
@@ -32,12 +37,19 @@ interface TrackEventInput {
   metadata?: Record<string, unknown>
 }
 
-/** Log one event. Call this from the actual code paths — see integration
- *  notes at the bottom of this file. Never throws; analytics must not be
- *  able to break the product. */
-export async function trackEvent({ userId, anonId, type, metadata }: TrackEventInput): Promise<void> {
+type EventStore = {
+  event: { create: (args: { data: { userId: string | null; anonId: string | null; type: EventType; metadata: string | null } }) => Promise<unknown> }
+  account: { update: (args: { where: { id: string }; data: { lastActiveAt: Date } }) => Promise<unknown> }
+}
+
+/** Persist an event using an injectable store so success/failure semantics
+ * can be tested without a live database. */
+export async function persistEvent(
+  store: EventStore,
+  { userId, anonId, type, metadata }: TrackEventInput,
+): Promise<boolean> {
   try {
-    await db.event.create({
+    await store.event.create({
       data: {
         userId: userId ?? null,
         anonId: anonId ?? null,
@@ -45,15 +57,29 @@ export async function trackEvent({ userId, anonId, type, metadata }: TrackEventI
         metadata: metadata ? JSON.stringify(metadata) : null,
       },
     })
-    if (userId) {
-      await db.account.update({
-        where: { id: userId },
-        data: { lastActiveAt: new Date() },
-      })
-    }
   } catch (err) {
-    console.error('[analytics] trackEvent failed:', err)
+    console.error('[analytics] event write failed:', err)
+    return false
   }
+
+  // The event row is the source of truth. A failure to update the optional
+  // lastActiveAt denormalization must not turn a successfully stored event
+  // into a reported telemetry failure.
+  if (userId) {
+    await store.account.update({
+      where: { id: userId },
+      data: { lastActiveAt: new Date() },
+    }).catch((err) => {
+      console.error('[analytics] lastActiveAt update failed:', err)
+    })
+  }
+  return true
+}
+
+/** Log one event. Never throws: telemetry must not break the product.
+ * Returns true only when the event row itself was successfully written. */
+export async function trackEvent(input: TrackEventInput): Promise<boolean> {
+  return persistEvent(db, input)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -199,6 +225,14 @@ export interface FunnelStats {
   anonymousSessions: number
   anonymousRenders: number
   anonymousExports: number
+  paywallShown: number
+  checkoutStarted: number
+  aieComputations: number
+  aieExports: number
+  visibleStudioHours: number
+  audioHoursProcessed: number
+  renderHours: number
+  exportHours: number
 }
 
 /** Distinct-identity counts at each funnel step — for a drop-off chart.
@@ -222,12 +256,49 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     return { total: userIds.size + anonIds.size, anonymous: anonIds.size }
   }
 
-  const [signups, sessions, renders, exports] = await Promise.all([
+  const [signups, sessions, renders, exports, paywall, checkout, aieComputations, aieExports, heartbeats, durationRows] = await Promise.all([
     countDistinct('signup'),
     countDistinct('session_created'),
     countDistinct('render_completed'),
     countDistinct('export_completed'),
+    countDistinct('beta_paywall_shown'),
+    countDistinct('beta_checkout_started'),
+    db.event.count({ where: { type: 'aie_vector_computed' } }),
+    db.event.count({ where: { type: 'aie_vector_exported' } }),
+    db.event.findMany({ where: { type: 'studio_heartbeat' }, select: { metadata: true } }),
+    db.event.findMany({ where: { type: { in: ['render_completed', 'export_completed'] } }, select: { type: true, metadata: true } }),
   ])
+  const activeSeconds = heartbeats.reduce((sum, row) => {
+    try {
+      const metadata = row.metadata ? JSON.parse(row.metadata) as { activeSeconds?: unknown } : {}
+      const seconds = typeof metadata.activeSeconds === 'number' && Number.isFinite(metadata.activeSeconds)
+        ? Math.max(0, Math.min(60, metadata.activeSeconds))
+        : 0
+      return sum + seconds
+    } catch {
+      return sum
+    }
+  }, 0)
+  let audioSeconds = 0
+  let renderMs = 0
+  let exportMs = 0
+  for (const row of durationRows) {
+    try {
+      const metadata = row.metadata ? JSON.parse(row.metadata) as { audioDurationSec?: unknown; renderTimeMs?: unknown } : {}
+      if (row.type === 'render_completed') {
+        if (typeof metadata.audioDurationSec === 'number' && Number.isFinite(metadata.audioDurationSec)) {
+          audioSeconds += Math.max(0, Math.min(24 * 60 * 60, metadata.audioDurationSec))
+        }
+        if (typeof metadata.renderTimeMs === 'number' && Number.isFinite(metadata.renderTimeMs)) {
+          renderMs += Math.max(0, Math.min(24 * 60 * 60 * 1000, metadata.renderTimeMs))
+        }
+      } else if (row.type === 'export_completed' && typeof metadata.renderTimeMs === 'number' && Number.isFinite(metadata.renderTimeMs)) {
+        exportMs += Math.max(0, Math.min(24 * 60 * 60 * 1000, metadata.renderTimeMs))
+      }
+    } catch {
+      // Ignore malformed historical metadata rather than inventing values.
+    }
+  }
 
   return {
     signups: signups.total,
@@ -237,6 +308,14 @@ export async function getFunnelStats(): Promise<FunnelStats> {
     anonymousSessions: sessions.anonymous,
     anonymousRenders: renders.anonymous,
     anonymousExports: exports.anonymous,
+    paywallShown: paywall.total,
+    checkoutStarted: checkout.total,
+    aieComputations,
+    aieExports,
+    visibleStudioHours: Math.round((activeSeconds / 3600) * 100) / 100,
+    audioHoursProcessed: Math.round((audioSeconds / 3600) * 100) / 100,
+    renderHours: Math.round((renderMs / 3_600_000) * 100) / 100,
+    exportHours: Math.round((exportMs / 3_600_000) * 100) / 100,
   }
 }
 

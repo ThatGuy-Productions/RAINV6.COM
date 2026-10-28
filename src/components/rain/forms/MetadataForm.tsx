@@ -17,7 +17,7 @@
  *   5. AI Disclosure           (5-row × 3-column grid)
  *   6. Release Notes / Comments
  *
- * Sticky top toolbar: live validation badge, "Generate ISRC + UPC",
+ * Sticky top toolbar: live validation badge, "Generate local test ISRC",
  * "Save to release" (toast), "Reset" (confirm dialog).
  *
  * Visual language: dark rain-panel/rain-surface-2, lime accent, font-mono
@@ -82,7 +82,7 @@ import { Field, TextAreaField } from './Field'
 import { SelectField } from './SelectField'
 import { RadioField } from './RadioField'
 import { useSessionStore } from '@/lib/rain/store'
-import { generateIsrc, generateUpc } from '@/lib/rain/provenance'
+import { generateIsrc } from '@/lib/rain/provenance'
 import { notifySuccess, notifyInfo, notifyWarning } from '@/lib/rain/notifications'
 import {
   CONTRIBUTOR_ROLE_OPTIONS,
@@ -269,8 +269,9 @@ export function MetadataForm() {
 
   // ---- Toolbar actions ----
   const handleGenerateIds = React.useCallback(() => {
-    update({ isrc: generateIsrc(), upc: generateUpc() })
-    notifyInfo('Identifiers generated', 'ISRC + UPC populated with valid check digits.')
+    const localSessionId = crypto.randomUUID()
+    update({ isrc: generateIsrc(localSessionId) })
+    notifyWarning('Local test ISRC only', 'This value is not registered and cannot be distributed. Enter an ISRC officially assigned to your recording before distribution.')
   }, [update])
 
   const handleSave = React.useCallback(() => {
@@ -363,7 +364,7 @@ export function MetadataForm() {
             className="bg-rain-surface-2 border-rain-border hover:border-rain-accent/50 hover:text-rain-accent font-mono text-[11px]"
           >
             <Wand2 className="w-3.5 h-3.5" />
-            Generate ISRC + UPC
+            Generate local test ISRC
           </Button>
 
           <Button
@@ -621,13 +622,13 @@ export function MetadataForm() {
                   value={metadata.isrc}
                   onValueChange={(v) => update({ isrc: v })}
                   placeholder="US-XXX-YY-NNNNN"
-                  hint="ISO 3901 — CC-XXX-YY-NNNNN. Generate or paste existing."
+                  hint="Local test IDs are not registered and cannot be distributed. Enter your officially issued ISRC."
                   error={metadata.isrc && !validateIsrc(metadata.isrc) ? 'ISRC must match CC-XXX-YY-NNNNN.' : issueForField(issues, 'isrc')}
-                  warning={!metadata.isrc ? 'Recommended — generate if you don\'t have one' : undefined}
+                  warning={!metadata.isrc ? 'Required for distribution — enter an officially issued ISRC' : undefined}
                   suffix={
                     <button
                       type="button"
-                      onClick={() => update({ isrc: generateIsrc() })}
+                      onClick={() => update({ isrc: generateIsrc(crypto.randomUUID()) })}
                       className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
                     >
                       <Sparkles className="w-3 h-3 inline mr-1" />Gen
@@ -643,24 +644,15 @@ export function MetadataForm() {
                   hint="ISO 15707 — for the underlying composition (not the recording)."
                   error={metadata.iswc && !validateIswc(metadata.iswc) ? 'ISWC must match T-XXX.XXX.XXX-X with valid check digit.' : undefined}
                 />
-                {/* UPC with Generate button */}
+                {/* UPC requires a registered GS1-issued identifier */}
                 <Field
                   label="UPC"
                   value={metadata.upc}
                   onValueChange={(v) => update({ upc: v })}
                   placeholder="12-digit UPC"
-                  hint="EAN-13 minus the leading zero. Generate or paste existing."
+                  hint="RAIN cannot issue official UPCs. Enter your GS1-registered UPC/EAN before distribution."
                   error={metadata.upc && !validateUpc(metadata.upc) ? 'UPC must be 12 digits with valid check digit.' : issueForField(issues, 'upc')}
-                  warning={!metadata.upc ? 'Recommended — generate if you don\'t have one' : undefined}
-                  suffix={
-                    <button
-                      type="button"
-                      onClick={() => update({ upc: generateUpc() })}
-                      className="px-2 py-1 rounded-md border border-rain-border bg-rain-surface-2 hover:border-rain-accent/50 text-[10px] font-mono text-rain-accent whitespace-nowrap"
-                    >
-                      <Sparkles className="w-3 h-3 inline mr-1" />Gen
-                    </button>
-                  }
+                  warning={!metadata.upc ? 'Required for distribution — obtain a registered UPC/EAN from GS1' : undefined}
                 />
                 <Field
                   label="Recording Year"

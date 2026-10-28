@@ -26,24 +26,17 @@ We are committed to protecting your privacy. This policy is drafted in complianc
 - **Email:** legal@rainv6.com
 - **Jurisdiction:** Republic of South Africa
 
-## 2. Core Principle: No PII Collection
+## 2. Information and Account Data
 
-### 2.1 The Fundamental Statement
+### 2.1 Account and Operational Information
 
-**During the Beta phase, RAIN V6 does NOT collect, process, store, or transmit any Personally Identifiable Information (PII).**
+RAIN V6 supports persistent email/password accounts. When account registration and saved-work features are enabled in a deployment, the service stores account email, optional display name, a salted password hash, authentication-token hashes and expiry times, and user-owned project metadata/settings. Server-side operational events may record signups, logins, session creation, render/export completion, feature activity, and AIE actions for future usage reporting. Authentication records may include user-agent and IP metadata for security.
 
-This means we do not collect:
+The service does **not** upload source audio as part of account or project metadata persistence. Audio processing, AIE voice-vector computation, and provenance signing remain browser-side unless a separately described feature explicitly says otherwise. AIE voice vectors and source audio are not part of the server-side account/event records.
 
-- **Names** — no registration, no user profiles, no artist names stored on servers
-- **Email addresses** — no account creation, no newsletter signup (without separate consent)
-- **IP addresses** — no server-side IP logging, no geolocation tracking
-- **Physical addresses** — no billing address, no shipping address
-- **Phone numbers** — no phone verification
-- **Government identifiers** — no ID numbers, passport numbers, tax IDs
-- **Financial information** — no credit card numbers, no bank details (Beta is R0.00)
-- **Device fingerprints** — no browser fingerprinting, no canvas fingerprinting
-- **Location data** — no GPS, no Wi-Fi triangulation, no coarse location
-- **Biometric data** — the Artist Identity Engine (AIE) voice vector is computed and stored **entirely on your device**; it is never transmitted to our servers
+RAIN does not request physical addresses, phone numbers, government identifiers, or payment-card details as part of account registration. If payment processing is introduced, the provider and data handled must be disclosed before it is enabled.
+
+**Deployment gate:** the precise retention/deletion schedule, hosting region, and applicable database sub-processors must be confirmed and reflected in this policy before production account persistence is enabled. Historical usage before durable telemetry was configured is unavailable and will not be reconstructed or invented.
 
 ### 2.2 What the Artist Identity Engine (AIE) Does
 
@@ -66,27 +59,24 @@ We generate a random UUIDv4 per browser (see `src/lib/rain/anon-id.ts`) and stor
 - Is used solely for session continuity and anonymous analytics attribution
 - Can be cleared at any time by clearing your browser's `localStorage` for the RAIN domain
 
-### 3.2 Local Processing Data (Never Leaves Your Device)
+### 3.2 Local Processing Data and Server-Persisted Account Records
 
-The following data is generated during use and stored exclusively in your browser:
+The following table distinguishes browser-local processing data from account and operational records that may be stored server-side:
 
 | Data Category | Storage Location | Purpose | Server Access |
 |---------------|------------------|---------|---------------|
-| Audio files (uploaded) | In-memory (RAM) | Processing input | **None** — audio never leaves your device |
-| Audio files (mastered) | In-memory + download | Processing output | **None** |
-| Render history (last 20) | Zustand store (RAM) | Session continuity | **None** |
-| Engine statistics | IndexedDB (`rain-analytics`) | Usage tracking | **None** |
-| Per-render telemetry | IndexedDB (`rain-analytics`) | Performance analytics | **None** |
-| QC results | IndexedDB (`rain-analytics`) | Quality tracking | **None** |
-| Export records | IndexedDB (`rain-analytics`) | Export history | **None** |
-| Activity log | IndexedDB (`rain-analytics`) | User action log | **None** |
-| AIE voice vector | IndexedDB (`rain-aie`) | Personalised mastering | **None** |
-| AIE session history | IndexedDB (`rain-aie`) | Vector EMA computation | **None** |
-| Provenance keys | IndexedDB (`rain-cert-keys`) | RAIN-CERT signing | **None** |
-| Macro history | Zustand store (RAM) | Undo/redo | **None** |
-| Genre/preset preferences | Zustand store (RAM) | UI state | **None** |
+| Source audio | Browser memory | Processing input | None as part of account persistence; audio is not uploaded by the saved-project API |
+| Mastered audio | Browser memory + user download | Processing output | None as part of local export |
+| Render history in active UI | Browser state | Immediate UI continuity | Not by itself; durable render metadata is separately recorded when the relevant server path succeeds |
+| Engine statistics, QC results, local activity | IndexedDB (`rain-analytics`) | Local diagnostics/history | Local copy remains on device; future server events are a separate, limited record |
+| AIE voice vector and local AIE history | IndexedDB (`rain-aie`) | Personalised mastering | None; the vector itself remains local |
+| Provenance private keys | IndexedDB (`rain-cert-keys`) | RAIN-CERT signing | None; private keys remain local |
+| Account email, display name, salted password hash | PostgreSQL account record | Sign-in and account continuity | Stored server-side |
+| Authentication-token hash, expiry, user-agent and IP metadata | PostgreSQL authentication record | Session validation and security | Stored server-side; raw session token is held in the browser's httpOnly cookie |
+| Saved project name, processing settings and metadata | PostgreSQL project record | Resume project configuration | Stored server-side for signed-in users; source audio is not uploaded by this API |
+| Render/export/AIE operational events | PostgreSQL event records when instrumentation succeeds | Future usage reporting and diagnostics | Limited event metadata stored server-side; not a historical record of activity before instrumentation was enabled |
 
-**All data listed above is stored exclusively on your device.** None of it is transmitted to, processed by, or accessible from our servers.
+Source audio, the AIE voice vector, and private provenance keys remain browser-local. Account credentials (as salted hashes), authentication records, saved project metadata/settings, and limited operational event metadata are stored server-side when those features are enabled and successfully configured.
 
 ### 3.3 Optional Feedback Submissions
 
@@ -107,21 +97,15 @@ RAIN V6 performs **all audio processing entirely within your browser.** This arc
 - The 16-stage DSP pipeline runs in a Web Worker
 - RainNet v2 ONNX inference runs via onnxruntime-web with WebAssembly backend
 - RAIN-CERT Ed25519 signing uses the Web Crypto API
-- All IndexedDB/LocalStorage data stays on your device
+- Browser-local audio, AIE voice vectors, provenance private keys, and IndexedDB records stay on your device; account and saved-project metadata are stored server-side when signed in
 
 ### 4.2 No Server-Side Audio Processing
 
-**At no point are your audio files uploaded to, processed by, or accessible from any external server.** The Service is a client-side web application that operates entirely within your browser's security sandbox.
+The account and saved-project APIs described in this policy do not upload source audio. Audio processing itself is performed in the browser; account credentials, authentication metadata, saved project settings/metadata, and limited operational event records may be stored server-side.
 
 ### 4.3 What Servers Do
 
-Our web servers serve only:
-
-- Static application files (HTML, JavaScript, CSS, WebAssembly)
-- The RainNet v2 ONNX model file (~33 MB)
-- Public documentation and legal pages
-
-Our servers do **not** receive, process, or store user audio content.
+Our servers serve the application and model files and, when persistent account features are enabled, store account/authentication records, saved project metadata/settings, and limited operational events. The account/project APIs do not upload source audio. The server-side records are separate from browser-local audio and AIE voice vectors.
 
 ## 5. Cookie Policy
 
@@ -131,7 +115,7 @@ RAIN V6 Beta uses the following cookies:
 
 | Cookie Name | Type | Purpose | Duration | Category |
 |-------------|------|---------|----------|----------|
-| Session cookie | Essential | Maintains web application state | Session (deleted on browser close) | Strictly Necessary |
+| `rain_admin_session` | Essential, httpOnly | Authenticates a registered account | Up to 7 days, subject to server-side expiry/revocation | Strictly Necessary |
 
 ### 5.2 Cookies We Do NOT Use
 
@@ -142,7 +126,7 @@ We do **not** use:
 - Advertising cookies
 - Analytics cookies (third-party)
 - Social media cookies
-- Persistent user-identifying cookies
+- Persistent authentication cookies are used only where account sign-in is enabled; they are httpOnly and expire/revoke as described above
 
 ### 5.3 Local Storage
 
@@ -169,7 +153,7 @@ We use IndexedDB databases (`rain-analytics`, `rain-aie`, `rain-cert-keys`) for 
 
 **We do not sell, rent, trade, or otherwise share any data with third parties.** This commitment applies to:
 
-- Personal information (which we do not collect)
+- Account and security information required to operate registered accounts
 - Anonymous usage data
 - Audio content
 - Processing parameters
@@ -177,11 +161,7 @@ We use IndexedDB databases (`rain-analytics`, `rain-aie`, `rain-cert-keys`) for 
 
 ### 6.2 No Third-Party Analytics
 
-During the Beta phase, the Service uses a custom-built, client-side-only analytics engine (`src/lib/rain/analytics.ts`). All analytics data is:
-
-- Computed and stored locally in your browser
-- Never transmitted to external analytics services (Google Analytics, Mixpanel, Amplitude, etc.)
-- Completely under your control — you can clear it via the "Clear Analytics" button in the RAIN interface
+The Service uses first-party operational event records for account and usage reporting where those event paths are enabled. It does not rely on Google Analytics, Mixpanel, or Amplitude in the code paths described here. Browser-local analytics data can still be cleared on the device; clearing it does not delete server-side account or event records.
 
 ### 6.3 No Advertising
 
@@ -189,7 +169,7 @@ The Service contains no advertising. We do not use advertising networks, ad exch
 
 ### 6.4 Future Changes
 
-If we introduce server-side analytics, user accounts, or any data sharing in the future, we will:
+Before expanding the categories of server-side analytics, account data, or third-party sharing, we will:
 
 1. Update this Privacy Policy before implementing the change
 2. Provide in-application notice
@@ -200,7 +180,7 @@ If we introduce server-side analytics, user accounts, or any data sharing in the
 
 ### 7.1 Server-Side Retention
 
-We retain **no user data** on our servers because we collect **no user data**.
+Server-side account, authentication, saved-project metadata, and event records exist when persistent account features are enabled. A definitive retention schedule and account-deletion workflow must be finalized and published before production launch; this document must not be treated as a final retention promise until that work is complete.
 
 ### 7.2 Client-Side Retention
 
@@ -215,7 +195,11 @@ All locally stored data (IndexedDB, localStorage) remains on your device indefin
 
 | Data Type | Retention Duration | Deletion Method |
 |-----------|-------------------|-----------------|
-| Audio files | Session only (RAM) | Automatic — cleared on page unload |
+| Source audio | Session only (RAM) | Automatic — cleared on page unload |
+| Account credentials and account profile | PostgreSQL | Retention/deletion schedule to be finalized before production launch |
+| Saved project metadata/settings | PostgreSQL | Retention/deletion schedule to be finalized before production launch |
+| Authentication tokens | PostgreSQL; raw token in httpOnly cookie | Up to 7 days or earlier revocation |
+| Operational usage events | PostgreSQL where successfully instrumented | Retention schedule to be finalized before production launch |
 | Render history | Session only (RAM) | Automatic — cleared on page unload |
 | Analytics (IndexedDB) | Until manually cleared | "Clear Analytics" button or browser data clear |
 | AIE voice vector | Until manually cleared | "Reset Identity" function or browser data clear |
@@ -226,7 +210,7 @@ All locally stored data (IndexedDB, localStorage) remains on your device indefin
 
 ### 8.1 Client-Side Security
 
-Since all processing occurs in your browser, data security is fundamentally dependent on:
+Audio processing occurs in the browser; account and project metadata also rely on server-side database security. Browser-side security depends on:
 
 - Your browser's security model (isolated per-origin storage)
 - Your device's security posture (OS, antivirus, disk encryption)
@@ -246,18 +230,18 @@ The Service employs the following cryptographic measures:
 As a browser-based application, RAIN is subject to the security limitations of the browser platform. We do not:
 
 - Encrypt IndexedDB data at rest (browser standard limitation)
-- Implement server-side authentication (no accounts in Beta)
+- Guaranteeing end-to-end encryption for server-side account and project metadata (not currently claimed)
 - Provide end-to-end encrypted messaging or storage services
 
 ## 9. Children's Privacy
 
-RAIN V6 is not directed at individuals under the age of 18. We do not knowingly collect personal information from children. As we do not collect any personal information from any users during the Beta phase, this risk is inherently mitigated.
+RAIN V6 is not directed at individuals under the age of 18. We do not knowingly collect personal information from children. Account registration may involve personal information such as an email address and optional display name. RAIN is not directed at individuals under 18 and does not knowingly seek to collect children's information.
 
 ## 10. International Data Transfers
 
-### 10.1 No Transfers Occur
+### 10.1 Hosting Region and International Transfers
 
-Since we collect no user data, **no international data transfers occur.** All audio processing happens in your browser, on your device, in your jurisdiction.
+Audio processing remains browser-local, but account and operational records are stored in the configured PostgreSQL hosting environment. The hosting region and any cross-border transfers must be confirmed and disclosed before production account persistence is enabled.
 
 ### 10.2 Static File Delivery
 

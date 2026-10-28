@@ -161,8 +161,8 @@ describe('activation functions', () => {
 
   test('eq_gains: tanh × 12 = [-12, +12] dB', () => {
     expect(Math.tanh(0) * 12).toBeCloseTo(0, 10)
-    expect(Math.tanh(2) * 12).toBeCloseTo(11.56, 2)
-    expect(Math.tanh(-2) * 12).toBeCloseTo(-11.56, 2)
+    expect(Math.tanh(2) * 12).toBeCloseTo(11.57, 2)
+    expect(Math.tanh(-2) * 12).toBeCloseTo(-11.57, 2)
   })
 
   test('mb_ratio: softplus + 1 clamped [1, 20]', () => {

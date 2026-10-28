@@ -1,36 +1,28 @@
 import { NextResponse } from 'next/server'
-import { checkRateLimit } from '@/lib/rain/rate-limit'
 import type { NextRequest } from 'next/server'
 
-// ─── Rate Limiting Store (in-memory, per-process) ────────────────────────
+// ─── Rate Limiting Store ──────────────────────────────────────────────────
+// Production requests use a shared Upstash Redis counter when configured.
+// Local in-memory counters are development-only and are never accepted as a
+// production security boundary.
 interface RateLimitEntry {
   count: number
   resetAt: number
 }
 
-const rateLimitStore = new Map<string, RateLimitEntry>()
+const localRateLimitStore = new Map<string, RateLimitEntry>()
 
-// Clean up expired entries every 60 seconds
-if (typeof globalThis !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now()
-    for (const [key, entry] of rateLimitStore) {
-      if (now > entry.resetAt) rateLimitStore.delete(key)
-    }
-  }, 60_000).unref?.()
-}
-
-function checkRateLimit(
+function checkLocalRateLimit(
   key: string,
   maxRequests: number,
   windowMs: number,
-): { allowed: boolean; remaining: number; resetAt: number } {
+): { allowed: true; remaining: number; resetAt: number } | { allowed: false; remaining: 0; resetAt: number } {
   const now = Date.now()
-  const entry = rateLimitStore.get(key)
+  const entry = localRateLimitStore.get(key)
 
-  if (!entry || now > entry.resetAt) {
+  if (!entry || now >= entry.resetAt) {
     const resetAt = now + windowMs
-    rateLimitStore.set(key, { count: 1, resetAt })
+    localRateLimitStore.set(key, { count: 1, resetAt })
     return { allowed: true, remaining: maxRequests - 1, resetAt }
   }
 
@@ -42,20 +34,100 @@ function checkRateLimit(
   return { allowed: true, remaining: maxRequests - entry.count, resetAt: entry.resetAt }
 }
 
+type RateLimitDecision =
+  | { allowed: true; remaining: number; resetAt: number }
+  | { allowed: false; remaining: 0; resetAt: number }
+  | { allowed: false; unavailable: true; remaining: 0; resetAt: number }
+
+async function hashRateLimitKey(key: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function checkRateLimit(
+  key: string,
+  maxRequests: number,
+  windowMs: number,
+): Promise<RateLimitDecision> {
+  const url = process.env.UPSTASH_REDIS_REST_URL
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN
+
+  if (!url || !token) {
+    // A per-process Map is acceptable for local development only. Production
+    // must not silently degrade to a bypassable per-instance limiter.
+    if (process.env.NODE_ENV === 'production') {
+      return { allowed: false, unavailable: true, remaining: 0, resetAt: Date.now() + 1000 }
+    }
+    return checkLocalRateLimit(key, maxRequests, windowMs)
+  }
+
+  const now = Date.now()
+  const windowStart = Math.floor(now / windowMs)
+  // Hash IP-bearing limiter keys before sending them to Redis so the shared
+  // store does not retain raw client IP addresses in key names.
+  const redisKey = `rain:ratelimit:${await hashRateLimitKey(key)}:${windowStart}`
+  const script = [
+    'local count = redis.call("INCR", KEYS[1])',
+    'if count == 1 then redis.call("PEXPIRE", KEYS[1], ARGV[1]) end',
+    'local ttl = redis.call("PTTL", KEYS[1])',
+    'return {count, ttl}',
+  ].join('; ')
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(['EVAL', script, '1', redisKey, String(windowMs)]),
+      cache: 'no-store',
+    })
+    if (!response.ok) throw new Error(`Redis HTTP ${response.status}`)
+    const payload = await response.json() as { result?: unknown; error?: string }
+    if (payload.error) throw new Error(payload.error)
+    if (!Array.isArray(payload.result) || payload.result.length < 2) {
+      throw new Error('Unexpected Redis rate-limit response')
+    }
+
+    const count = Number(payload.result[0])
+    const ttl = Number(payload.result[1])
+    if (!Number.isFinite(count) || !Number.isFinite(ttl) || count < 1) {
+      throw new Error('Invalid Redis rate-limit values')
+    }
+    const resetAt = now + Math.max(0, ttl)
+    if (count > maxRequests) return { allowed: false, remaining: 0, resetAt }
+    return { allowed: true, remaining: Math.max(0, maxRequests - count), resetAt }
+  } catch (error) {
+    console.error('[rate-limit] shared store unavailable:', error)
+    // Fail closed for protected routes in production. Do not let a Redis
+    // outage silently disable authentication and delivery rate limits.
+    if (process.env.NODE_ENV === 'production') {
+      return { allowed: false, unavailable: true, remaining: 0, resetAt: Date.now() + 1000 }
+    }
+    return checkLocalRateLimit(key, maxRequests, windowMs)
+  }
+}
+
 // ─── Rate Limit Configuration ────────────────────────────────────────────
 const RATE_LIMITS: Record<string, { max: number; windowMs: number }> = {
   '/api/rain/auth/login': { max: 5, windowMs: 60_000 },       // 5 req/min
   '/api/rain/auth/register': { max: 3, windowMs: 60_000 },    // 3 req/min
   '/api/rain/auth/logout': { max: 10, windowMs: 60_000 },     // 10 req/min
+  '/api/rain/auth/forgot-password': { max: 3, windowMs: 60_000 }, // 3 req/min
+  '/api/rain/auth/reset-password': { max: 5, windowMs: 60_000 },  // 5 req/min
   '/api/rain/render': { max: 10, windowMs: 60_000 },          // 10 req/min
-  '/api/rain/distribute': { max: 5, windowMs: 60_000 },       // 5 req/min
+  '/api/rain/distribute': { max: 5, windowMs: 60_000 },       // expensive package submissions
   '/api/rain/distribute/finalize': { max: 5, windowMs: 60_000 },
   '/api/rain/feedback': { max: 3, windowMs: 60_000 },         // 3 req/min
   '/api/rain/reviews': { max: 5, windowMs: 60_000 },          // 5 req/min
   '/api/rain/assist': { max: 10, windowMs: 60_000 },          // 10 req/min
+  '/api/rain/suggest': { max: 15, windowMs: 60_000 },         // 15 req/min
   '/api/rain/source': { max: 10, windowMs: 60_000 },          // 10 req/min (upload)
   '/api/rain/payment': { max: 5, windowMs: 60_000 },          // 5 req/min
-  '/api/rain/admin': { max: 20, windowMs: 60_000 },           // 20 req/min
+  '/api/rain/admin/bootstrap': { max: 3, windowMs: 60_000 }, // protect first-admin bootstrap
+  '/api/rain/admin/status': { max: 10, windowMs: 60_000 },
+  '/api/rain/admin': { max: 20, windowMs: 60_000 },           // other admin routes
 }
 
 // ─── Payload Size Limits ─────────────────────────────────────────────────
@@ -137,18 +209,23 @@ function validateCsrf(request: NextRequest): boolean {
   const origin = request.headers.get('origin')
   if (!origin) return true // Allow same-origin requests without Origin header
 
-  // Check if origin matches the request host
+  // Check if origin matches the request host. Malformed Origin headers
+  // must be rejected rather than throwing out of middleware.
   const host = request.headers.get('host')
   if (origin && host) {
-    const originHost = new URL(origin).host
-    if (originHost === host) return true
+    try {
+      const parsedOrigin = new URL(origin)
+      if (parsedOrigin.host === host) return true
+    } catch {
+      return false
+    }
   }
 
   return CSRF_ALLOWED_ORIGINS.has(origin)
 }
 
 // ─── Middleware ───────────────────────────────────────────────────────────
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const response = NextResponse.next()
 
@@ -175,14 +252,22 @@ export function middleware(request: NextRequest) {
         || 'unknown'
       const key = `${ip}:${path}`
 
-      const result = checkRateLimit(key, config.max, config.windowMs)
+      const result = await checkRateLimit(key, config.max, config.windowMs)
       response.headers.set('X-RateLimit-Remaining', String(result.remaining))
       response.headers.set('X-RateLimit-Reset', String(result.resetAt))
 
-      if (!result.allowed) {
+      if (!result.allowed && 'unavailable' in result && result.unavailable) {
         return NextResponse.json(
-          { ok: false, error: 'Rate limit exceeded. Please try again later.', retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) },
-          { status: 429, headers: { 'Retry-After': String(Math.ceil((result.resetAt - Date.now()) / 1000)) } },
+          { ok: false, error: 'Rate limiting service is not configured or unavailable.' },
+          { status: 503, headers: { 'Retry-After': '1' } },
+        )
+      }
+
+      if (!result.allowed) {
+        const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000))
+        return NextResponse.json(
+          { ok: false, error: 'Rate limit exceeded. Please try again later.', retryAfter },
+          { status: 429, headers: { 'Retry-After': String(retryAfter) } },
         )
       }
       break

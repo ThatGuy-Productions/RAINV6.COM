@@ -34,16 +34,72 @@ import type { InferenceSession, Tensor } from 'onnxruntime-web'
 
 /** Parameters for the Mel spectrogram matching RainNet's training setup. */
 
-// AI-M1 — Verify model manifest + checksum before loading ONNX
-async function verifyModelManifest(manifestPath: string): Promise<boolean> {
+interface RainNetModelManifest {
+  schemaVersion?: unknown
+  modelName?: unknown
+  externalDataFile?: unknown
+  checksums?: {
+    sha256?: unknown
+    sha256ExternalData?: unknown
+  }
+}
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
+}
+
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Verify the exact model artifact before ONNX Runtime is allowed to load it.
+ * External-data models must declare and verify their companion data file too.
+ * Placeholder hashes, missing artifacts, mismatched names, and malformed
+ * manifests fail closed; callers can then use the documented heuristic path.
+ */
+export async function verifyModelManifest(
+  manifestPath: string,
+  modelPath: string,
+): Promise<boolean> {
   try {
-    const res = await fetch(manifestPath, { cache: 'no-store' });
-    if (!res.ok) return false;
-    const manifest = await res.json();
-    if (!manifest.checksums?.sha256) return false;
-    // Production: stream-compute SHA-256 of /models/rain_base.onnx and compare
-    return true; // Passes manifest existence + checksum field presence
-  } catch { return false; }
+    const manifestResponse = await fetch(manifestPath, { cache: 'no-store' })
+    if (!manifestResponse.ok) return false
+
+    const manifest = await manifestResponse.json() as RainNetModelManifest
+    const modelName = modelPath.split('/').pop()
+    if (
+      manifest.schemaVersion !== 'rain-v1' ||
+      !modelName ||
+      manifest.modelName !== modelName ||
+      !isSha256Hex(manifest.checksums?.sha256)
+    ) return false
+
+    const modelResponse = await fetch(modelPath, { cache: 'no-store' })
+    if (!modelResponse.ok) return false
+    const modelBytes = await modelResponse.arrayBuffer()
+    if (await sha256Hex(modelBytes) !== manifest.checksums.sha256.toLowerCase()) return false
+
+    // Both shipped RainNet candidates use ONNX external tensor data. Require
+    // a matching companion filename and hash; graph-only verification would
+    // leave the majority of model weights unauthenticated.
+    if (
+      typeof manifest.externalDataFile !== 'string' ||
+      manifest.externalDataFile !== `${modelName}.data` ||
+      !isSha256Hex(manifest.checksums?.sha256ExternalData)
+    ) return false
+
+    const dataPath = `/models/${manifest.externalDataFile}`
+    const dataResponse = await fetch(dataPath, { cache: 'no-store' })
+    if (!dataResponse.ok) return false
+    const dataBytes = await dataResponse.arrayBuffer()
+    if (await sha256Hex(dataBytes) !== manifest.checksums.sha256ExternalData.toLowerCase()) return false
+
+    return true
+  } catch {
+    return false
+  }
 }
 
 const MEL_SR = 48000
@@ -318,6 +374,35 @@ const DEFAULT_PLATFORM_ID = 0
 let _ortSession: InferenceSession | null = null
 let _ortBackend: string | null = null
 
+export type RainNetBackend = 'webgpu' | 'wasm'
+
+const EXPECTED_RAINNET_INPUTS = ['mel', 'artist_vec', 'genre_id', 'platform_id', 'simple_mode'] as const
+const EXPECTED_RAINNET_OUTPUT = 'processing_params'
+
+/** Check the loaded graph's runtime signature before it can be used. */
+export function hasExpectedRainNetSignature(inputNames: readonly string[], outputNames: readonly string[]): boolean {
+  return inputNames.length === EXPECTED_RAINNET_INPUTS.length &&
+    EXPECTED_RAINNET_INPUTS.every(name => inputNames.includes(name)) &&
+    outputNames.length === 1 &&
+    outputNames[0] === EXPECTED_RAINNET_OUTPUT
+}
+
+/** Attempt backends in priority order; a backend is selected only after its
+ * session creation succeeds. Exported to make fallback behaviour testable. */
+export async function createWithBackendFallback<T>(
+  create: (backend: RainNetBackend) => Promise<T>,
+): Promise<{ session: T; backend: RainNetBackend }> {
+  const failures: string[] = []
+  for (const backend of ['webgpu', 'wasm'] as const) {
+    try {
+      return { session: await create(backend), backend }
+    } catch (error) {
+      failures.push(`${backend}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  throw new Error(`WebGPU and WASM session creation failed. ${failures.join('; ')}`)
+}
+
 /**
  * Dynamically import onnxruntime-web and create an InferenceSession.
  * The model is fetched from /models/rain_base.onnx (cached by the browser).
@@ -328,43 +413,46 @@ async function getOrCreateSession(): Promise<InferenceSession> {
   if (_ortSession) return _ortSession
 
   const ort = await import('onnxruntime-web')
+  const candidates = [
+    {
+      modelPath: '/models/rain_base.onnx',
+      manifestPath: '/models/rain_base.manifest.json',
+    },
+    {
+      modelPath: '/models/rain_trained.onnx',
+      manifestPath: '/models/rain_trained.manifest.json',
+    },
+  ] as const
+  const failures: string[] = []
 
-  // Prefer WebGPU for acceleration, fall back to WASM
-  if (!_ortBackend) {
-    const backends = ['webgpu', 'wasm'] as const
-    for (const backend of backends) {
-      try {
-        await (ort.env.webgpu as unknown as { init?: () => Promise<void> })?.init?.()
-        _ortBackend = backend
-        break
-      } catch {
-        // backend not available, try next
-      }
+  // Verify each graph and its external weights before attempting any backend.
+  // For each verified model, try WebGPU first and then WASM. Do not select a
+  // backend merely because an optional initialization hook did not throw:
+  // support is proven only when InferenceSession.create succeeds.
+  for (const candidate of candidates) {
+    const verified = await verifyModelManifest(candidate.manifestPath, candidate.modelPath)
+    if (!verified) {
+      failures.push(`${candidate.modelPath}: missing or invalid manifest/hash`)
+      continue
     }
-    if (!_ortBackend) {
-      _ortBackend = 'wasm' // last resort
-    }
-  }
 
-  // Use the smaller/base model. rain_trained.onnx is the full trained variant.
-  const modelPath = '/models/rain_base.onnx'
-
-  try {
-    _ortSession = await ort.InferenceSession.create(modelPath, {
-      executionProviders: [_ortBackend],
-    })
-    return _ortSession
-  } catch (err) {
-    console.warn('[RainNet] Loading base model failed, trying trained model:', err)
     try {
-      _ortSession = await ort.InferenceSession.create('/models/rain_trained.onnx', {
-        executionProviders: ['wasm'], // force WASM for trained model
-      })
-      return _ortSession
-    } catch (err2) {
-      throw new Error(`RainNet model failed to load: ${err2 instanceof Error ? err2.message : String(err2)}`)
+      const loaded = await createWithBackendFallback((backend) =>
+        ort.InferenceSession.create(candidate.modelPath, { executionProviders: [backend] }),
+      )
+      if (!hasExpectedRainNetSignature(loaded.session.inputNames, loaded.session.outputNames)) {
+        await loaded.session.release()
+        throw new Error('ONNX input/output names do not match the documented RainNet v2 signature')
+      }
+      _ortSession = loaded.session
+      _ortBackend = loaded.backend
+      return loaded.session
+    } catch (error) {
+      failures.push(`${candidate.modelPath}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
+
+  throw new Error(`No verified RainNet model could be loaded. ${failures.join('; ')}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +647,20 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   const t0 = performance.now()
 
   // 1. Extract Mel spectrogram
+  if (!Number.isFinite(input.sampleRate) || input.sampleRate <= 0 || input.audio.length === 0) {
+    throw new Error('RainNet requires non-empty audio and a positive sample rate')
+  }
+  if (input.artistVector && (
+    input.artistVector.length !== 64 ||
+    !input.artistVector.every(Number.isFinite)
+  )) {
+    throw new Error('RainNet artist vector must contain 64 finite values')
+  }
+  const simpleMode = input.simpleMode ?? 0
+  if (!Number.isFinite(simpleMode) || simpleMode < 0 || simpleMode > 1) {
+    throw new Error('RainNet simpleMode must be between 0 and 1')
+  }
+
   const melSpec = extractMelSpectrogram(input.audio, input.sampleRate)
 
   // 2. Lazy-load ONNX Runtime and session
@@ -582,7 +684,7 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   const platformTensor = new ort.Tensor('int64', new BigInt64Array([BigInt(platformId)]), [1])
 
   // Simple mode: float32 scalar
-  const simpleModeVal = input.simpleMode ?? 0.0
+  const simpleModeVal = simpleMode
   const modeTensor = new ort.Tensor('float32', new Float32Array([simpleModeVal]), [1, 1])
 
   // 4. Run inference
@@ -603,7 +705,10 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
   }
 
   // 5. Decode — the output is [1, 46] float32
-  const rawData = output.data as Float32Array
+  if (output.type !== 'float32' || !(output.data instanceof Float32Array)) {
+    throw new Error('RainNet output must be a float32 tensor')
+  }
+  const rawData = output.data
   if (rawData.length !== 46) {
     throw new Error(`RainNet output has ${rawData.length} elements, expected 46`)
   }
@@ -625,7 +730,8 @@ export async function runRainNetInference(input: RainNetInput): Promise<RainNetR
 export async function checkRainNetAvailable(): Promise<string | null> {
   try {
     const session = await getOrCreateSession()
-    return _ortBackend ?? session.outputNames.length > 0 ? (_ortBackend ?? 'wasm') : null
+    if (session.outputNames.length === 0) return null
+    return _ortBackend ?? 'wasm'
   } catch {
     return null
   }

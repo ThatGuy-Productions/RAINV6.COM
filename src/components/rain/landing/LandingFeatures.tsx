@@ -28,14 +28,14 @@ interface Feature {
 const FEATURES: Feature[] = [
   {
     icon: <Sliders className="w-5 h-5" />,
-    title: '16-Stage Mastering Pipeline',
-    description: 'From format normalization through DDEX distribution — every stage deterministic, every render bit-identical for the same input + params.',
+    title: 'Browser Mastering Pipeline',
+    description: 'Browser-based mastering with measurable DSP stages and explicit failure/skip states. Stem-dependent stages remain gated until the licensed neural model is bundled; export dither is intentionally stochastic.',
     color: '#AAFF00',
   },
   {
     icon: <Layers className="w-5 h-5" />,
-    title: '12-Stem BS-RoFormer Separation',
-    description: 'Four-pass cascade: vocals, backing, drums, bass, guitar, piano, kick, snare, hats, percussion, ambience, other. SAIL v2 stem-aware limiting.',
+    title: 'Stem Import & Mixing',
+    description: 'Import pre-separated stems, adjust levels, preview, and export. Automated neural separation is disabled until a licensed, verified model is bundled.',
     color: '#F97316',
   },
   {
@@ -46,8 +46,8 @@ const FEATURES: Feature[] = [
   },
   {
     icon: <Box className="w-5 h-5" />,
-    title: 'Dolby Atmos Binaural',
-    description: '7.1.4 bed with HOA path, SADIE II HRTFs (KU100). UPOLS convolution at 128-sample quantum. 20-30 simultaneous objects within budget.',
+    title: 'Experimental Spatial Rendering',
+    description: 'HRTF binaural rendering and ADM BWF spatial drafts. Not Dolby Atmos-certified; validate in a compatible renderer before commercial distribution.',
     color: '#06B6D4',
   },
   {

@@ -65,7 +65,7 @@ const STEPS: TourStep[] = [
     id: 'export',
     icon: Download,
     title: 'Step 4 — Export your master',
-    body: 'Go to the Export tab to download WAV (24/16-bit), MP3 320 kbps, or Dolby Atmos. Each export is verified — the app re-parses the output bytes to confirm the provenance and metadata were actually embedded. Sign up to persist exports to your account.',
+    body: 'Go to the Export tab to download WAV (24/16-bit) or MP3 320 kbps. The Spatial tab can create an experimental ADM BWF draft for external renderer validation; it is not Dolby Atmos-certified. RAIN-CERT embedding is verified when a valid certificate is supplied. Sign up to persist exports to your account.',
     highlight: 'Export tab',
   },
   {

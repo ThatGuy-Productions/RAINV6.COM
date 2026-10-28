@@ -30,7 +30,7 @@ interface AuthState {
   /** Convenience: true when an Enterprise-tier admin is signed in. */
   isEnterprise: boolean
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>
-  bootstrap: (email: string, password: string, name?: string) => Promise<{ ok: boolean; error?: string }>
+  bootstrap: (email: string, password: string, name: string | undefined, bootstrapSecret: string) => Promise<{ ok: boolean; error?: string }>
   /** Public free-tier registration. Creates the account + auto-logs-in.
    *  Passes the browser's anonId so pre-signup anonymous activity is
    *  attributed to the new account in the activation/retention funnel. */
@@ -87,12 +87,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const bootstrap = useCallback(
-    async (email: string, password: string, name?: string) => {
+    async (email: string, password: string, name: string | undefined, bootstrapSecret: string) => {
       try {
         const res = await fetch('/api/rain/admin/bootstrap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password, name }),
+          body: JSON.stringify({ email, password, name, bootstrapSecret }),
         })
         const data = (await res.json()) as { user?: AuthUser; error?: string }
         if (!res.ok || !data.user) {

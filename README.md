@@ -4,7 +4,7 @@
 
 **ThatGuy Productions · ARCOVEL Technologies International**
 
-> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/32-bit float. No uploads. No server-side processing. No account required.
+> "Rain doesn't live in the cloud." — Audio never leaves your device. Every stage of the mastering pipeline runs locally in your browser via Web Audio API at 48 kHz/32-bit float. No uploads for local mastering. Audio processing stays in the browser. An account is required for durable saved projects and payment-based entitlements; anonymous local use may be available subject to beta allowance.
 
 ---
 
@@ -18,7 +18,7 @@ bun test             # Run 100+ test suite
 npx playwright install chromium  # Optional: browser-based DistroKid delivery
 ```
 
-**Prerequisites:** Bun ≥1.2, Node ≥22. PostgreSQL not required for free beta (SQLite fallback via Prisma).
+**Prerequisites:** Bun ≥1.2, Node ≥22, and PostgreSQL for durable accounts, saved projects, sessions, renders, and future usage evidence. Production does not support a packaged SQLite snapshot.
 
 ---
 
@@ -57,13 +57,13 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 | Framework | Next.js 16 (App Router) |
 | Runtime | Bun 1.2+ |
 | Language | TypeScript (strict) |
-| Database | SQLite (dev) / PostgreSQL 18 (prod) via Prisma 6 |
+| Database | PostgreSQL via Prisma 6; versioned migrations are applied before serving traffic |
 | UI | React 19 · Tailwind CSS 4 · shadcn/ui (Radix) |
 | DSP | TypeScript Web Audio API — all processing in-browser, 48 kHz |
 | AI/ML | RainNet v2 ONNX → 46 ProcessingParams per render |
 | Provenance | Ed25519 signatures · C2PA v2.2-style manifest (JSON) · Chain-of-custody |
 | Distribution | DDEX ERN 4.3.2 · LabelGrid API · DistroKid browser automation |
-| Payments | PayFast (ZA) · Ozow (ZA) · Stripe (INTL) — R0.00 during BETA |
+| Payments | Beta policy: 2 free full-capability use credits, then R49 unlock; paid beta fair-use limit of 30 successful exports/month. Checkout is not live until provider verification is implemented. |
 | Security | scrypt auth · timing-safe compares · SHA-256 hashing · httpOnly cookies |
 
 ---
@@ -118,7 +118,7 @@ npx playwright install chromium  # Optional: browser-based DistroKid delivery
 - **Payment isolation** — Per-session UUIDv7, one-time tokens, zero cross-contamination
 
 ### SA-First Design
-- **ZAR currency** — R0.00 during BETA, PayFast/Ozow ready for activation
+- **ZAR currency** — beta policy is two free full-capability use credits, then a R49 unlock; paid beta fair-use limit is 30 successful exports/month. Checkout remains disabled until a real provider and verified callbacks are implemented.
 - **SAMRO / CAPASSO / SAMPRA** — Performing rights organisations in metadata
 - **11 South African languages** — Afrikaans, Zulu, Xhosa, Tswana, Sotho, and more
 - **Amapiano / Gospel / Gqom** — Genre-specific DSP profiles with tape saturation, stereo width, and vocal emphasis
@@ -196,7 +196,7 @@ rain-beta/
 
 ## 🔒 Security
 
-- **No PII collected** during BETA — no accounts, no passwords, no email, no IP logging
+- **No account required** to use the browser-based product. The operator reports that live-beta accounts do not persist beyond a session and reliable historical usage totals are unavailable; this repository's admin-auth/database code does not by itself prove the deployed retention configuration.
 - **Audio never leaves your device** — all processing via browser Web Audio API
 - **Ed25519 provenance signatures** — cryptographic proof of origin on every render
 - **scrypt authentication** (N=16384, r=8, p=1) — OWASP-correct key derivation
@@ -215,8 +215,10 @@ rain-beta/
 | Item | Status |
 |---|---|
 | Pricing | R0.00 across all tiers |
-| User accounts | Not required — anonymous sessions |
-| PII collection | None — POPIA compliant by design |
+| User accounts | Not required to use the product; operator reports live-beta accounts do not persist beyond a session |
+| Usage evidence | Historical usage hours, completed work, exports, and AIE activity are unavailable/unsubstantiated; do not treat missing records as zero use |
+| Telemetry code | This repo contains future event instrumentation and database models; durable production storage and end-to-end capture remain unverified |
+| Privacy | Audio processing stays local on the local processing path; review optional feedback/contact fields and deployment telemetry before making blanket no-PII claims |
 | Mastering | Full 16-stage pipeline, all features available |
 | Distribution | DDEX ZIP download + DistroKid browser automation |
 | AI disclosure | EU AI Act Article 50 compliant |
@@ -282,7 +284,7 @@ tsc --noEmit           # Independent type-check gate (CI also runs this)
 ### Production launch
 - [ ] C++/WASM DSP engine (64-bit float spec compliance)
 - [ ] GPU-accelerated stem separation (remove 60s limit)
-- [ ] PostgreSQL 18 production deployment
+- [ ] Configure the production PostgreSQL service, credentials, backups, monitoring, and restore test
 - [ ] Redis/Upstash rate limiting (multi-instance scaling)
 - [ ] Activate payment tiers (R551.99–R1,978.80/year)
 

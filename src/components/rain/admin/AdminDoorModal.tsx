@@ -33,6 +33,7 @@ export function AdminDoorModal({ onClose, onSuccess }: AdminDoorModalProps) {
   const [mode, setMode] = useState<Mode>('loading')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [bootstrapSecret, setBootstrapSecret] = useState('')
   const [confirm, setConfirm] = useState('')
   const [name, setName] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -79,7 +80,7 @@ export function AdminDoorModal({ onClose, onSuccess }: AdminDoorModalProps) {
     setSubmitting(true)
     const result =
       mode === 'setup'
-        ? await bootstrap(email, password, name || undefined)
+        ? await bootstrap(email, password, name || undefined, bootstrapSecret)
         : await login(email, password)
     setSubmitting(false)
     if (result.ok) {
@@ -135,9 +136,25 @@ export function AdminDoorModal({ onClose, onSuccess }: AdminDoorModalProps) {
                   <AlertCircle className="w-3.5 h-3.5 text-[#AAFF00] mt-0.5 flex-shrink-0" />
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
                     No enterprise admin exists yet. This one-time form creates the first
-                    admin account and signs you in immediately. Future access uses the login form.
+                    admin account and signs you in immediately. Enter the bootstrap secret configured
+                    by the deployment owner. Future access uses the login form.
                   </p>
                 </div>
+              )}
+
+              {mode === 'setup' && (
+                <Field icon={<KeyRound className="w-3.5 h-3.5" />} label="Bootstrap secret">
+                  <input
+                    type="password"
+                    required
+                    value={bootstrapSecret}
+                    onChange={(e) => setBootstrapSecret(e.target.value)}
+                    placeholder="Deployment-provided setup secret"
+                    className="rain-input"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </Field>
               )}
 
               {mode === 'setup' && (

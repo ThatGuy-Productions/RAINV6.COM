@@ -157,47 +157,58 @@ export function kWeight(samples: Float32Array, sampleRate: number): Float32Array
  * absolute gate (-70 LUFS) → relative gate (-10 LU) → mean square → -0.691 + 10·log10(mean).
  */
 export function computeLufs(channels: Float32Array[], sampleRate: number): number {
-  if (channels.length === 0) return -70
-  const blockSize = Math.floor(sampleRate * 0.4) // 400 ms
-  const hopSize = Math.floor(blockSize * 0.25) // 75% overlap
-  const channelWeights = [1.0, 1.0, 1.0, 1.0, 1.41] // L, R, C, LFE, Ls/Rs
-  const totalLength = channels[0].length
+  if (channels.length === 0 || channels[0].length === 0 || sampleRate <= 0) return -70
 
-  // K-weight each channel
-  const weighted: Float32Array[] = channels.map((c) => kWeight(c, sampleRate))
+  const totalLength = Math.min(...channels.map((channel) => channel.length))
+  if (totalLength === 0) return -70
+  // Standard 400 ms blocks, 75% overlap. For material shorter than 400 ms,
+  // measure the available samples as one block instead of silently returning
+  // the silence floor.
+  const blockSize = Math.min(totalLength, Math.max(1, Math.floor(sampleRate * 0.4)))
+  const hopSize = Math.max(1, Math.floor(blockSize * 0.25))
 
-  // Gating block loudness
-  const blockLoudness: number[] = []
-  for (let start = 0; start + blockSize <= totalLength; start += hopSize) {
-    let sum = 0
-    for (let ch = 0; ch < weighted.length; ch++) {
-      const w = channelWeights[ch] ?? 1.0
-      let s = 0
-      const buf = weighted[ch]
-      for (let i = start; i < start + blockSize; i++) {
-        s += buf[i] * buf[i]
-      }
-      sum += w * (s / blockSize)
-    }
-    if (sum > 0) {
-      blockLoudness.push(-0.691 + 10 * Math.log10(sum))
-    }
+  // BS.1770 channel weighting: L/R/C = 1.0, LFE = 0, surrounds = 1.41.
+  const channelWeight = (channelIndex: number): number => {
+    if (channelIndex === 3) return 0
+    if (channelIndex >= 4) return 1.41
+    return 1.0
   }
 
-  if (blockLoudness.length === 0) return -70
+  const weighted = channels.map((channel) => kWeight(channel, sampleRate))
+  const blockEnergies: number[] = []
+  for (let start = 0; start + blockSize <= totalLength; start += hopSize) {
+    let energy = 0
+    for (let ch = 0; ch < weighted.length; ch++) {
+      const weight = channelWeight(ch)
+      if (weight === 0) continue
+      let sumSquares = 0
+      const buffer = weighted[ch]
+      for (let i = start; i < start + blockSize; i++) {
+        sumSquares += buffer[i] * buffer[i]
+      }
+      energy += weight * (sumSquares / blockSize)
+    }
+    if (energy > 0 && Number.isFinite(energy)) blockEnergies.push(energy)
+  }
 
-  // Absolute gate -70 LUFS
-  const absGated = blockLoudness.filter((l) => l > -70)
-  if (absGated.length === 0) return -70
+  if (blockEnergies.length === 0) return -70
 
-  // Relative gate: -10 LU below mean of abs-gated
-  const meanAbs = absGated.reduce((a, b) => a + b, 0) / absGated.length
-  const relGate = meanAbs - 10
-  const relGated = absGated.filter((l) => l > relGate)
-  if (relGated.length === 0) return meanAbs
+  // Absolute gate at -70 LUFS.
+  const absoluteGateEnergy = Math.pow(10, (-70 + 0.691) / 10)
+  const absoluteGated = blockEnergies.filter((energy) => energy > absoluteGateEnergy)
+  if (absoluteGated.length === 0) return -70
 
-  const integrated = relGated.reduce((a, b) => a + b, 0) / relGated.length
-  return integrated
+  // Relative gate is 10 LU below the mean energy of absolute-gated blocks.
+  const meanAbsoluteEnergy = absoluteGated.reduce((sum, energy) => sum + energy, 0) / absoluteGated.length
+  const meanAbsoluteLufs = -0.691 + 10 * Math.log10(meanAbsoluteEnergy)
+  const relativeGateLufs = meanAbsoluteLufs - 10
+  const relativeGateEnergy = Math.pow(10, (relativeGateLufs + 0.691) / 10)
+  const relativeGated = absoluteGated.filter((energy) => energy > relativeGateEnergy)
+  if (relativeGated.length === 0) return -70
+
+  // Integrated loudness averages gated energies first, then converts to LUFS.
+  const integratedEnergy = relativeGated.reduce((sum, energy) => sum + energy, 0) / relativeGated.length
+  return -0.691 + 10 * Math.log10(integratedEnergy)
 }
 
 // ---------------------------------------------------------------------------
@@ -679,126 +690,106 @@ function defaultParams(): ProcessingParams {
 // These fields survive applyMacrosToParams and actually affect the render.
 const GENRE_OVERRIDES: Record<string, Partial<ProcessingParams>> = {
   electronic: {
-    // Fast attack/release for loud, punchy electronic — squashes transients
-    mb_attack_low: 2.0, mb_attack_mid: 1.0, mb_attack_high: 0.5,
-    mb_release_low: 80.0, mb_release_high: 30.0,
-    mid_gain: -0.5, // slight center reduction for wider image
+    mb_attack_low: 2, mb_attack_mid: 1, mb_attack_high: 0.5,
+    mb_release_low: 80, mb_release_mid: 60, mb_release_high: 30,
+    mid_gain: -0.5,
   },
   hiphop: {
-    // Fast low-band attack for tight kick, slow mid for vocal presence
-    mb_attack_low: 1.5, mb_attack_mid: 8.0, mb_attack_high: 1.0,
-    mb_release_low: 60.0, mb_release_high: 40.0,
-    mid_gain: 1.0, // center emphasis for vocals
+    mb_attack_low: 1.5, mb_attack_mid: 8, mb_attack_high: 1,
+    mb_release_low: 60, mb_release_mid: 100, mb_release_high: 40,
+    mid_gain: 1,
   },
   rock: {
-    // Medium attack for punchy drums, fast high release for cymbals
-    mb_attack_low: 3.0, mb_attack_mid: 5.0, mb_attack_high: 2.0,
-    mb_release_low: 100.0, mb_release_high: 35.0,
-    mid_gain: -1.0, // reduce center mud, widen guitars
+    mb_attack_low: 3, mb_attack_mid: 5, mb_attack_high: 2,
+    mb_release_low: 100, mb_release_mid: 120, mb_release_high: 35,
+    mid_gain: -1,
   },
   pop: {
-    // Balanced — moderate attack for natural transients
-    mb_attack_low: 5.0, mb_attack_mid: 10.0, mb_attack_high: 3.0,
-    mb_release_low: 120.0, mb_release_high: 45.0,
-    mid_gain: 0.5, // slight vocal emphasis
+    mb_attack_low: 5, mb_attack_mid: 10, mb_attack_high: 3,
+    mb_release_low: 120, mb_release_mid: 140, mb_release_high: 45,
+    mid_gain: 0.5,
   },
   classical: {
-    // Slow attack/release for maximum dynamics preservation
-    mb_attack_low: 15.0, mb_attack_mid: 20.0, mb_attack_high: 12.0,
-    mb_release_low: 250.0, mb_release_high: 100.0,
-    mid_gain: 0.0,
+    mb_attack_low: 15, mb_attack_mid: 20, mb_attack_high: 12,
+    mb_release_low: 250, mb_release_mid: 300, mb_release_high: 100,
+    mid_gain: 0,
   },
   jazz: {
-    // Gentle — slow attack, medium release for natural feel
-    mb_attack_sub: 8.0, mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_attack_air: 5.0,
-    mb_release_sub: 140.0, mb_release_low: 180.0, mb_release_high: 70.0, mb_release_air: 55.0,
-    mid_gain: 0.0,
+    mb_attack_low: 10, mb_attack_mid: 15, mb_attack_high: 8,
+    mb_release_low: 180, mb_release_mid: 200, mb_release_high: 70,
+    mid_gain: 0,
+  },
+  folk: {
+    mb_attack_low: 8, mb_attack_mid: 12, mb_attack_high: 6,
+    mb_release_low: 180, mb_release_mid: 220, mb_release_high: 60,
+    mid_gain: 0.25,
   },
   amapiano: {
-    // Deep, log-drum-forward: fast low attack for tight kick, slow mid for
-    // shaker/groove presence, wide stereo for synth pads + keys
-    mb_attack_sub: 1.0, mb_attack_low: 1.5, mb_attack_mid: 12.0, mb_attack_high: 5.0, mb_attack_air: 3.0,
-    mb_release_sub: 40.0, mb_release_low: 55.0, mb_release_high: 45.0, mb_release_air: 35.0,
-    mid_gain: 0.0, // wide mix — don't center-bias
-    stereo_width: 1.25, // wide synth pads and stereo log drums
+    mb_attack_low: 1.5, mb_attack_mid: 12, mb_attack_high: 5,
+    mb_release_low: 55, mb_release_mid: 80, mb_release_high: 45,
+    mid_gain: 0,
+    stereo_width: 1.25,
     analog_saturation: true,
     saturation_drive: 0.15,
-    saturation_mode: 'tape' as const,
+    saturation_mode: 'tape',
   },
   gospel: {
-    // Vocal-forward: strong center for choir/lead, moderate compression
-    // with long release for sustained notes and dynamic builds
-    mb_attack_sub: 4.0, mb_attack_low: 6.0, mb_attack_mid: 10.0, mb_attack_high: 5.0, mb_attack_air: 3.0,
-    mb_release_sub: 120.0, mb_release_low: 150.0, mb_release_high: 60.0, mb_release_air: 45.0,
-    mid_gain: 1.5, // center emphasis for choir + lead vocals
-    stereo_width: 1.1, // slightly wider for organ/piano
+    mb_attack_low: 6, mb_attack_mid: 10, mb_attack_high: 5,
+    mb_release_low: 150, mb_release_mid: 180, mb_release_high: 60,
+    mid_gain: 1.5,
+    stereo_width: 1.1,
   },
   afrobeats: {
-    // Percussive + melodic: tight kick via fast low attack, wide mid for
-    // layered percussion, warm saturation for vintage afro-groove
-    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 6.0, mb_attack_high: 3.0, mb_attack_air: 2.0,
-    mb_release_sub: 55.0, mb_release_low: 70.0, mb_release_high: 40.0, mb_release_air: 30.0,
-    mid_gain: -0.5, // de-emphasize center for wide percussion field
+    mb_attack_low: 2, mb_attack_mid: 6, mb_attack_high: 3,
+    mb_release_low: 70, mb_release_mid: 100, mb_release_high: 40,
+    mid_gain: -0.5,
     stereo_width: 1.2,
     analog_saturation: true,
     saturation_drive: 0.25,
-    saturation_mode: 'tape' as const,
+    saturation_mode: 'tape',
   },
   afro_house: {
-    // Driving 4/4: tight all-band attack, punchy mid for percussive
-    // layers, clean highs for shakers and rides
-    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 4.0, mb_attack_high: 2.0, mb_attack_air: 1.5,
-    mb_release_sub: 60.0, mb_release_low: 80.0, mb_release_high: 35.0, mb_release_air: 28.0,
-    mid_gain: -1.0, // wide soundstage for house
+    mb_attack_low: 2, mb_attack_mid: 4, mb_attack_high: 2,
+    mb_release_low: 80, mb_release_mid: 100, mb_release_high: 35,
+    mid_gain: -1,
     stereo_width: 1.3,
     analog_saturation: true,
     saturation_drive: 0.2,
-    saturation_mode: 'tube' as const,
+    saturation_mode: 'tube',
   },
   gqom: {
-    // Minimal, raw, bass-heavy: fast low attack with high ratio for
-    // crushing sub-bass, slow high attack to preserve raw percussion edge
-    mb_attack_sub: 0.8, mb_attack_low: 1.0, mb_attack_mid: 3.0, mb_attack_high: 15.0, mb_attack_air: 10.0,
-    mb_release_sub: 30.0, mb_release_low: 40.0, mb_release_high: 25.0, mb_release_air: 20.0,
+    mb_attack_low: 1, mb_attack_mid: 3, mb_attack_high: 15,
+    mb_release_low: 40, mb_release_mid: 60, mb_release_high: 25,
     mid_gain: -0.5,
     stereo_width: 1.15,
-    analog_saturation: false, // keep it raw and digital
+    analog_saturation: false,
   },
   metal: {
-    // Aggressive, fast: tight attack across all bands for palm-muted
-    // precision, fast release for clarity in dense arrangements
-    mb_attack_sub: 1.5, mb_attack_low: 2.0, mb_attack_mid: 3.0, mb_attack_high: 1.5, mb_attack_air: 1.0,
-    mb_release_sub: 40.0, mb_release_low: 50.0, mb_release_high: 25.0, mb_release_air: 20.0,
-    mid_gain: -2.0, // push guitars to sides, leave kick/snare center
+    mb_attack_low: 2, mb_attack_mid: 3, mb_attack_high: 1.5,
+    mb_release_low: 50, mb_release_mid: 70, mb_release_high: 25,
+    mid_gain: -2,
   },
   rnb: {
-    // Smooth + punchy: moderate attack, vocal-forward mid, clean highs
-    mb_attack_sub: 3.0, mb_attack_low: 4.0, mb_attack_mid: 8.0, mb_attack_high: 3.0, mb_attack_air: 2.5,
-    mb_release_sub: 80.0, mb_release_low: 100.0, mb_release_high: 50.0, mb_release_air: 40.0,
-    mid_gain: 1.0, // vocal emphasis
+    mb_attack_low: 4, mb_attack_mid: 8, mb_attack_high: 3,
+    mb_release_low: 100, mb_release_mid: 120, mb_release_high: 50,
+    mid_gain: 1,
     stereo_width: 1.15,
   },
   country: {
-    // Natural, acoustic-forward: slow attack, moderate ratio for
-    // transparent dynamics — preserves guitar picking and vocal nuance
-    mb_attack_sub: 8.0, mb_attack_low: 10.0, mb_attack_mid: 15.0, mb_attack_high: 8.0, mb_attack_air: 5.0,
-    mb_release_sub: 150.0, mb_release_low: 200.0, mb_release_high: 80.0, mb_release_air: 60.0,
+    mb_attack_low: 10, mb_attack_mid: 15, mb_attack_high: 8,
+    mb_release_low: 200, mb_release_mid: 220, mb_release_high: 80,
     mid_gain: 0.5,
   },
   reggae: {
-    // Bass-forward dub: slow low attack for sub weight, fast high for
-    // clean skank guitar and hi-hat clarity
-    mb_attack_sub: 6.0, mb_attack_low: 8.0, mb_attack_mid: 12.0, mb_attack_high: 4.0, mb_attack_air: 3.0,
-    mb_release_sub: 120.0, mb_release_low: 150.0, mb_release_high: 45.0, mb_release_air: 35.0,
-    mid_gain: 0.0,
+    mb_attack_low: 8, mb_attack_mid: 12, mb_attack_high: 4,
+    mb_release_low: 150, mb_release_mid: 180, mb_release_high: 45,
+    mid_gain: 0,
     stereo_width: 1.2,
   },
   ambient: {
-    // No compression — max dynamics preservation. Slow attack + low
-    // ratio = near-transparent; wide stereo for pads and drones
-    mb_attack_sub: 15.0, mb_attack_low: 20.0, mb_attack_mid: 25.0, mb_attack_high: 15.0, mb_attack_air: 10.0,
-    mb_release_sub: 250.0, mb_release_low: 300.0, mb_release_high: 120.0, mb_release_air: 90.0,
-    mid_gain: 0.0,
+    mb_attack_low: 20, mb_attack_mid: 25, mb_attack_high: 15,
+    mb_release_low: 300, mb_release_mid: 350, mb_release_high: 120,
+    mid_gain: 0,
     stereo_width: 1.4,
   },
 }
@@ -815,6 +806,9 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   }
   const overrides = GENRE_OVERRIDES[genre] ?? {}
   Object.assign(params, overrides)
+  const genreSaturationOverride = overrides.analog_saturation
+  const genreSaturationModeOverride = overrides.saturation_mode
+  const genreStereoWidthFloor = overrides.stereo_width
   // Apply macro overrides (macros are authoritative source of truth post-heuristic)
   params.macro_brighten = macros.brighten
   params.macro_glue = macros.glue
@@ -823,8 +817,19 @@ export function generateHeuristicParams(genre: string, platform: string, macros:
   params.macro_warmth = macros.warmth
   params.macro_space = macros.space
   params.macro_repair = macros.repair
-  // Macros drive derived params
+  // Macros drive derived params. Explicit genre saturation choices remain
+  // authoritative: warmth must not silently turn Gqom's clean-digital profile
+  // into saturation or replace Afro House's tube mode with tape.
   applyMacrosToParams(params)
+  if (typeof genreSaturationOverride === 'boolean') {
+    params.analog_saturation = genreSaturationOverride
+  }
+  if (genreSaturationModeOverride) {
+    params.saturation_mode = genreSaturationModeOverride
+  }
+  if (typeof genreStereoWidthFloor === 'number') {
+    params.stereo_width = Math.max(params.stereo_width, genreStereoWidthFloor)
+  }
   return params
 }
 

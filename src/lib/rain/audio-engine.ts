@@ -627,11 +627,9 @@ class RainAudioEngine {
    * Render the master through the full 16-stage pipeline (in-browser, deterministic).
    * Returns the processed AudioBuffer ready for preview & export.
    *
-   * @param onStemsReady Optional callback fired after Stage 7 with the BS-RoFormer
-   *                     4-pass separation results (12 StemResults). Only fires
-   *                     when the loaded audio is <= 60s (the BS-RoFormer cap);
-   *                     for longer audio the user must run separation manually
-   *                     from the Stems tab.
+   * Neural source separation is intentionally skipped until a licensed,
+   * verified BS-RoFormer model is bundled. The Stems tab currently supports
+   * importing and mixing externally separated stems.
    */
   async render(
     macros: MacroValues,
@@ -639,7 +637,7 @@ class RainAudioEngine {
     platform: string,
     onProgress?: (stage: number, total: number, name: string) => void,
     signal?: AbortSignal,
-    onStemsReady?: (stems: import('./stems').StemResult[]) => void,
+    simpleMode = false,
   ): Promise<{
     buffer: AudioBuffer
     analysis: AudioAnalysis
@@ -695,6 +693,15 @@ class RainAudioEngine {
       onProgress?.(stage, total, name)
     }
 
+    // Stage 1: copy decoded source channels before any analysis/inference.
+    // The prior ordering referenced `inChannels` before it was declared,
+    // causing the AI/groove stages to fail before the DSP pipeline began.
+    wrappedOnProgress?.(1, 16, 'Format Normalization')
+    checkCancel()
+    const inChannels: Float32Array[] = []
+    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
+    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
+
     try {
     // ─── Stage 4: AI Inference (RainNet v2) ───
     // P3-RAINNET: try ONNX inference first; fall back to genre heuristics
@@ -711,13 +718,12 @@ class RainAudioEngine {
     let grooveEmotionOverrides: import('./groove-emotion').GrooveEmotionOverrides | null = null
     try {
       const { analyzeGrooveEmotion } = await import('./groove-emotion')
-      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate)
-      grooveEmotionOverrides = geProfile?.overrides ?? null
-      if (grooveEmotionOverrides) {
-        console.log(
-          `[GrooveEmotion] BPM=${geProfile.profile.bpm ?? '?'} | groove=${geProfile.profile.grooveType} | emotion=${geProfile.profile.emotionQuadrant}`,
-        )
-      }
+      const sourceAnalysis = this.analysis ?? analyzeAudio(inChannels, sampleRate)
+      const geProfile = analyzeGrooveEmotion(inChannels, sampleRate, sourceAnalysis.spectralFeatures, genre, platform)
+      grooveEmotionOverrides = geProfile.overrides
+      console.log(
+        `[GrooveEmotion] BPM=${geProfile.profile.groove.bpm ?? '?'} | groove=${geProfile.profile.groove.grooveType} | emotion=${geProfile.profile.emotion.quadrant}`,
+      )
     } catch (geError) {
       console.warn('[GrooveEmotion] analysis failed — continuing without groove/emotion:', geError)
     }
@@ -748,13 +754,6 @@ class RainAudioEngine {
     applyMacrosToParams(params)
     this.params = params
 
-    wrappedOnProgress?.(1, 16, 'Format Normalization')
-    checkCancel()
-    // Extract channel data
-    const inChannels: Float32Array[] = []
-    for (let ch = 0; ch < channels; ch++) inChannels.push(this.inputBuffer.getChannelData(ch).slice())
-    // Force stereo: if mono, duplicate
-    if (inChannels.length === 1) inChannels.push(inChannels[0].slice())
 
     // AUDIT-C4 / DIRECTIVE FIX: stages 2-5 were pure `await sleep()` theatre.
     // Each stage now performs REAL, measurable DSP work that contributes to
@@ -883,132 +882,30 @@ class RainAudioEngine {
       }
     }
 
-    // Stage 7 — BS-RoFormer Source Separation.
-    // (a) Real DC offset removal on every channel (preserved from prior fix).
-    // (b) P3-BSROFORMER: if audio is <= 60s AND onStemsReady is provided, run
-    //     the BS-RoFormer 4-pass cascade (vocals/drums/bass/guitar/piano/other
-    //     → lead/backing vocals + kick/snare/hats/percussion + ambience) on
-    //     the ORIGINAL input audio and emit the 12 stems via onStemsReady.
-    //     P3-PIPELINE-89: the separated stems are also saved to
-    //     `separatedStems` so Stage 8 (Per-Stem Repair) and Stage 9 (SAIL v2)
-    //     can operate on them. For audio > 60s (or when no onStemsReady
-    //     callback is supplied) the in-pipeline run is skipped — Stages 8/9
-    //     then also skip with an honest label, and the render continues to
-    //     operate on `inChannels` directly.
-    wrappedOnProgress?.(7, 16, 'BS-RoFormer Separation')
+    // Stage 7 — Neural source separation is currently unavailable.
+    // DC-offset removal still runs, but no stem output is produced because
+    // this repository does not ship a licensed, verified BS-RoFormer model.
+    // Stages 8/9 remain explicitly skipped until that model is integrated.
+    wrappedOnProgress?.(7, 16, 'Source Separation skipped — neural model unavailable')
     checkCancel()
-    let separatedStems: import('./stems').StemResult[] | null = null
-    let stemsSkipReason: string | null = null
-    {
-      for (const c of inChannels) {
-        // Measure real DC offset (mean of all samples)
-        let sum = 0
-        for (let i = 0; i < c.length; i++) sum += c[i]
-        const dc = sum / c.length
-        // Subtract DC offset if significant (> 0.0001 = -80 dBFS)
-        if (Math.abs(dc) > 1e-4) {
-          for (let i = 0; i < c.length; i++) c[i] -= dc
-        }
-      }
-
-      // P3-BSROFORMER: in-pipeline BS-RoFormer 4-pass source separation.
-      // Operates on the ORIGINAL input (not the in-progress mastered signal)
-      // — stems represent the source material, not the master. Skip if audio
-      // exceeds the 60s memory cap OR no onStemsReady callback was supplied
-      // (the Stems tab handles long audio on demand).
-      if (!onStemsReady) {
-        stemsSkipReason = 'no stem callback'
-      } else if (!this.inputBuffer) {
-        stemsSkipReason = 'no input loaded'
-      } else if (this.inputBuffer.length > 60 * this.inputBuffer.sampleRate) {
-        stemsSkipReason = 'audio > 60s, run from Stems tab'
-      } else {
-        try {
-          const stemInputs: Float32Array[] = []
-          for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
-            stemInputs.push(this.inputBuffer.getChannelData(c).slice())
-          }
-          const { runStemSeparation } = await import('./stems')
-          const stems = await runStemSeparation(
-            stemInputs,
-            this.inputBuffer.sampleRate,
-            // Lightweight progress — Stage 7 is one of 16, so the macro
-            // progress bar already reflects it. We do not bubble BS-RoFormer's
-            // internal pass percentages up through the mastering UI (they'd
-            // be confusing during a render). The Stems tab shows them when
-            // invoked directly.
-            undefined,
-            signal,
-          )
-          separatedStems = stems
-          onStemsReady(stems)
-        } catch (err) {
-          // Don't fail the render if stem separation fails — log and
-          // continue. The user can re-run from the Stems tab.
-          const e = err as Error
-          if (e.name !== 'CancelledError') {
-            console.warn('[BS-RoFormer] in-pipeline separation failed:', e.message)
-            stemsSkipReason = 'separation failed'
-          }
-          // Re-throw cancellation so the render aborts as expected.
-          if (signal?.aborted) throw err
-        }
+    // DC-offset removal is a real DSP operation; neural separation is not
+    // run because the required licensed model artifact is absent.
+    for (const channel of inChannels) {
+      let sum = 0
+      for (let i = 0; i < channel.length; i++) sum += channel[i]
+      const dc = sum / channel.length
+      if (Math.abs(dc) > 1e-4) {
+        for (let i = 0; i < channel.length; i++) channel[i] -= dc
       }
     }
     await sleep(0)
 
-    // Stage 8 — Per-Stem Repair (P3-PIPELINE-89).
-    // Iterates over the BS-RoFormer separated stems and applies per-category
-    // spectral correction (gentle HPF + de-ess + DC verify). Re-emits the
-    // repaired stems via onStemsReady so the Stems tab shows the post-repair
-    // measurements. Skipped with an honest label when Stage 7 did not produce
-    // stems (audio > 60s, no callback, or separation failed).
-    {
-      const label = separatedStems
-        ? 'Per-Stem Repair'
-        : `Per-Stem Repair (skipped — ${stemsSkipReason ?? 'no stems'})`
-      wrappedOnProgress?.(8, 16, label)
-      checkCancel()
-      if (separatedStems) {
-        const repairedStems = separatedStems.map((stem) => {
-          const repairedChannels = repairStem(stem.key, stem.channels, sampleRate)
-          return {
-            ...stem,
-            channels: repairedChannels,
-            rms: measureStemRmsDb(repairedChannels),
-            peakDb: measureStemPeakDb(repairedChannels),
-          }
-        })
-        separatedStems = repairedStems
-        // Re-emit so the Stems tab shows the post-repair measurements.
-        if (onStemsReady) onStemsReady(repairedStems)
-      }
-    }
+    wrappedOnProgress?.(8, 16, 'Per-Stem Repair skipped — no neural stems')
+    checkCancel()
     await sleep(0)
 
-    // Stage 9 — SAIL v2 Per-Stem Processing (P3-PIPELINE-89).
-    // Stem-Aware Iterative Limiter: per-stem limiting (vocal protection,
-    // drum loudness, bass control) + per-stem gain faders (from the session
-    // store, with mute/solo handling) + sum all stems back to a stereo bus.
-    // The summed bus replaces `inChannels` for Stage 10 onwards, so the
-    // master bus chain operates on the stem-summed signal per the spec.
-    // Skipped with an honest label when Stage 7 did not produce stems.
-    {
-      const label = separatedStems
-        ? 'Per-Stem Processing'
-        : `Per-Stem Processing (skipped — ${stemsSkipReason ?? 'no stems'})`
-      wrappedOnProgress?.(9, 16, label)
-      checkCancel()
-      if (separatedStems) {
-        const stemBus = sailProcessStems(separatedStems, sampleRate, length)
-        // Replace inChannels with the stem-summed bus. Stages 10+ now
-        // operate on the stem-summed signal. Stems are always stereo, so
-        // trim any extra channels (e.g. from mono duplication earlier).
-        inChannels[0] = stemBus[0]
-        inChannels[1] = stemBus[1]
-        if (inChannels.length > 2) inChannels.length = 2
-      }
-    }
+    wrappedOnProgress?.(9, 16, 'Per-Stem Processing skipped — no neural stems')
+    checkCancel()
     await sleep(0)
 
     // Stage 10 — Master Bus (P3-PIPELINE-89 restructure).
@@ -1018,8 +915,8 @@ class RainAudioEngine {
     // tube saturation) master-bus work is moved here. Multiband compression
     // is also moved here from old Stage 11 (it was labeled "Loudness
     // Targeting" but actually did multiband comp). Stage 10 now operates on
-    // the stem-summed bus (when stages 7-9 produced stems) or on the input
-    // signal directly (long-audio fallback).
+    // the processed input signal directly; stages 7-9 are explicitly skipped
+    // until a verified neural separation model is bundled.
     wrappedOnProgress?.(10, 16, 'Master Bus')
     checkCancel()
     {
@@ -1035,14 +932,13 @@ class RainAudioEngine {
         }
       }
 
-      // 2. Multiband compression — 4-band Linkwitz-Riley crossover at
-      //    80/500/4000 Hz with soft knee and feed-forward detection.
-      //    Industry-standard mastering crossover points.
+      // 2. Three-band low/mid/high compression with 200 Hz and 4 kHz
+      //    crossovers, soft knee, and feed-forward detection.
       //    Moved from old Stage 11 — spec says multiband comp belongs in the
       //    Master Bus stage, not the Loudness Targeting stage.
       // P4-GROOVE-EMOTION: if groove was detected, override attack/release
       // with groove-locked musical time constants before compression.
-      if (grooveEmotionOverrides) {
+      if (grooveEmotionOverrides?.mb_attack_override && grooveEmotionOverrides.mb_release_override) {
         params.mb_attack_low = grooveEmotionOverrides.mb_attack_override.low
         params.mb_attack_mid = grooveEmotionOverrides.mb_attack_override.mid
         params.mb_attack_high = grooveEmotionOverrides.mb_attack_override.high
@@ -1379,44 +1275,22 @@ class RainAudioEngine {
   getParams(): ProcessingParams | null { return this.params }
 
   // -------------------------------------------------------------------------
-  // Stem separation — BS-RoFormer 4-pass cascade per tech spec.
-  // Uses the loaded inputBuffer. See src/lib/rain/stems.ts for the engine.
+  // Neural stem separation — unavailable until a licensed model is bundled.
+  // The legacy DSP approximation remains isolated in stems.ts for evaluation.
   // -------------------------------------------------------------------------
 
   /**
-   * Run real BS-RoFormer 4-pass source separation on the loaded input audio.
-   * Returns 12 StemResults with actual stereo channels + measured RMS/peak.
-   *
-   * Pipeline per tech spec (Pasted Content_1783542076605.txt):
-   *   Pass 1: BS-RoFormer       → vocals, drums, bass, guitar, piano, other
-   *   Pass 2: MelBand RoFormer  → lead vocals, backing vocals
-   *   Pass 3: Spectral split    → kick, snare, hats, percussion
-   *   Pass 4: Dereverb          → ambience + dry other
-   *
-   * Used by the Stems tab for explicit "Run Separation" / "Re-run" clicks.
-   * The render() pipeline also runs this internally at Stage 7 (for audio
-   * <= 60s) and emits results via the onStemsReady callback — so the Stems
-   * tab is usually already populated by the time the user opens it.
-   *
-   * @param onProgress Optional (stageName, pct) callback — fires from real
-   *                   DSP stages, never from a setTimeout placeholder.
-   * @param signal     Optional AbortSignal — checked between every pass
-   *                   and every chunk within a pass.
+   * Explicitly fails rather than presenting DSP-derived approximations as
+   * verified neural source separation. Importing/mixing user-provided stems
+   * remains available in the Stems tab.
    */
   async separateStems(
     onProgress?: (stage: string, pct: number) => void,
     signal?: AbortSignal,
   ): Promise<import('./stems').StemResult[]> {
-    if (!this.inputBuffer) throw new Error('No input loaded — load a track first')
-    const sampleRate = this.inputBuffer.sampleRate
-    const channels: Float32Array[] = []
-    for (let c = 0; c < this.inputBuffer.numberOfChannels; c++) {
-      channels.push(this.inputBuffer.getChannelData(c).slice())
-    }
-    // Dynamic import keeps stems.ts (which has its own FFT/RoPE/correlation
-    // code) out of the initial bundle when the Stems tab is never opened.
-    const { runStemSeparation } = await import('./stems')
-    return runStemSeparation(channels, sampleRate, onProgress, signal)
+    throw new Error(
+      'Neural 12-stem separation is unavailable: this repository does not bundle a licensed, verified BS-RoFormer model. The internal DSP approximation is not exposed as neural separation.',
+    )
   }
 
   /**
@@ -1523,9 +1397,8 @@ class RainAudioEngine {
 function sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)) }
 
 // ---------------------------------------------------------------------------
-// Multiband compression — 4-band Linkwitz-Riley crossover at 80/500/4000 Hz
-// with soft knee and feed-forward detection — industry-standard mastering
-// crossover points.
+// Multiband compression — canonical three-band low/mid/high split at
+// 200 Hz and 4 kHz, with soft knee and feed-forward detection.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1592,17 +1465,10 @@ function compressBand(
 }
 
 /**
- * 4-band Linkwitz-Riley crossover at 80/500/4000 Hz with soft knee and
- * feed-forward detection — industry-standard mastering crossover points.
- *
- * Bands:
- *   - Sub-bass:   0–80 Hz      (params.mb_*_sub)
- *   - Low-mid:   80–500 Hz     (params.mb_*_low — backward compat)
- *   - Presence: 500–4000 Hz    (params.mb_*_mid — backward compat)
- *   - Air:      4000–20000 Hz  (params.mb_*_air)
- *
- * Crossover topology: cascaded 2nd-order Butterworth (Q=0.7071) highpass + lowpass
- * per band edge, approximating a 4th-order Linkwitz-Riley response when summed.
+ * Three-band low/mid/high compression matching the canonical ProcessingParams.
+ * Low band: below 200 Hz; mid band: 200 Hz–4 kHz; high band: above 4 kHz.
+ * Each band uses a Butterworth biquad split and its own threshold, ratio,
+ * attack, and release parameters.
  */
 function applyMultibandCompression(
   channels: Float32Array[],
@@ -1611,59 +1477,55 @@ function applyMultibandCompression(
 ): void {
   if (channels.length < 2) return
 
-  const xover1 = 80    // sub-bass → low-mid
-  const xover2 = 500   // low-mid → presence
-  const xover3 = 4000  // presence → air
+  // The canonical ProcessingParams schema defines three bands. Use a
+  // complementary low/mid/high split instead of referring to nonexistent
+  // sub/air parameters (which previously caused compile errors and would
+  // have made the advertised processing path impossible to run).
+  const lowLp = designBiquad('lowpass', 200, sampleRate, 0.7071)
+  const midHp = designBiquad('highpass', 200, sampleRate, 0.7071)
+  const midLp = designBiquad('lowpass', 4000, sampleRate, 0.7071)
+  const highHp = designBiquad('highpass', 4000, sampleRate, 0.7071)
 
-  // Crossover filter design
-  // Sub-bass:  LP @ 80 Hz
-  const subLp = designBiquad('lowpass', xover1, sampleRate, 0.7071)
+  for (const channel of channels) {
+    const original = channel.slice()
 
-  // Low-mid:  HP @ 80 Hz → LP @ 500 Hz  (cascaded for band-pass)
-  const lowMidHp = designBiquad('highpass', xover1, sampleRate, 0.7071)
-  const lowMidLp = designBiquad('lowpass', xover2, sampleRate, 0.7071)
+    const low = original.slice()
+    applyBiquad(low, lowLp)
 
-  // Presence: HP @ 500 Hz → LP @ 4000 Hz
-  const presHp = designBiquad('highpass', xover2, sampleRate, 0.7071)
-  const presLp = designBiquad('lowpass', xover3, sampleRate, 0.7071)
+    const mid = original.slice()
+    applyBiquad(mid, midHp)
+    applyBiquad(mid, midLp)
 
-  // Air:       HP @ 4000 Hz
-  const airHp = designBiquad('highpass', xover3, sampleRate, 0.7071)
+    const high = original.slice()
+    applyBiquad(high, highHp)
 
-  for (let ch = 0; ch < channels.length; ch++) {
-    const orig = channels[ch].slice()
+    compressBand(
+      low,
+      params.mb_threshold_low,
+      params.mb_ratio_low,
+      params.mb_attack_low,
+      params.mb_release_low,
+      sampleRate,
+    )
+    compressBand(
+      mid,
+      params.mb_threshold_mid,
+      params.mb_ratio_mid,
+      params.mb_attack_mid,
+      params.mb_release_mid,
+      sampleRate,
+    )
+    compressBand(
+      high,
+      params.mb_threshold_high,
+      params.mb_ratio_high,
+      params.mb_attack_high,
+      params.mb_release_high,
+      sampleRate,
+    )
 
-    // Sub-bass band
-    const sub = orig.slice()
-    applyBiquad(sub, subLp)
-
-    // Low-mid band (80–500 Hz)
-    const low = orig.slice()
-    applyBiquad(low, lowMidHp)
-    applyBiquad(low, lowMidLp)
-
-    // Presence band (500–4000 Hz)
-    const mid = orig.slice()
-    applyBiquad(mid, presHp)
-    applyBiquad(mid, presLp)
-
-    // Air band (4000–20000 Hz)
-    const air = orig.slice()
-    applyBiquad(air, airHp)
-
-    // Apply compression per band with soft knee
-    compressBand(sub, params.mb_threshold_sub, params.mb_ratio_sub,
-      params.mb_attack_sub, params.mb_release_sub, sampleRate)
-    compressBand(low, params.mb_threshold_low, params.mb_ratio_low,
-      params.mb_attack_low, params.mb_release_low, sampleRate)
-    compressBand(mid, params.mb_threshold_mid, params.mb_ratio_mid,
-      params.mb_attack_mid, params.mb_release_mid, sampleRate)
-    compressBand(air, params.mb_threshold_air, params.mb_ratio_air,
-      params.mb_attack_air, params.mb_release_air, sampleRate)
-
-    // Sum back to channel
-    for (let i = 0; i < channels[ch].length; i++) {
-      channels[ch][i] = sub[i] + low[i] + mid[i] + air[i]
+    for (let i = 0; i < channel.length; i++) {
+      channel[i] = low[i] + mid[i] + high[i]
     }
   }
 }
@@ -1681,8 +1543,9 @@ function applyMultibandCompression(
  * Apply per-stem repair (Stage 8) to one separated stem.
  *
  * Returns a NEW Float32Array[] (does not mutate the separator's output — the
- * Stems tab needs the original measurements to remain stable for display
- * until the repaired results are emitted via onStemsReady).
+ * Stem UI would need the original measurements to remain stable for display
+ * until repaired results are emitted. This utility is dormant while neural
+ * separation is unavailable.
  *
  * Per the P3-PIPELINE-89 task spec:
  *   - vocals / backing_vocals : de-ess peak cut @ 7 kHz, Q=2, -2 dB + HPF @ 80 Hz
@@ -1891,9 +1754,8 @@ function sailProcessStems(
 
 // ---------------------------------------------------------------------------
 // P3-PIPELINE-89 — Stem measurement helpers
-// Re-compute RMS + peak dB on the repaired stem channels so the Stems tab
-// shows accurate post-repair measurements after Stage 8 re-emits via
-// onStemsReady. Matches the measurement logic in stems.ts.
+// Re-compute RMS + peak dB for legacy stem-repair utilities. These helpers
+// are not called by the active mastering pipeline while neural separation is disabled.
 // ---------------------------------------------------------------------------
 
 function measureStemRmsDb(channels: Float32Array[]): number {

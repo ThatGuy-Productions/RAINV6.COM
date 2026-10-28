@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/rain/auth'
 import { trackEvent, type EventType } from '@/lib/rain/server-analytics'
+import { checkRateLimit } from '@/lib/rain/rate-limit'
 
 export const runtime = 'nodejs'
 
@@ -19,7 +20,7 @@ export const runtime = 'nodejs'
  *
  * Body: { type: 'tab_viewed' | 'referral_signup', anonId?: string, metadata?: object }
  */
-const ALLOWED_CLIENT_TYPES: EventType[] = ['tab_viewed', 'referral_signup']
+const ALLOWED_CLIENT_TYPES: EventType[] = ['tab_viewed', 'referral_signup', 'studio_heartbeat']
 
 export async function POST(req: NextRequest) {
   try {
@@ -38,15 +39,23 @@ export async function POST(req: NextRequest) {
     }
 
     const user = await getSessionUser(req).catch(() => null)
+    if (type === 'studio_heartbeat') {
+      const limit = await checkRateLimit(req, 'studio-heartbeat', 2)
+      if (!limit.ok) return NextResponse.json({ error: 'Heartbeat rate limit exceeded.' }, { status: limit.unavailable ? 503 : 429 })
+    }
+    const safeMetadata = type === 'studio_heartbeat'
+      ? { activeSeconds: 60, visibleTab: true }
+      : metadata
 
-    await trackEvent({
+    const recorded = await trackEvent({
       userId: user?.id ?? null,
       anonId: typeof anonId === 'string' ? anonId.slice(0, 128) : null,
       type: type as EventType,
-      metadata,
+      metadata: safeMetadata,
     })
+    if (!recorded) return NextResponse.json({ error: 'Event could not be persisted.' }, { status: 503 })
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, recorded: true })
   } catch (err) {
     console.error('[api/rain/events] failed:', err)
     // Analytics failures must never surface as user-facing errors.

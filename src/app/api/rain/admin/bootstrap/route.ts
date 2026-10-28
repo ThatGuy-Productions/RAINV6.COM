@@ -1,3 +1,4 @@
+import { verifyBootstrapSecret } from '@/lib/rain/bootstrap-secret'
 import { NextRequest, NextResponse } from 'next/server'
 import { bootstrapEnterpriseAdmin, loginWithPassword } from '@/lib/rain/auth'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
@@ -12,29 +13,40 @@ export const runtime = 'nodejs'
  * account and immediately issues a session (logs the caller in). Refuses
  * with 409 if any Enterprise account already exists — the door is one-time.
  *
- * SECURITY FIX (C1): Rate limited to 3 attempts per hour per IP to prevent
+ * SECURITY FIX (C1): Rate limited to 3 attempts per minute per IP to prevent
  * brute-force race-condition attacks.
  *
- * Body: { email, password, name? }
+ * Body: { email, password, name?, bootstrapSecret }
  */
 export const POST = withCsrf(async (req: NextRequest) => {
   // Rate limit: 3 bootstrap attempts per minute per IP (conservative)
   // The existing rate limiter uses RPM (requests per minute).
   // 3 RPM = 3 attempts per minute, which is sufficient for a one-time endpoint.
-  const rl = checkRateLimit(req, 'bootstrap', 3)
+  const rl = await checkRateLimit(req, 'bootstrap', 3)
   if (!rl.ok) {
     return NextResponse.json(
-      { error: 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } },
+      { error: rl.unavailable ? 'Rate limiting service unavailable' : 'Too many bootstrap attempts', retryAfter: rl.retryAfter },
+      { status: rl.unavailable ? 503 : 429, headers: { 'Retry-After': String(rl.retryAfter) } },
     )
   }
 
-  let body: { email?: unknown; password?: unknown; name?: unknown }
+  let body: { email?: unknown; password?: unknown; name?: unknown; bootstrapSecret?: unknown }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
+  const bootstrapStatus = verifyBootstrapSecret(body.bootstrapSecret)
+  if (bootstrapStatus === 'disabled') {
+    return NextResponse.json(
+      { error: 'Admin bootstrap is disabled: configure RAIN_ADMIN_BOOTSTRAP_SECRET with at least 32 characters.' },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
+  if (bootstrapStatus !== 'valid') {
+    return NextResponse.json({ error: 'Invalid bootstrap credentials.' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
+  }
+
   const email = typeof body.email === 'string' ? body.email : ''
   const password = typeof body.password === 'string' ? body.password : ''
   const name = typeof body.name === 'string' ? body.name : undefined

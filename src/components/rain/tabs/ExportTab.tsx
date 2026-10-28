@@ -11,27 +11,31 @@ import {
   type ExportVerificationResult,
 } from '@/lib/rain/audio-engine'
 import { useSessionStore } from '@/lib/rain/store'
-import { exportAtmosPackage } from '@/lib/rain/spatial'
+import { exportSpatialPackage } from '@/lib/rain/spatial'
 import type { SpatialConfig } from '@/lib/rain/spatial'
 import { notifySuccess, notifyError } from '@/lib/rain/notifications'
 import { recordExportDetails } from '@/lib/rain/analytics'
 import type { ProvenanceCertificate } from '@/lib/rain/types'
 import { useAuth } from '@/components/rain/admin/AuthContext'
 import { getAnonId } from '@/lib/rain/anon-id'
+import { checkBetaExportAllowance, recordLocalBetaExport } from '@/lib/rain/beta-export-quota'
 
 // BETA-ANALYTICS: fires the server-side export_completed event (source of
 // truth for activation/retention — see server-analytics.ts). Separate from
 // recordExportDetails above, which writes local IndexedDB telemetry for
 // this browser's own Analytics tab. Best-effort; never blocks the download.
-async function reportBetaExportEvent(format: string, outputFileHash: string | undefined) {
+async function reportBetaExportEvent(format: string, outputFileHash: string | undefined, metrics: { renderTimeMs?: number; audioDurationSec?: number }): Promise<boolean> {
   try {
-    await fetch('/api/rain/render', {
+    const response = await fetch('/api/rain/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId() }),
+      body: JSON.stringify({ kind: 'export', format, outputFileHash, anonId: getAnonId(), ...metrics }),
     })
+    const result = await response.json().catch(() => ({})) as { telemetryRecorded?: boolean }
+    return response.ok && result.telemetryRecorded === true
   } catch (e) {
     console.warn('[analytics] reportBetaExportEvent failed:', e)
+    return false
   }
 }
 
@@ -54,7 +58,7 @@ const FORMATS: ExportFormat[] = [
   { id: 'wav24', label: 'WAV 24-bit', ext: 'wav', desc: 'Authoritative master · 48 kHz · 24-bit PCM · TPDF dither · LIST/INFO provenance', size: '~10 MB/min', bitDepth: 24, icon: <FileAudio className="w-5 h-5" /> },
   { id: 'wav16', label: 'WAV 16-bit', ext: 'wav', desc: '16-bit / 48 kHz CD-compatible (TPDF dither) · LIST/INFO provenance', size: '~7 MB/min', bitDepth: 16, icon: <FileAudio className="w-5 h-5" /> },
   { id: 'mp3_320', label: 'MP3 320 kbps', ext: 'mp3', desc: 'Streaming distribution · 48 kHz · 320 kbps CBR · TPDF dither · ID3v2 provenance', size: '~2.4 MB/min', bitDepth: 16, icon: <FileAudio className="w-5 h-5" /> },
-  { id: 'atmos', label: 'Atmos Package (.zip)', ext: 'zip', desc: 'Dolby Atmos 7.1.4 bed + 16 dynamic objects (28ch). Full-source ZIP: .atmos.wav + audioDefinitionModelBwf.xml sidecar + spatial.json + README.txt + MANIFEST.json (SHA-256). Up to 6 min.', size: '~50 MB/min', bitDepth: 24, icon: <Box className="w-5 h-5" /> },
+  { id: 'atmos', label: 'ADM BWF Spatial Draft (.zip)', ext: 'zip', desc: 'Experimental multichannel ADM BWF spatial draft + ADM XML sidecar + spatial.json + README + SHA-256 manifest. Not Dolby Atmos-certified; validate in a compatible renderer before commercial use. Up to 6 min.', size: '~50 MB/min', bitDepth: 24, icon: <Box className="w-5 h-5" /> },
 ]
 
 /** Extract the Chromaprint hash from a RAIN-CERT manifest (if present). */
@@ -139,11 +143,11 @@ export function ExportTab() {
     fingerprint,
   })
 
-  const isAtmos = selectedFormat === 'atmos'
+  const isSpatialPackage = selectedFormat === 'atmos'
   const isMp3 = selectedFormat === 'mp3_320'
   const isWav = selectedFormat === 'wav24' || selectedFormat === 'wav16'
 
-  // Toggles are only meaningful for WAV/MP3. Atmos package uses its own
+  // Toggles are only meaningful for WAV/MP3. The spatial package uses its own
   // embedding path (axml chunk + sidecar XML), so we show a notice rather
   // than fake-enabled toggles.
   const togglesRelevant = isWav || isMp3
@@ -151,13 +155,21 @@ export function ExportTab() {
   const handleExport = async () => {
     if (!hasProcessed) return
 
-    // AUTH GATE: require sign-up before export/download.
-    if (!user) {
-      notifyError(
-        'Sign up required',
-        'Create a free account to export and download your master. No credit card needed.',
-      )
-      window.dispatchEvent(new CustomEvent('rain:signup-open'))
+    // All available product features stay open during beta. Only audio export
+    // count is limited after two successful exports.
+    try {
+      const allowance = await checkBetaExportAllowance()
+      if (!allowance.allowed) {
+        void fetch('/api/rain/beta-access/interest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'beta_paywall_shown', anonId: getAnonId() }),
+        }).catch(() => {})
+        window.dispatchEvent(new CustomEvent('rain:beta-unlock-open'))
+        return
+      }
+    } catch (error) {
+      notifyError('Export allowance unavailable', error instanceof Error ? error.message : 'Please retry.')
       return
     }
 
@@ -174,10 +186,11 @@ export function ExportTab() {
     setVerification(null)
     // P2-ANALYTICS: measure real export wall-clock + actual blob size for
     // the Analytics tab's "Export Format Distribution" chart. Each branch
-    // (atmos / mp3 / wav) records its own format string + size + duration.
+    // (spatial package / mp3 / wav) records its own format string + size + duration.
     const exportStart = Date.now()
     const fileState = useSessionStore.getState()
-    const recordExport = (format: string, blob: Blob, bitDepthOverride?: number) => {
+    const recordExport = async (format: string, blob: Blob, bitDepthOverride?: number) => {
+      recordLocalBetaExport()
       void recordExportDetails({
         timestamp: Date.now(),
         format,
@@ -188,26 +201,27 @@ export function ExportTab() {
         channels: fileState.fileChannels || 2,
         fileName: fileState.fileName ?? '(unknown)',
       }).catch((e) => console.warn('[analytics] recordExportDetails failed:', e))
-      void reportBetaExportEvent(selectedFormat, rainCert?.outputHash)
+      const recorded = await reportBetaExportEvent(selectedFormat, rainCert?.outputHash, { renderTimeMs: Date.now() - exportStart, audioDurationSec: fileState.fileDuration || 0 })
+      if (!recorded) notifyError('Export completed, usage record pending', 'Your download succeeded, but the beta usage counter could not be confirmed. Please keep this window open and retry before another export.')
     }
     try {
       const format = FORMATS.find((f) => f.id === selectedFormat)!
       const baseName = (metadata.title || fileName || 'rain-master').replace(/\s+/g, '_')
 
-      // --- Atmos path: separate code path, no ID3/LIST toggles apply ---
+      // --- Spatial package path: separate code path, no ID3/LIST toggles apply ---
       if (format.id === 'atmos') {
         // EXPORT CAP: the spatial pipeline processes the full track (no silent
         // 60s preview truncation). 360s (6 min) is the memory-safe ceiling for
         // a 7.1.4 bed (12ch × 360s × 48k × 4B ≈ 830 MB persistent). Tracks
         // beyond this get an EXPLICIT error — never a silently truncated file.
-        const ATMOS_EXPORT_MAX_SEC = 360
+        const SPATIAL_EXPORT_MAX_SEC = 360
         const sourceBuffer = audioEngine.getProcessedBuffer() ?? null
         const sourceDuration = sourceBuffer?.duration ?? 0
-        if (sourceDuration > ATMOS_EXPORT_MAX_SEC) {
+        if (sourceDuration > SPATIAL_EXPORT_MAX_SEC) {
           const mm = Math.floor(sourceDuration / 60)
           const ss = Math.floor(sourceDuration % 60)
           throw new Error(
-            `Atmos export supports tracks up to ${Math.floor(ATMOS_EXPORT_MAX_SEC / 60)} minutes. ` +
+            `Spatial package export supports tracks up to ${Math.floor(SPATIAL_EXPORT_MAX_SEC / 60)} minutes. ` +
             `Your track is ${mm}:${ss.toString().padStart(2, '0')}. ` +
             `Please trim the track or export as WAV / MP3 instead.`,
           )
@@ -222,21 +236,21 @@ export function ExportTab() {
         }
         // Pass the export cap so the full track (up to 6 min) is processed.
         // If the result is somehow still truncated (defensive), refuse to ship.
-        const result = await audioEngine.processSpatial(config, undefined, undefined, ATMOS_EXPORT_MAX_SEC)
+        const result = await audioEngine.processSpatial(config, undefined, undefined, SPATIAL_EXPORT_MAX_SEC)
         if (result.truncated) {
           throw new Error(
-            `Atmos export was truncated to ${result.processedSeconds.toFixed(0)}s ` +
+            `Spatial package export was truncated to ${result.processedSeconds.toFixed(0)}s ` +
             `(track is ${result.inputSeconds.toFixed(0)}s). Refusing to export a partial file. ` +
-            `Please trim the track to ≤ ${ATMOS_EXPORT_MAX_SEC}s.`,
+            `Please trim the track to ≤ ${SPATIAL_EXPORT_MAX_SEC}s.`,
           )
         }
-        // Full-source package: .atmos.wav + ADM XML sidecar + spatial.json +
+        // Full-source package: .spatial-bwf.wav + ADM XML sidecar + spatial.json +
         // README.txt + MANIFEST.json (real SHA-256 over every file).
-        const blob = await exportAtmosPackage(result, { title: metadata.title, artist: metadata.artist }, config)
-        triggerDownload(blob, `${baseName}_Atmos_7.1.4.zip`)
-        recordExport('ATMOS-7.1.4', blob, 24)
+        const blob = await exportSpatialPackage(result, { title: metadata.title, artist: metadata.artist }, config)
+        triggerDownload(blob, `${baseName}_Spatial_ADM_Draft.zip`)
+        await recordExport('ADM-BWF-SPATIAL-DRAFT', blob, 24)
         notifySuccess(
-          'Atmos full-source package complete',
+          'ADM BWF spatial draft package created',
           `${result.processedSeconds.toFixed(1)}s · 5 files · ${(blob.size / 1024 / 1024).toFixed(1)} MB`,
         )
         setIsExporting(false)
@@ -267,10 +281,10 @@ export function ExportTab() {
             `${baseName}.cert.json`,
           )
           triggerDownload(zipBlob, `${baseName}_RAIN.zip`)
-          recordExport('MP3-320+SIDECAR', zipBlob, 16)
+          await recordExport('MP3-320+SIDECAR', zipBlob, 16)
         } else {
           triggerDownload(blob, `${baseName}_RAIN.mp3`)
-          recordExport('MP3-320', blob, 16)
+          await recordExport('MP3-320', blob, 16)
         }
         reportExportResult(result, 'MP3')
         setIsExporting(false)
@@ -293,10 +307,10 @@ export function ExportTab() {
           `${baseName}.cert.json`,
         )
         triggerDownload(zipBlob, `${baseName}_RAIN.zip`)
-        recordExport(bitDepth === 24 ? 'WAV-24+SIDECAR' : 'WAV-16+SIDECAR', zipBlob, bitDepth)
+        await recordExport(bitDepth === 24 ? 'WAV-24+SIDECAR' : 'WAV-16+SIDECAR', zipBlob, bitDepth)
       } else {
         triggerDownload(blob, `${baseName}_RAIN.wav`)
-        recordExport(bitDepth === 24 ? 'WAV-24' : 'WAV-16', blob, bitDepth)
+        await recordExport(bitDepth === 24 ? 'WAV-24' : 'WAV-16', blob, bitDepth)
       }
       reportExportResult(result, 'WAV')
     } catch (e) {
@@ -392,7 +406,7 @@ export function ExportTab() {
           <div className="text-sm font-semibold mb-3">What gets embedded in the audio bytes</div>
           {!togglesRelevant && (
             <div className="text-[10px] text-muted-foreground/80 italic mb-2">
-              Toggles below apply to WAV/MP3 only. The Atmos path embeds metadata
+              Toggles below apply to WAV/MP3 only. The Spatial package path embeds metadata
               via the ADM axml chunk and the audioDefinitionModelBwf.xml sidecar —
               it does not use these ID3/RIFF INFO toggles.
             </div>

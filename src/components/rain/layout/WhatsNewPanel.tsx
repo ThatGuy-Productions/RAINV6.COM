@@ -94,7 +94,7 @@ const CHANGELOG: ChangelogEntry[] = [
     type: 'feature',
     title: 'RAIN V6 free public beta launch',
     description:
-      'Studio-grade mastering, 12-stem separation, Dolby Atmos binaural, Ed25519 RAIN-CERT provenance, DDEX distribution — all running on a deterministic in-browser DSP engine. Audio never leaves your device on the free path.',
+      'Browser-based mastering, stem import/mixing, experimental ADM BWF spatial drafts, Ed25519 RAIN-CERT provenance, and distribution-package preparation. Neural stem separation and Dolby Atmos-certified delivery remain gated pending model and format validation.',
   },
 ]
 

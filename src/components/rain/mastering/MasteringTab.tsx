@@ -32,6 +32,8 @@ import { AiDisclosurePanel, type DisclosureState } from '@/components/rain/forms
 import { Switch } from '@/components/ui/switch'
 import { StereoCorrelationMeter } from '@/components/rain/visualizers/StereoCorrelationMeter'
 import { getAnonId } from '@/lib/rain/anon-id'
+import { useAuth } from '@/components/rain/admin/AuthContext'
+import { checkBetaExportAllowance, recordLocalBetaExport } from '@/lib/rain/beta-export-quota'
 
 export function MasteringTab() {
   const fileName = useSessionStore((s) => s.fileName)
@@ -56,14 +58,19 @@ export function MasteringTab() {
   const setProcessingStageProgress = useSessionStore((s) => s.setProcessingStageProgress)
   const triggerCompletionCelebration = useSessionStore((s) => s.triggerCompletionCelebration)
   const setRenderAbortController = useSessionStore((s) => s.setRenderAbortController)
-  // P3-BSROFORMER: clear stale stems at render start, populate fresh ones
-  // from Stage 7 of the render pipeline via the onStemsReady callback.
+  // Clear any legacy stem results at render start. Neural source separation
+  // is disabled until a verified model artifact is bundled.
   const setStemResults = useSessionStore((s) => s.setStemResults)
   // P2-4 Simple Mode state + setter wiring.
   const simpleMode = useSessionStore((s) => s.simpleMode)
   const setSimpleMode = useSessionStore((s) => s.setSimpleMode)
   const simpleIntensity = useSessionStore((s) => s.simpleIntensity)
   const setMacros = useSessionStore((s) => s.setMacros)
+  const setMetadata = useSessionStore((s) => s.setMetadata)
+  const { user } = useAuth()
+  const userId = user?.id
+  const [savedProjects, setSavedProjects] = useState<Array<{ id: string; name: string; updatedAt: string; inputMetadata: string | null; renderSettings: string | null }>>([])
+  const [savedProjectsLoading, setSavedProjectsLoading] = useState(false)
   const setMacroSource = useSessionStore((s) => s.setMacroSource)
   const [showAssistant, setShowAssistant] = useState(true)
   const [aiLoading, setAiLoading] = useState(false)
@@ -89,6 +96,46 @@ export function MasteringTab() {
   // AUDIT2: track the AI-suggest visual-feedback timeout so we can clean it up
   // on unmount (otherwise a leak if the user navigates away within 1.5s of click).
   const aiSuggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Load durable project list when an account is signed in. Only project
+  // settings/metadata are restored; source audio remains local and must be
+  // selected again by the user.
+  useEffect(() => {
+    let cancelled = false
+    if (!userId) {
+      setSavedProjects([])
+      return
+    }
+    setSavedProjectsLoading(true)
+    fetch('/api/rain/session', { cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) throw new Error('Saved projects unavailable')
+        return response.json() as Promise<{ projects?: Array<{ id: string; name: string; updatedAt: string; inputMetadata: string | null; renderSettings: string | null }> }>
+      })
+      .then(data => { if (!cancelled) setSavedProjects(data.projects ?? []) })
+      .catch(error => {
+        if (!cancelled) console.warn('[projects] list failed:', error)
+      })
+      .finally(() => { if (!cancelled) setSavedProjectsLoading(false) })
+    return () => { cancelled = true }
+  }, [userId])
+
+  const restoreProjectSettings = (project: (typeof savedProjects)[number]) => {
+    try {
+      const metadata = project.inputMetadata ? JSON.parse(project.inputMetadata) : null
+      const settings = project.renderSettings ? JSON.parse(project.renderSettings) : null
+      if (metadata && typeof metadata === 'object') setMetadata(metadata)
+      if (settings && typeof settings === 'object') {
+        if (settings.macros && typeof settings.macros === 'object') setMacros(settings.macros)
+        if (typeof settings.genre === 'string') setGenre(settings.genre)
+        if (typeof settings.platform === 'string') setPlatform(settings.platform)
+        if (typeof settings.simpleMode === 'boolean') setSimpleMode(settings.simpleMode)
+      }
+      notifySuccess('Project settings restored', 'Re-select the original audio file to render or export. Audio is not stored on the server.')
+    } catch {
+      notifyError('Could not restore project', 'The saved project settings are invalid or incomplete.')
+    }
+  }
 
   // Listen for 'rain:compare' custom event (keyboard shortcut 'C' integration)
   useEffect(() => {
@@ -153,6 +200,73 @@ export function MasteringTab() {
     }
   }, [fileName])
 
+  const persistProjectState = useCallback(async () => {
+    if (!userId || !fileName) return
+    const persistentSessionId = await ensureBackendSession()
+    if (!persistentSessionId) return
+    const state = useSessionStore.getState()
+    const response = await fetch('/api/rain/session', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: persistentSessionId,
+        name: state.fileName ?? 'Untitled',
+        inputMetadata: state.metadata,
+        renderSettings: {
+          macros: state.macros,
+          genre: state.genre,
+          platform: state.platform,
+          simpleMode: state.simpleMode,
+          simpleIntensity: state.simpleIntensity,
+          params: state.params,
+          rainScore: state.rainScore,
+          inputAnalysis: state.inputAnalysis,
+          outputAnalysis: state.outputAnalysis,
+          hasProcessed: state.hasProcessed,
+          savedAt: new Date().toISOString(),
+        },
+        status: state.hasProcessed ? 'rendered' : 'draft',
+      }),
+    })
+    if (!response.ok) console.warn('[projects] autosave failed:', response.status)
+  }, [userId, fileName, ensureBackendSession])
+
+  // Create an account-owned project as soon as a signed-in user loads a file,
+  // then debounce autosaves as metadata/macros/settings change. The audio
+  // buffer is intentionally excluded from the persisted payload.
+  useEffect(() => {
+    backendSessionId.current = null
+    backendSessionFileName.current = null
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId || !fileName) return
+    void persistProjectState().catch(error => console.warn('[projects] initial save failed:', error))
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = useSessionStore.subscribe((state, previous) => {
+      const changed =
+        state.fileName !== previous.fileName ||
+        state.metadata !== previous.metadata ||
+        state.macros !== previous.macros ||
+        state.genre !== previous.genre ||
+        state.platform !== previous.platform ||
+        state.simpleMode !== previous.simpleMode ||
+        state.simpleIntensity !== previous.simpleIntensity ||
+        state.params !== previous.params ||
+        state.rainScore !== previous.rainScore ||
+        state.hasProcessed !== previous.hasProcessed
+      if (!changed || !state.fileName) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        void persistProjectState().catch(error => console.warn('[projects] autosave failed:', error))
+      }, 900)
+    })
+    return () => {
+      unsubscribe()
+      if (timer) clearTimeout(timer)
+    }
+  }, [userId, fileName, persistProjectState])
+
   // BETA-ANALYTICS: fires a render_completed or export_completed ping.
   // Best-effort — failures are logged, never surfaced to the user.
   const reportRenderEvent = useCallback(
@@ -164,16 +278,20 @@ export function MasteringTab() {
         loudnessLufs?: number
         truePeakDbfs?: number
         renderTimeMs?: number
+        audioDurationSec?: number
       },
     ) => {
       try {
-        await fetch('/api/rain/render', {
+        const response = await fetch('/api/rain/render', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind, sessionId: backendSessionId.current, anonId: getAnonId(), ...details }),
         })
+        const result = await response.json().catch(() => ({})) as { telemetryRecorded?: boolean }
+        return response.ok && result.telemetryRecorded === true
       } catch (e) {
         console.warn(`[analytics] reportRenderEvent(${kind}) failed:`, e)
+        return false
       }
     },
     [],
@@ -184,11 +302,10 @@ export function MasteringTab() {
     setIsProcessing(true)
     renderStartTime.current = Date.now()
     // BETA-ANALYTICS: fire-and-forget — don't gate the render on this.
-    void ensureBackendSession()
+    const backendSessionPromise = ensureBackendSession()
 
-    // P3-BSROFORMER: clear any stale stem results from a previous render
-    // or manual Stems-tab run. Fresh results are populated from Stage 7
-    // of the render pipeline via the onStemsReady callback (below).
+    // Clear stale stem results from a previous render or manual Stems-tab run.
+    // Automatic neural separation is disabled until a verified model is bundled.
     setStemResults(null)
 
     // AUDIT-C5 FIX: create an AbortController for this render and store it so
@@ -219,12 +336,7 @@ export function MasteringTab() {
         // Reset the within-stage indicator — real stage boundary reached.
         stageStartRef.current = Date.now()
         setProcessingStageProgress(0)
-      }, abortController.signal, (stems) => {
-        // P3-BSROFORMER: Stage 7 emitted BS-RoFormer 4-pass stem results.
-        // Populate the session store so the Stems tab shows them immediately
-        // (no separate "Run Separation" click required).
-        setStemResults(stems)
-      })
+      }, abortController.signal, simpleMode)
 
       // Clear the progress interval
       if (progressIntervalRef.current) {
@@ -263,6 +375,39 @@ export function MasteringTab() {
       setCert(cert)
       setResult(result.analysis, result.score, result.params)
       setInputAnalysis(audioEngine.currentAnalysis ?? useSessionStore.getState().inputAnalysis!)
+
+      // Persist resumable project settings for authenticated users. The audio
+      // itself remains in-browser; users reselect the source file when they
+      // return. Do not let a failed save interrupt mastering or export.
+      void (async () => {
+        const persistentSessionId = await backendSessionPromise
+        if (!persistentSessionId) return
+        const current = useSessionStore.getState()
+        const response = await fetch('/api/rain/session', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: persistentSessionId,
+            name: fileName ?? 'Untitled',
+            inputMetadata: current.metadata,
+            renderSettings: {
+              macros: current.macros,
+              genre: current.genre,
+              platform: current.platform,
+              simpleMode: current.simpleMode,
+              simpleIntensity: current.simpleIntensity,
+              params: result.params,
+              score: result.score,
+              analysis: result.analysis,
+              savedAt: new Date().toISOString(),
+            },
+            status: 'rendered',
+          }),
+        })
+        if (!response.ok) {
+          console.warn('[projects] project state was not persisted:', response.status)
+        }
+      })().catch((error) => console.warn('[projects] project autosave failed:', error))
 
       // Log this render to session history
       // P3-ANALYTICS: `duration` is the AUDIO file duration in SECONDS
@@ -344,6 +489,7 @@ export function MasteringTab() {
         loudnessLufs: result.analysis.lufs,
         truePeakDbfs: result.analysis.truePeak,
         renderTimeMs: renderDuration,
+        audioDurationSec: useSessionStore.getState().fileDuration || 0,
       })
 
       // Trigger completion celebration
@@ -382,6 +528,23 @@ export function MasteringTab() {
   }
 
   const handleExport = async () => {
+    // This quick WAV path must obey the same two-export beta allowance as
+    // ExportTab; otherwise it would silently bypass the conversion experiment.
+    try {
+      const allowance = await checkBetaExportAllowance()
+      if (!allowance.allowed) {
+        void fetch('/api/rain/beta-access/interest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ event: 'beta_paywall_shown', anonId: getAnonId() }),
+        }).catch(() => {})
+        window.dispatchEvent(new CustomEvent('rain:beta-unlock-open'))
+        return
+      }
+    } catch (error) {
+      notifyError('Export allowance unavailable', error instanceof Error ? error.message : 'Please retry.')
+      return
+    }
     // P3-ANALYTICS: measure real export wall-clock time + actual byte count
     // and persist them via recordExportDetails (which writes a row to the
     // `exports` IndexedDB store AND bumps the cumulative exportCount /
@@ -397,6 +560,7 @@ export function MasteringTab() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+      recordLocalBetaExport()
       const exportMs = Date.now() - exportStart
       const fileState = useSessionStore.getState()
       void recordExportDetails({
@@ -416,10 +580,15 @@ export function MasteringTab() {
       // BETA-ANALYTICS: this is the event that counts as "activation" —
       // signup -> completed export. rainCert is set in the store by
       // handleRender above, so outputHash is the real RAIN-CERT hash.
-      void reportRenderEvent('export', {
+      const telemetryRecorded = await reportRenderEvent('export', {
         format: 'wav24',
         outputFileHash: rainCert?.outputHash,
+        renderTimeMs: exportMs,
+        audioDurationSec: fileState.fileDuration || 0,
       })
+      if (!telemetryRecorded) {
+        notifyError('Export completed, usage record pending', 'The download succeeded, but its durable usage event could not be confirmed.')
+      }
     } catch (e) {
       console.error('[RAIN export] error:', e)
       notifyError('Export failed', e instanceof Error ? e.message : 'Could not export WAV file')
@@ -430,6 +599,35 @@ export function MasteringTab() {
     <div className="grid lg:grid-cols-12 gap-4">
       {/* Left column — main workflow */}
       <div className="lg:col-span-8 space-y-4">
+        {user && (
+          <section className="rain-panel rounded-lg p-4" aria-label="Saved projects">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div>
+                <div className="text-sm font-semibold">Saved projects</div>
+                <div className="text-[10px] text-muted-foreground">Your settings and metadata, saved to your account</div>
+              </div>
+              <span className="text-[10px] font-mono text-muted-foreground">{savedProjects.length} saved</span>
+            </div>
+            {savedProjectsLoading ? (
+              <div className="text-xs text-muted-foreground">Loading saved projects…</div>
+            ) : savedProjects.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No saved projects yet. Complete a render while signed in to save its settings.</div>
+            ) : (
+              <div className="space-y-2">
+                {savedProjects.slice(0, 5).map(project => (
+                  <div key={project.id} className="flex items-center justify-between gap-3 rounded-md border border-rain-border/50 p-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium">{project.name}</div>
+                      <div className="text-[10px] text-muted-foreground">Updated {new Date(project.updatedAt).toLocaleString()}</div>
+                    </div>
+                    <button type="button" onClick={() => restoreProjectSettings(project)} className="shrink-0 rounded border border-rain-border px-2 py-1 text-[10px] hover:border-rain-accent/60">Restore settings</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 text-[10px] text-muted-foreground/70">Source audio never leaves your browser and must be reselected when you return.</div>
+          </section>
+        )}
         <UploadZone />
 
         {fileName && (
@@ -494,7 +692,7 @@ export function MasteringTab() {
                 </div>
               </div>
               <div className="text-[10px] font-mono text-muted-foreground/70">
-                Creator-tier feature
+                Available to all beta users
               </div>
             </div>
 
@@ -637,7 +835,7 @@ export function MasteringTab() {
                   onClick={() => setShowReport(true)}
                   disabled={!hasProcessed}
                   className="flex items-center gap-2 px-4 py-2.5 rounded-md border border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 transition-colors text-sm disabled:opacity-50"
-                  title="Generate an LLM mastering report from this render — Independent tier"
+                  title="Generate an AI mastering report — included in the free beta"
                 >
                   <FileText className="w-4 h-4 text-cyan-400" />
                   Mastering Report

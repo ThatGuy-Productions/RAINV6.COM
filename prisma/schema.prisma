@@ -1,10 +1,9 @@
 // RAIN V6 — Prisma schema (Wave 3 P2-1)
 //
-// Sandbox provider is `sqlite` (Next.js-only environment). Production uses
-// PostgreSQL 18 (per spec) with row-level security policies. The model shape
-// below mirrors the production PostgreSQL schema; only the JSON-typed columns
-// (`inputMetadata`, `renderSettings`) are stored as `String` because SQLite
-// has no native JSON type. Production migrations will switch these to `Json`.
+// PostgreSQL is the canonical durable store for deployed accounts, saved work,
+// authentication sessions, renders, and telemetry. Do not package a database
+// file into the application image: deployments must provide a managed/durable
+// PostgreSQL DATABASE_URL and apply versioned migrations before rollout.
 //
 // 4 spec-mandated tables: Account, Session, Render, InferenceJob.
 
@@ -13,7 +12,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -30,8 +29,12 @@ model Account {
   lastActiveAt DateTime @default(now())
   sessions     Session[]
   renders      Render[]
-  authTokens   AuthToken[]
-  events       Event[]
+  authTokens         AuthToken[]
+  passwordResetTokens PasswordResetToken[]
+  events             Event[]
+  payments            Payment[]
+  entitlements        Entitlement[]
+  usageRecords        UsageRecord[]
 }
 
 /// Authentication session tokens (distinct from mastering `Session`).
@@ -51,6 +54,21 @@ model AuthToken {
   @@index([expiresAt])
 }
 
+
+/// Single-use password-reset tokens. Only the SHA-256 token hash is stored.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, used])
+  @@index([expiresAt])
+}
+
 model Session {
   id              String   @id @default(cuid())
   userId          String
@@ -58,7 +76,7 @@ model Session {
   name            String   @default("Untitled")
   inputFileHash   String?
   inputMetadata   String?  // JSON string (SQLite has no JSON type)
-  renderSettings  String?  // JSON string
+  renderSettings  String?  // JSON-encoded settings, kept as text for compatibility
   rainDspWasmHash String?
   status          String   @default("draft") // draft|inferring|rendered|archived
   createdAt       DateTime @default(now())
@@ -131,6 +149,74 @@ model Event {
   @@index([userId, type, createdAt])
   @@index([anonId, type, createdAt])
   @@index([type, createdAt])
+}
+
+
+/// Durable payment attempt and provider verification record.
+/// A browser redirect is not proof of payment; only a verified server callback may set status=verified.
+model Payment {
+  id                String   @id @default(cuid())
+  userId            String
+  user              Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          String
+  providerPaymentId String?
+  providerEventId   String?
+  idempotencyKey    String   @unique
+  amountCents       Int
+  currency          String   @default("ZAR")
+  purpose           String   @default("beta_unlock") // beta_unlock|subscription
+  status            String   @default("pending") // pending|verified|failed|cancelled|refunded|disputed
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  verifiedAt        DateTime?
+  metadata          String?
+  entitlement       Entitlement?
+
+  @@unique([provider, providerPaymentId])
+  @@unique([provider, providerEventId])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Entitlement history. Beta unlocks and commercial subscriptions share a ledger,
+/// but their lifecycle and limits are evaluated by server-side policy.
+model Entitlement {
+  id              String   @id @default(cuid())
+  userId          String
+  user            Account  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourcePaymentId String?  @unique
+  sourcePayment   Payment? @relation(fields: [sourcePaymentId], references: [id], onDelete: SetNull)
+  kind            String   // beta_r49_unlock|commercial_subscription|admin_grant
+  status          String   @default("active") // pending|active|expired|revoked
+  startsAt        DateTime @default(now())
+  endsAt          DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  metadata        String?
+
+  @@index([userId, status, startsAt, endsAt])
+  @@index([kind, status])
+}
+
+/// Append-only use/export ledger. Reservation and completion states allow failed
+/// operations to be released without consuming a free credit or monthly export.
+model UsageRecord {
+  id             String   @id @default(cuid())
+  userId         String?
+  user           Account? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  anonId         String?
+  kind           String   // use_credit|export
+  status         String   @default("reserved") // reserved|completed|released|failed
+  idempotencyKey String   @unique
+  operationId    String?
+  format         String?
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
+  metadata       String?
+
+  @@index([userId, kind, status, createdAt])
+  @@index([anonId, kind, status, createdAt])
+  @@index([operationId])
 }
 
 /// Public user reviews — real DB-backed testimonials shown on the landing

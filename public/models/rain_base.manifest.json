@@ -1,14 +1,72 @@
 {
   "schemaVersion": "rain-v1",
   "modelName": "rain_base.onnx",
-  "engineVersion": "RAIN V6 — BS-RoFormer 12-stem",
+  "externalDataFile": "rain_base.onnx.data",
+  "modelVersion": "2.0.0-base",
+  "engineVersion": "RAIN V6 RainNet mastering-parameter inference",
   "createdAt": "2026-07-31T00:00:00Z",
   "checksums": {
-    "sha256": "PLACEHOLDER-compute-cli-sha256sum-public-models-rain_base-onnx",
-    "sha384": "PLACEHOLDER-compute-cli-sha384sum-public-models-rain_base-onnx"
+    "sha256": "b5bd90bb52cecb7f756f1578e65b0f8d2f0a71d2788f2764c403726af43dbd61",
+    "sha256ExternalData": "1d91f4eaf7df2d59a4f4bb13d4888257f48ff5f4822b9729aa4330d65af46fad"
   },
-  "onnxRuntimeVersion": "1.20.0",
-  "inputSpec": { "format": "Float32Array", "shape": [-1, 48000, 1], "sampleRate": 48000 },
-  "outputSpec": { "stems": 12, "format": "Float32Array" },
-  "dspStageMapping": ["stem-separation", "eq", "multiband-compression", "loudness", "limiting", "export"]
+  "minimumOnnxRuntimeVersion": "1.24.0",
+  "inputSpec": [
+    {
+      "name": "mel",
+      "dtype": "float32",
+      "shape": [
+        1,
+        1,
+        128,
+        128
+      ]
+    },
+    {
+      "name": "artist_vec",
+      "dtype": "float32",
+      "shape": [
+        1,
+        64
+      ]
+    },
+    {
+      "name": "genre_id",
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "platform_id",
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    {
+      "name": "simple_mode",
+      "dtype": "float32",
+      "shape": [
+        1,
+        1
+      ]
+    }
+  ],
+  "outputSpec": {
+    "name": "processing_params",
+    "dtype": "float32",
+    "shape": [
+      1,
+      46
+    ],
+    "parameterCount": 46
+  },
+  "dspStageMapping": [
+    "eq",
+    "multiband-compression",
+    "loudness",
+    "limiting",
+    "stereo-width",
+    "saturation"
+  ]
 }

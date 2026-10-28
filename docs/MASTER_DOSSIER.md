@@ -62,7 +62,7 @@ RAIN V6's core is a **deterministic in-browser DSP engine** — no server-side a
 |---|---|---|
 | **Runtime** | Bun 1.2+ | JavaScript/TypeScript runtime |
 | **Framework** | Next.js 16 (App Router) | Web application framework |
-| **Database** | SQLite (dev) → PostgreSQL 18 (prod) | Session and event persistence |
+| **Database** | Durable PostgreSQL via Prisma and versioned migrations | Account, auth token, saved project metadata, render, and event persistence |
 | **ORM** | Prisma 6 | Database migrations and queries |
 | **Styling** | Tailwind CSS 4 + shadcn/ui | UI components |
 | **Audio** | Web Audio API + custom DSP | All audio processing |
@@ -77,7 +77,7 @@ RAIN V6's core is a **deterministic in-browser DSP engine** — no server-side a
 | **No C++/WASM** — pure TypeScript DSP | Zero build toolchain, instant deployment. Deterministic TypeScript code cannot fail to compile — no Emscripten, no wasm-opt, no linker issues |
 | **No GPU stem separation** — Band-Split DSP | License-free (no BS-RoFormer CC BY-NC conflict), no GPU required, works instantly |
 | **No server-side audio** — 100% in-browser | Audio never leaves the device. Zero bandwidth costs. POPIA/CCPA compliant by nature |
-| **No user accounts** — anonymous sessions | Free beta. No passwords, no recovery, no PII |
+| **Persistent user accounts** — email/password authentication | Requires durable PostgreSQL configuration and successful migrations; audio remains browser-local by default |
 | **Deterministic renders** — no Math.random | Same input → same audio output. Provable, auditable, reproducible |
 | **LabelGrid API → DistroKid browser** | No enterprise API key needed for free beta |
 
@@ -419,7 +419,7 @@ Token bucket with memory cleanup. Suitable for single-instance deployment. Note:
 
 ### BETA Mode Security
 - No PII collected during free Beta
-- No user accounts — anonymous sessions only
+- Persistent account/auth models exist; production must use durable PostgreSQL and must not package a SQLite database snapshot. Saved project metadata and settings are server-persisted; source audio remains local unless a separately disclosed feature changes that.
 - Audio never leaves device (local processing via Web Audio API)
 - Distribution ZIPs Ed25519-signed before leaving the browser
 

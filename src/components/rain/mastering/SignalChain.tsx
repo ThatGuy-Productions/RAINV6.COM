@@ -84,7 +84,7 @@ export function SignalChain() {
     <div className="rain-panel rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-          16-Stage Pipeline
+          Pipeline Status
         </div>
         <div className="flex items-center gap-2">
           <div className="text-[10px] font-mono text-muted-foreground">

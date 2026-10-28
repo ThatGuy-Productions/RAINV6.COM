@@ -78,12 +78,13 @@ export function validateIswc(s: string): boolean {
   if (!/^T-\d{3}\.\d{3}\.\d{3}-\d$/.test(trimmed)) return false
   // Check digit math (ISO 15707): weight the 'T' as 1, then digits 2..10.
   const digits = trimmed.slice(2).replace(/[.-]/g, '') // 10 digits
-  // The first 9 are the work id; the 10th is the check digit.
+  // ISO 15707 weighted modulus 10: T contributes value 1 with weight 1;
+  // the nine work digits use weights 1 through 9 from left to right. The
+  // check digit is chosen so the total sum is divisible by 10.
   const work = digits.slice(0, 9)
   const check = parseInt(digits[9], 10)
-  const weighted = (1 + work.split('').reduce((acc, d, i) => acc + parseInt(d, 10) * (i + 2), 0)) % 10
-  // ISWC check digit is 10 - (sum % 10), with 0 staying 0.
-  const expected = (10 - weighted) % 10
+  const weightedSum = 1 + work.split('').reduce((acc, d, i) => acc + parseInt(d, 10) * (i + 1), 0)
+  const expected = (10 - (weightedSum % 10)) % 10
   return check === expected
 }
 

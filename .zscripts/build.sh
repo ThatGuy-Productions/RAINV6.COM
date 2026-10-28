@@ -115,20 +115,20 @@ if [ -d "public" ]; then
     cp -r public "$BUILD_DIR/next-service-dist/"
 fi
 
-# Copy test database into build artifact (production starts from this snapshot)
-if [ -f "./db/custom.db" ]; then
-    echo "Copying test database snapshot to build artifact..."
-    mkdir -p "$BUILD_DIR/db"
-    cp -r ./db/. "$BUILD_DIR/db/"
-
-    echo "Syncing build artifact database schema..."
-    DATABASE_URL="file:$BUILD_DIR/db/custom.db" bun run db:push
-    echo "Build artifact database ready"
-    ls -lah "$BUILD_DIR/db"
-else
-    echo "ERROR: Test database file ./db/custom.db not found — cannot produce production package"
-    exit 1
+# Include the versioned Prisma migrations and CLI in the runtime package so
+# production startup can apply additive migrations before accepting traffic.
+mkdir -p "$BUILD_DIR/next-service-dist/prisma" "$BUILD_DIR/next-service-dist/node_modules/@prisma"
+cp -r prisma/schema.prisma prisma/migrations "$BUILD_DIR/next-service-dist/prisma/"
+cp -r node_modules/prisma "$BUILD_DIR/next-service-dist/node_modules/"
+if [ -d "node_modules/@prisma/engines" ]; then
+    cp -r node_modules/@prisma/engines "$BUILD_DIR/next-service-dist/node_modules/@prisma/"
 fi
+
+# The application artifact must NEVER contain a database snapshot.
+# Accounts, saved projects, render records, and events live in the external
+# PostgreSQL service configured at deployment. Bundling SQLite here caused
+# accounts to reset to the build-time snapshot after redeploys.
+
 
 if [ -f "Caddyfile" ]; then
     echo "  - Copying Caddyfile"

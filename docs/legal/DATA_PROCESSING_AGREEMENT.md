@@ -13,6 +13,8 @@ license: "Proprietary"
 
 **Last Updated:** 31 July 2026
 
+> **Draft status:** This document contains legacy beta statements that are being reconciled with persistent account and project metadata storage. It is not ready to be relied upon as a final DPA until hosting/sub-processor details, retention/deletion, data-subject request handling, and legal review are complete.
+
 ## 1. Introduction
 
 This Data Processing Agreement ("DPA") forms part of the RAIN V6 Beta Terms of Service and Privacy Policy. It defines the roles, responsibilities, and obligations of the parties with respect to the processing of personal data (as defined by the Protection of Personal Information Act, 2013 ("POPIA") and applicable data protection laws).
@@ -51,21 +53,17 @@ As the Data Processor, we:
 - Do not determine the purposes or means of processing
 - Do not sell, share, or otherwise commercialise any personal data
 
-### 2.3 The Critical Distinction
+### 2.3 Browser Processing and Account Persistence
 
-**IMPORTANT:** During the Beta phase, RAIN operates entirely in the user's browser. The Data Processor (RAIN) does not receive, access, store, or have the ability to access any user data processed through the Service. All "processing" occurs exclusively on the Data Controller's own device. This creates a unique scenario where:
+RAIN performs source-audio processing in the browser by default. However, the service also supports persistent accounts and may store account email, optional display name, salted password hashes, authentication-token hashes/expiry, saved project metadata/settings, render records, and limited operational event metadata in PostgreSQL. Authentication records may include user-agent and IP metadata for security. Source audio and AIE voice vectors remain browser-local under the account/project persistence design described here.
 
-- The Data Controller maintains full physical and logical control over all data
-- The Data Processor provides only the software tools (delivered as static web assets) that run on the Data Controller's device
-- The Data Processor has **zero access** to processed data at any point
-
-This DPA addresses the legal framework for this relationship, which is characterised by the absence of server-side data processing.
+This means RAIN does process a limited category of personal/account data on its servers; statements elsewhere in this DPA that claim zero server-side data or stateless operation must be read as superseded by this section and must be reconciled before the policy is published as final. The database hosting provider, hosting region, retention/deletion schedule, and sub-processor terms must be identified and reviewed before production account persistence is enabled.
 
 ## 3. Nature and Purpose of Processing
 
 ### 3.1 Processing Activities
 
-The Service performs the following processing activities, all of which occur **entirely within the User's browser:**
+The following audio-processing activities occur in the User's browser. Account authentication, saved-project metadata, render records, and limited operational event records may be processed on the server as described in Section 2.3.
 
 | Processing Activity | Purpose | Data Involved | Location |
 |--------------------|---------|--------------|----------|
@@ -85,36 +83,29 @@ The only potential data subjects are the Users themselves. No personal data of o
 
 ### 3.3 Categories of Personal Data
 
-In the normal course of Beta operation, **no personal data is processed on RAIN's servers.** The following categories of data may exist **locally on the User's device:**
+In the normal course of account-enabled use, limited account/security data and saved project metadata/settings may be processed on RAIN's servers. The following categories remain browser-local unless a separate, explicitly disclosed feature changes this:
 
 | Data Category | Example | Server Access |
 |---------------|---------|---------------|
-| Audio content | Song recordings | None |
-| Audio metadata (embedded) | ID3 tags, RIFF INFO, BWF bext | None |
-| Artist information (metadata) | Artist name in DDEX fields | None |
-| ISRC/UPC identifiers | Locally-generated codes | None |
-| AIE voice vector | 64-dim float32 array | None |
-| Processing parameters | 46 canonical DSP params | None |
-| Anonymous session ID | UUIDv4 | None |
-| UI preferences | Theme, language selection | None |
+| Source audio | Song recordings | None through the account/project persistence API |
+| Embedded audio metadata | ID3 tags, RIFF INFO, BWF bext | Not uploaded with saved project metadata |
+| AIE voice vector | 64-dim float32 array | None; remains browser-local |
+| Provenance private key | IndexedDB key | None; remains browser-local |
+| UI preferences | Theme, language selection | Local unless explicitly included in saved project settings |
+| Account data | Email, optional name, salted password hash | Stored in PostgreSQL |
+| Authentication metadata | Token hash, expiry, user-agent, IP metadata | Stored in PostgreSQL |
+| Saved project metadata | Project name, processing settings, input hash | Stored in PostgreSQL for signed-in users |
+| Operational events | Signup/login/session/render/export/AIE event types and limited metadata | Stored where the relevant event path succeeds; not historical for periods before instrumentation |
 
 ## 4. Sub-Processors
 
-### 4.1 No Sub-Processors
+### 4.1 Hosting and Sub-Processors
 
-**RAIN V6 Beta engages NO sub-processors.** All processing occurs on the User's device using client-side web technologies:
-
-- Web Audio API (browser built-in)
-- WebAssembly (onnxruntime-web)
-- Web Crypto API (browser built-in)
-- IndexedDB API (browser built-in)
-- LocalStorage API (browser built-in)
-
-No third-party services process user data on our behalf. As a result, this DPA does not require a list of sub-processors and no sub-processor change notification process is needed.
+The browser uses built-in Web Audio, WebAssembly, Web Crypto, IndexedDB, and LocalStorage APIs for local processing. Persistent account data and saved project metadata require a PostgreSQL hosting provider. The production provider, hosting region, contractual data-protection terms, and any other sub-processors must be identified and listed here before production account persistence is enabled. Until that is completed, this DPA is a draft and must not be represented as a final account-data processing agreement.
 
 ### 4.2 Future Sub-Processors
 
-If RAIN introduces server-side processing in the future, we will:
+Before adding or changing server-side processing or sub-processors, we will:
 
 1. Update this DPA to include a sub-processor list
 2. Provide at least 30 days' notice before engaging any sub-processor
@@ -147,18 +138,18 @@ Static application files (HTML, JS, CSS, WASM, ONNX model) may be delivered via 
 | Measure | Description |
 |---------|-------------|
 | Client-side only processing | Audio never leaves the user's browser |
-| No persistent server storage | No user data stored on RAIN servers |
+| Durable account storage | PostgreSQL stores account, authentication, saved-project metadata, and limited event records when configured |
 | Browser security sandbox | Data isolated per-origin by browser policy |
 | Web Worker isolation | DSP runs in a separate thread, no DOM access |
-| Stateless architecture | No server-side sessions or user state |
+| Persistent account state | Authentication tokens, account records, saved project metadata, and event rows are stored server-side |
 | IndexedDB per-origin isolation | Data accessible only to RAIN application origin |
 
 ### 5.3 Organisational Measures
 
 | Measure | Description |
 |---------|-------------|
-| No data access | Zero server-side data collection eliminates the attack surface |
-| No employee access | No employee can access user data because no user data exists on servers |
+| Restricted data access | Limit server-side access to account, authentication, saved-project metadata, and event records; apply least privilege and audit access |
+| Operational access | Restrict and audit privileged access to server-side account and project metadata |
 | Least privilege | Code module design limits data access to specific processing stages |
 | Open source-available | Source code available for security audit |
 
@@ -225,17 +216,17 @@ For formal audit requests beyond source code inspection, please contact **legal@
 
 ### 7.4 Limitations
 
-Given the client-side-only architecture of RAIN V6 Beta, traditional data processor audits (physical site visits, server log reviews, database inspections) are not applicable, as no user data exists on RAIN-controlled infrastructure.
+Because RAIN supports persistent accounts and server-side project metadata, database, access-control, backup, retention, and security-log audits may be relevant. Audit procedures and access scope must be agreed and documented before this DPA is finalized.
 
 ## 8. Data Retention and Deletion
 
 ### 8.1 Processor Obligations
 
-The Data Processor (RAIN) retains **no user data** and therefore has no data to delete upon termination of the processing relationship.
+RAIN may retain account, authentication, saved-project metadata, render, and operational event records in PostgreSQL. The exact retention schedule, account deletion process, and handling of backups must be finalized before this DPA is treated as effective.
 
 ### 8.2 Controller Control
 
-All data is retained exclusively on the Data Controller's device. The Data Controller may delete any or all locally stored data at any time through:
+Audio, AIE voice vectors, and provenance private keys remain local under the current browser-processing design. Account and saved-project metadata may be stored server-side. Local data can be deleted through:
 
 - The "Clear Analytics" function in the RAIN interface
 - The "Reset Identity" function in the RAIN interface
@@ -246,13 +237,9 @@ RAIN will provide reasonable assistance to the Data Controller for data deletion
 
 ## 9. International Data Transfers
 
-### 9.1 No Transfers Occur
+### 9.1 Hosting Region and International Transfers
 
-No personal data is transferred internationally by the Data Processor, because:
-
-- All processing occurs on the Data Controller's device
-- No user data is collected by or transmitted to RAIN servers
-- RAIN servers serve only static public assets
+The location of server-side account and project records depends on the configured PostgreSQL hosting provider. The hosting region, any international transfers, and applicable safeguards must be identified and disclosed before account persistence is enabled in production.
 
 ### 9.2 User-Initiated Transfers
 
@@ -262,12 +249,12 @@ If the Data Controller chooses to use RAIN in a jurisdiction different from wher
 
 ### 10.1 Data Subject Requests
 
-The Data Controller is responsible for responding to data subject requests. As no personal data is held by the Data Processor, RAIN does not process data subject requests on behalf of the Data Controller.
+The parties' responsibilities for data-subject access, correction, deletion, and portability requests must account for server-side account and project metadata. The operational request process and response timelines must be confirmed before this DPA is finalized.
 
 Should RAIN receive a data subject request directly, we will:
 
 1. Acknowledge receipt within 72 hours
-2. Inform the data subject that RAIN holds no personal data about them
+2. Verify whether RAIN holds account, authentication, saved-project, or operational event data about the data subject
 3. Direct the data subject to the Data Controller if applicable
 4. Provide reasonable cooperation to the Data Controller upon request
 
@@ -277,7 +264,7 @@ Upon request, RAIN will provide the Data Controller with information reasonably 
 
 - Description of processing operations (as detailed in this DPA)
 - Security measures (as detailed in Section 5)
-- Confirmation of the absence of sub-processors
+- The confirmed hosting provider, sub-processor list, and data-location/transfer safeguards
 
 ### 10.3 Prior Consultation
 
@@ -285,7 +272,7 @@ Should a Data Controller be required to consult with a supervisory authority reg
 
 ## 11. Confidentiality
 
-RAIN personnel with access to application code and infrastructure are bound by confidentiality obligations. However, as no user data is accessible on RAIN infrastructure, the practical scope of this confidentiality obligation with respect to user data is inherently limited.
+Personnel with privileged access to application infrastructure or the PostgreSQL service must be subject to confidentiality obligations and least-privilege access controls. Actual access logging and operational controls must be verified before production launch.
 
 ## 12. Liability
 
@@ -293,7 +280,7 @@ The liability provisions of the RAIN V6 Beta Terms of Service (Section 8: Limita
 
 - RAIN's total aggregate liability under this DPA shall not exceed R0.00 (ZAR)
 - RAIN shall not be liable for indirect, incidental, or consequential damages
-- These limitations reflect the zero-cost, zero-data-collection nature of the Beta service
+- These draft provisions must be reviewed for consistency with the actual data-processing model and applicable law before publication
 
 ## 13. Term and Termination
 
@@ -311,7 +298,7 @@ This DPA terminates automatically upon:
 
 ### 13.3 Effect of Termination
 
-Upon termination, the Data Processor's obligations cease. As no data is held by the Data Processor, no data return or deletion process is required.
+Upon termination, server-side account and project data must be handled according to the final retention/deletion schedule and the parties' applicable legal obligations. This schedule and process remain a production-release gate.
 
 ## 14. Governing Law
 

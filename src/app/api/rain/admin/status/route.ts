@@ -27,10 +27,12 @@ export async function GET(_req: NextRequest) {
       bootstrapped: enterpriseCount > 0,
     })
   } catch (err) {
-    console.error('[admin/status] failed:', err)
+    console.error('[admin/status] database unavailable:', err)
+    // Never report "not bootstrapped" when the database could not be read.
+    // That would mislead the UI into exposing first-admin setup during an outage.
     return NextResponse.json(
-      { bootstrapped: false },
-      { status: 200 },
+      { error: 'Admin status is temporarily unavailable.' },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
     )
   }
 }

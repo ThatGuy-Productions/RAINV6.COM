@@ -32,57 +32,6 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export interface BrowserAutomationConfig {
-  /** Which browser to launch. Default: system Chromium (Playwright-managed). */
-  browserType?: 'chromium' | 'chrome' | 'edge'
-  /** Run headless (no visible window). Default: true. */
-  headless?: boolean
-  /** DistroKid account credentials (optional — user can log in manually). */
-  credentials?: {
-    email: string
-    password: string
-  }
-  /** Path to downloaded DDEX ZIP file to upload. */
-  packagePath: string
-  /** Release metadata for form filling. */
-  metadata: {
-    title: string
-    artist: string
-    album?: string
-    genre: string
-    isrc: string
-    upc: string
-    releaseDate: string
-    explicitLyrics?: 'none' | 'explicit' | 'clean'
-    artworkPath?: string
-    language?: string
-    label?: string
-  }
-  /** Maximum timeouts per step (ms). */
-  timeouts?: {
-    navigation?: number
-    upload?: number
-    form?: number
-  }
-}
-
-export interface BrowserStepResult {
-  step: string
-  ok: boolean
-  screenshotBase64?: string
-  error?: string
-  durationMs: number
-}
-
-export interface BrowserDeliveryResult {
-  ok: boolean
-  aggregator: string
-  steps: BrowserStepResult[]
-  confirmationUrl?: string
-  confirmationScreenshot?: string
-  error?: string
-  totalDurationMs: number
-}
 
 // ---------------------------------------------------------------------------
 // DistroKid Orchestrator
@@ -108,6 +57,7 @@ export interface BrowserDeliveryResult {
  * to survive minor UI changes.
  */
 import type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
+export type { BrowserAutomationConfig, BrowserDeliveryResult, BrowserStepResult } from './browser-distribution'
 
 /**
  * DistroKid Tier & Add-on Pricing (Researched July 2026 from distrokid.com/pricing/)
@@ -221,8 +171,8 @@ export function buildPricingTable(): Array<{
 }> {
   return Object.entries(DISTROKID_TIERS).map(([key, tier]) => ({
     tier: tier.name,
-    distrokid: `$${tier.dkPrice}/yr`,
-    rainPrice: formatZar(calculateRainPrice(tier.dkPrice)),
+    distrokid: `${formatZar(tier.dkPriceZar)}/yr`,
+    rainPrice: `${formatZar(tier.rainPriceZar)}/yr`,
     artists: String(tier.artists),
     features: tier.features.join(', '),
   }))
@@ -245,6 +195,6 @@ export function buildAddonTable(): Array<{
     rainPrice: 'rainSingle' in addon
       ? `${formatZar(addon.rainSingle)} single / ${formatZar(addon.rainAlbum)} album`
       : formatZar(addon.rainPrice),
-    note: addon.note ?? ('perYear' in addon && addon.perYear ? 'Per year' : ''),
+    note: 'note' in addon ? addon.note : ('perYear' in addon && addon.perYear ? 'Per year' : ''),
   }))
 }

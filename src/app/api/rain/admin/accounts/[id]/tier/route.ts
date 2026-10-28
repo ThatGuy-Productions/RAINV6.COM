@@ -20,7 +20,7 @@ export const runtime = 'nodejs'
 export const PATCH = withCsrf(async (
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
+) => {
   const gate = await withTierGate(req, 'enterprise')
   if (!gate.ok) {
     return NextResponse.json(

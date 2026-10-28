@@ -16,8 +16,10 @@ const KEY_STORE = 'rain-cert-keys'
 const KEY_NAME = 'rain-ed25519-primary'
 
 interface StoredKeys {
-  publicKey: JsonWebKey
-  privateKey: JsonWebKey
+  // Store CryptoKey objects directly. In particular, never serialize the
+  // private key to JWK: IndexedDB is origin-scoped storage, not a secret vault.
+  publicKey: CryptoKey
+  privateKey: CryptoKey
   createdAt: string
 }
 
@@ -63,17 +65,29 @@ async function loadKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey
           resolve(null)
           return
         }
-        const publicKey = await crypto.subtle.importKey(
-          'jwk', stored.publicKey,
-          { name: 'Ed25519' },
-          true, ['verify'],
-        )
-        const privateKey = await crypto.subtle.importKey(
-          'jwk', stored.privateKey,
-          { name: 'Ed25519' },
-          false, ['sign'],
-        )
-        resolve({ publicKey, privateKey })
+
+        // Older builds persisted private JWK material. Do not re-import or
+        // continue using that extractable secret: return null so the caller
+        // rotates it to a non-extractable key pair.
+        if (
+          typeof CryptoKey === 'undefined' ||
+          !(stored.publicKey instanceof CryptoKey) ||
+          !(stored.privateKey instanceof CryptoKey)
+        ) {
+          resolve(null)
+          return
+        }
+        if (
+          stored.publicKey.algorithm.name !== 'Ed25519' ||
+          stored.privateKey.algorithm.name !== 'Ed25519' ||
+          !stored.publicKey.usages.includes('verify') ||
+          !stored.privateKey.usages.includes('sign') ||
+          stored.privateKey.extractable
+        ) {
+          resolve(null)
+          return
+        }
+        resolve({ publicKey: stored.publicKey, privateKey: stored.privateKey })
       }
       req.onerror = () => reject(req.error)
     }))
@@ -83,9 +97,10 @@ async function loadKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey
 }
 
 async function saveKeys(publicKey: CryptoKey, privateKey: CryptoKey): Promise<void> {
-  const pubJwk = await crypto.subtle.exportKey('jwk', publicKey)
-  const privJwk = await crypto.subtle.exportKey('jwk', privateKey)
-  const stored: StoredKeys = { publicKey: pubJwk, privateKey: privJwk, createdAt: new Date().toISOString() }
+  if (privateKey.extractable) {
+    throw new Error('RAIN-CERT private key must be non-extractable')
+  }
+  const stored: StoredKeys = { publicKey, privateKey, createdAt: new Date().toISOString() }
   return withDb((db) => new Promise((resolve, reject) => {
     const tx = db.transaction('keys', 'readwrite')
     tx.objectStore('keys').put(stored, KEY_NAME)
@@ -97,7 +112,10 @@ async function saveKeys(publicKey: CryptoKey, privateKey: CryptoKey): Promise<vo
 async function getOrCreateKeys(): Promise<{ publicKey: CryptoKey; privateKey: CryptoKey }> {
   const existing = await loadKeys()
   if (existing) return existing
-  const pair = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])
+  // For asymmetric WebCrypto keys, the public key remains exportable while
+  // the private key is non-extractable. Persist the CryptoKey objects rather
+  // than exporting private JWK bytes into origin-readable IndexedDB.
+  const pair = await crypto.subtle.generateKey('Ed25519', false, ['sign', 'verify'])
   await saveKeys(pair.publicKey, pair.privateKey)
   return pair
 }
@@ -248,7 +266,7 @@ function fnv1a32(input: string): number {
  *                  same session without collisions.
  * @returns A 12-character ISRC string (no dashes).
  */
-export function generateIsrc(sessionId: string, registrant = '2XX', counter = 0): string {
+export function generateIsrc(sessionId = crypto.randomUUID(), registrant = '2XX', counter = 0): string {
   const year = new Date().getFullYear() % 100
   const hash = fnv1a32(`${sessionId}:isrc:${counter}`)
   const designation = (hash % 100000).toString().padStart(5, '0')
@@ -271,7 +289,7 @@ export function generateIsrc(sessionId: string, registrant = '2XX', counter = 0)
  *                  same session without collisions.
  * @returns A 12-digit UPC string with a valid EAN-13 check digit.
  */
-export function generateUpc(sessionId: string, counter = 0): string {
+export function generateUpc(sessionId = crypto.randomUUID(), counter = 0): string {
   const hash = fnv1a32(`${sessionId}:upc:${counter}`)
   // Use a simple LCG to generate 11 deterministic digits from the hash seed.
   // This spreads the 32-bit hash entropy across all digit positions.
@@ -289,8 +307,26 @@ export function generateUpc(sessionId: string, counter = 0): string {
 }
 
 // ---------------------------------------------------------------------------
-// RAIN-CERT generation
+// RAIN-CERT signing payload and generation
 // ---------------------------------------------------------------------------
+
+/**
+ * Canonical payload for new RAIN-CERT signatures. Bind all certificate claims,
+ * not only the output hash and manifest, so metadata edits are detectable too.
+ */
+export function createProvenanceSigningPayload(
+  cert: Pick<ProvenanceCertificate, 'certId' | 'inputHash' | 'outputHash' | 'wasmHash' | 'signedAt' | 'algorithm' | 'manifest'>,
+): ArrayBuffer {
+  return new TextEncoder().encode(JSON.stringify({
+    algorithm: cert.algorithm,
+    certId: cert.certId,
+    inputHash: cert.inputHash,
+    manifest: cert.manifest,
+    outputHash: cert.outputHash,
+    signedAt: cert.signedAt,
+    wasmHash: cert.wasmHash,
+  })).buffer as ArrayBuffer
+}
 
 export async function generateProvenance(opts: {
   inputBuffer: ArrayBuffer
@@ -333,8 +369,11 @@ export async function generateProvenance(opts: {
     }
   }
 
-  // Build C2PA manifest
+  // Certificate metadata is included in the v2 signed payload.
   const now = new Date().toISOString()
+  const certId = `RAIN-CERT-${outputHash.slice(0, 16).toUpperCase()}`
+
+  // Build C2PA manifest
   const manifest: C2PAManifest = {
     version: '2.2',
     claimGenerator: `RAIN/${'6.0.0-rc1'}`,
@@ -346,6 +385,7 @@ export async function generateProvenance(opts: {
     assertions: [
       { label: 'c2pa.actions.v2', data: { actions: ['mastered', 'dsp', 'analyzed'] } },
       { label: 'org.rain.cert.level', data: { level: 'RAIN-CERT-1', algorithm: 'Ed25519' } },
+      { label: 'org.rain.cert.signature-payload', data: { version: 2, fields: ['algorithm', 'certId', 'inputHash', 'manifest', 'outputHash', 'signedAt', 'wasmHash'] } },
       // AUDIT-M8 FIX: watermark assertion was a bare type tag implying an
       // AudioSeal 16-bit watermark was embedded. No watermarking is performed
       // (AudioSeal requires a neural model we don't ship). Now honestly states
@@ -356,10 +396,12 @@ export async function generateProvenance(opts: {
     ],
   }
 
-  // AUDIT-M8 FIX: comment said "CBOR-encoded (RFC 8949)" but we use JSON.
-  // The manifest is JSON-serialised for signing (matches verifyProvenance).
-  const manifestJson = JSON.stringify(manifest)
-  const message = new TextEncoder().encode(outputHash + manifestJson)
+  // New certificates bind every material certificate claim. verifyProvenance
+  // retains the legacy verifier for older certificates without the v2 marker.
+  const message = createProvenanceSigningPayload({
+    certId, inputHash, outputHash, wasmHash: engineHash, signedAt: now,
+    algorithm: 'Ed25519', manifest,
+  })
   const signatureBuf = await crypto.subtle.sign('Ed25519', keys.privateKey, message)
   const signature = bufToHex(signatureBuf)
 
@@ -367,8 +409,6 @@ export async function generateProvenance(opts: {
   // Use btoa directly — Buffer is not defined in the browser and the `Buffer ?`
   // ternary throws a ReferenceError before the fallback runs.
   const publicKey = btoa(JSON.stringify(pubJwk))
-
-  const certId = `RAIN-CERT-${outputHash.slice(0, 16).toUpperCase()}`
 
   return {
     certId,
@@ -390,8 +430,13 @@ export async function verifyProvenance(cert: ProvenanceCertificate): Promise<boo
   try {
     const pubJwk = JSON.parse(atob(cert.publicKey))
     const publicKey = await crypto.subtle.importKey('jwk', pubJwk, { name: 'Ed25519' }, true, ['verify'])
-    const manifestJson = JSON.stringify(cert.manifest)
-    const message = new TextEncoder().encode(cert.outputHash + manifestJson)
+    const hasV2Payload = cert.manifest.assertions.some(assertion =>
+      assertion.label === 'org.rain.cert.signature-payload' &&
+      (assertion.data as { version?: unknown }).version === 2,
+    )
+    const message = hasV2Payload
+      ? createProvenanceSigningPayload(cert)
+      : new TextEncoder().encode(cert.outputHash + JSON.stringify(cert.manifest)).buffer as ArrayBuffer
     const sigBytes = hexToBuf(cert.signature)
     // Must await — returning the promise without await defeats the try/catch
     // (async function semantics: `return p` ≠ `return await p` for error handling).

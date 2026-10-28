@@ -23,9 +23,9 @@
  *      hardcoded string. Includes bed DirectSpeakers AND dynamic Objects
  *      audioChannelFormats when `objects > 0`.
  *   7. Multi-channel BWF encoder (bext + fmt + data + axml chunks).
- *   8. Atmos package exporter: produces a real ZIP containing the .atmos.wav
+ *   8. ADM BWF spatial package exporter: produces a real ZIP containing the .spatial-bwf.wav
  *      ADM BWF file + a standalone audioDefinitionModelBwf.xml sidecar, ready
- *      for Dolby Atmos Renderer import.
+ *      for external renderer validation; this does not certify a Dolby Atmos deliverable.
  *
  * Output modes (config.outputMode):
  *   - STEREO:       M/S-enhanced stereo only (2ch). No upmix, no HRTF.
@@ -112,7 +112,7 @@ export interface SpatialResult {
   /** How many seconds of audio were processed (capped for memory). */
   processedSeconds: number
   /** True if the input was longer than maxDurationSec and was truncated.
-   *  Callers that must NOT ship a truncated result (e.g. the Atmos export
+   *  Callers that must NOT ship a truncated result (e.g. the spatial package export
    *  path) check this flag and refuse to download — no silent truncation. */
   truncated: boolean
   /** The actual duration of the input audio in seconds (before truncation). */
@@ -629,7 +629,7 @@ function fmt(n: number, decimals: number = 6): string {
  * audioChannelFormat with typeDefinition="Objects" and a cartesian
  * audioBlockFormat positioning the object in 3D space (X/Y/Z derived from
  * the object's azimuth/elevation or its pad x/y). This is the real
- * Dolby-Atmos-compatible Objects metadata that the renderer uses to pan the
+ * ADM Objects metadata that the renderer uses to pan the
  * object dynamically during playback.
  */
 export function generateAdmXml(config: SpatialConfig): string {
@@ -877,7 +877,7 @@ function yieldToUI(): Promise<void> {
  * Duration cap: `maxDurationSec` (default 60s for the Spatial tab preview).
  * If the input exceeds it, the audio is truncated AND `result.truncated`
  * is set to `true` (+ `result.inputSeconds` carries the real input length).
- * Callers that must ship the full track (the Atmos export path) pass a
+ * Callers that must ship the full track (the spatial package export path) pass a
  * larger cap and check `result.truncated` — refusing to download a
  * truncated file rather than silently shipping 60s of a longer track.
  */
@@ -1019,13 +1019,13 @@ export async function processSpatial(
 }
 
 // ---------------------------------------------------------------------------
-// Atmos package export — real ZIP with .atmos.wav + audioDefinitionModelBwf.xml
+// Experimental ADM BWF spatial package — ZIP with .spatial-bwf.wav + XML sidecar
 // ---------------------------------------------------------------------------
 
 /**
  * Minimal ZIP archive writer (stored, no compression) per PKWARE APPNOTE 6.3.10.
- * Used to bundle the .atmos.wav ADM BWF file + the standalone ADM XML sidecar
- * into a single downloadable .atmos.zip package. No external dependencies.
+ * Used to bundle the .spatial-bwf.wav ADM BWF file + the standalone ADM XML sidecar
+ * into a single downloadable .spatial-adm.zip package. No external dependencies.
  *
  * Each file is stored uncompressed (method 0). CRC32 is computed per the
  * standard PKWARE polynomial (0xEDB88320 reflected). The archive layout is:
@@ -1147,13 +1147,13 @@ function buildCrcTable(): Uint32Array {
 }
 
 /**
- * Build a real Dolby-Atmos-compatible FULL-SOURCE package as a single
+ * Build an experimental ADM BWF spatial draft as a single
  * downloadable ZIP. The archive contains:
  *
- *   1. <basename>.atmos.wav           — ADM BWF WAV file (bext + fmt + data +
+ *   1. <basename>.spatial-bwf.wav           — ADM BWF WAV file (bext + fmt + data +
  *                                       axml chunks), 24-bit PCM, N channels
  *                                       (bed + object beds). This is the file
- *                                       Dolby Atmos Renderer imports.
+ *                                       a compatible renderer can inspect after independent validation.
  *   2. audioDefinitionModelBwf.xml    — Standalone ADM XML sidecar (the same
  *                                       content embedded in the axml chunk,
  *                                       provided as a separate file for tools
@@ -1180,14 +1180,14 @@ function buildCrcTable(): Uint32Array {
  * NOTE: This function is async because MANIFEST.json computes a real SHA-256
  * over every file via WebCrypto (`crypto.subtle.digest`). No fabricated hashes.
  */
-export async function exportAtmosPackage(
+export async function exportSpatialPackage(
   result: SpatialResult,
   metadata: { title: string; artist: string },
   config?: SpatialConfig,
 ): Promise<Blob> {
   const safeBase = (metadata.title || 'rain-spatial').replace(/\s+/g, '_').replace(/[^\w.-]/g, '_')
 
-  // 1. Build the .atmos.wav ADM BWF bytes (real bext + fmt + data + axml).
+  // 1. Build the .spatial-bwf.wav ADM BWF bytes (real bext + fmt + data + axml).
   const bwfAsm = exportSpatialBwfAssembly(result, metadata)
   const bwfBytes = new Uint8Array(bwfAsm.arrayBuffer, 0, bwfAsm.size)
 
@@ -1203,12 +1203,12 @@ export async function exportAtmosPackage(
   const spatialBytes = new TextEncoder().encode(spatialMeta)
 
   // 4. Human-readable README.
-  const readme = buildAtmosReadme(safeBase, result, metadata, bedFormat, speakers, numObjects)
+  const readme = buildSpatialReadme(safeBase, result, metadata, bedFormat, speakers, numObjects)
   const readmeBytes = new TextEncoder().encode(readme)
 
   // 5. Pack into a ZIP first (so MANIFEST can hash the exact bytes).
   const zip = new ZipWriter()
-  zip.addFile(`${safeBase}.atmos.wav`, bwfBytes)
+  zip.addFile(`${safeBase}.spatial-bwf.wav`, bwfBytes)
   zip.addFile('audioDefinitionModelBwf.xml', xmlBytes)
   zip.addFile(`${safeBase}.spatial.json`, spatialBytes)
   zip.addFile('README.txt', readmeBytes)
@@ -1219,7 +1219,7 @@ export async function exportAtmosPackage(
   //    AFTER serialization, stored as a top-level self-hash field. This lets a
   //    verifier confirm the manifest itself was not tampered with.
   const filesForManifest = [
-    { path: `${safeBase}.atmos.wav`, bytes: bwfBytes },
+    { path: `${safeBase}.spatial-bwf.wav`, bytes: bwfBytes },
     { path: 'audioDefinitionModelBwf.xml', bytes: xmlBytes },
     { path: `${safeBase}.spatial.json`, bytes: spatialBytes },
     { path: 'README.txt', bytes: readmeBytes },
@@ -1239,7 +1239,7 @@ export async function exportAtmosPackage(
 /** Infer the bed format from the multichannel channel count (best-effort). */
 function inferBedFormat(channels: number): SpatialConfig['bedFormat'] {
   if (channels === 12) return '7.1.4'
-  if (channels === 8) return '5.1.2' // could also be 7.1; 5.1.2 is the common Atmos bed
+  if (channels === 8) return '5.1.2' // could also be 7.1; 5.1.2 is the common height-channel bed
   if (channels === 6) return '5.1'
   return '7.1'
 }
@@ -1347,7 +1347,7 @@ function buildSpatialMetadataJson(
 }
 
 /** Build the human-readable README.txt. */
-function buildAtmosReadme(
+function buildSpatialReadme(
   safeBase: string,
   result: SpatialResult,
   metadata: { title: string; artist: string },
@@ -1358,7 +1358,9 @@ function buildAtmosReadme(
   const totalChannels = speakers.length + numObjects
   const lines: string[] = []
   lines.push('================================================================')
-  lines.push('  RAIN V6 — Dolby Atmos Full-Source Master Package')
+  lines.push('  RAIN V6 — Experimental ADM BWF Spatial Package (NOT Dolby Atmos Certified)')
+  lines.push('IMPORTANT: This is an experimental ADM BWF spatial draft, not a Dolby Atmos-certified deliverable.')
+  lines.push('Validate in the target renderer and against the distributor specification before commercial use.')
   lines.push('================================================================')
   lines.push('')
   lines.push(`Title:    ${metadata.title || '(untitled)'}`)
@@ -1370,14 +1372,14 @@ function buildAtmosReadme(
   lines.push('  PACKAGE CONTENTS')
   lines.push('----------------------------------------------------------------')
   lines.push('')
-  lines.push(`  1. ${safeBase}.atmos.wav`)
+  lines.push(`  1. ${safeBase}.spatial-bwf.wav`)
   lines.push(`     ADM BWF WAV file — 24-bit PCM, ${totalChannels} channels, ${result.sampleRate} Hz.`)
   lines.push(`     Chunks: RIFF/WAVE, bext (EBU Tech 3285 v2), fmt, data, axml.`)
-  lines.push(`     This is the file the Dolby Atmos Renderer imports directly.`)
+  lines.push(`     Import into a compatible spatial renderer for validation; this package is not Dolby Atmos-certified.`)
   lines.push('')
   lines.push(`  2. audioDefinitionModelBwf.xml`)
   lines.push(`     Standalone ADM XML sidecar (ITU-R BS.2076-2). Identical to`)
-  lines.push(`     the axml chunk embedded in the .atmos.wav — provided as a`)
+  lines.push(`     the axml chunk embedded in the .spatial-bwf.wav — provided as a`)
   lines.push(`     separate file for tools that expect a sidecar.`)
   lines.push('')
   lines.push(`  3. ${safeBase}.spatial.json`)
@@ -1400,7 +1402,7 @@ function buildAtmosReadme(
   lines.push('')
   lines.push(`  Bed format: ${bedFormat} (${speakers.length} channels)`)
   lines.push(`  Dynamic objects: ${numObjects}`)
-  lines.push(`  WAV audio channels: ${speakers.length}  (bed — the .atmos.wav file contains ${speakers.length} PCM tracks)`)
+  lines.push(`  WAV audio channels: ${speakers.length}  (bed — the .spatial-bwf.wav file contains ${speakers.length} PCM tracks)`)
   lines.push(`  ADM-declared channels: ${totalChannels}  (bed + ${numObjects} object metadata entries in the XML)`)
   lines.push(`  Sample rate: ${result.sampleRate} Hz`)
   lines.push(`  Bit depth: 24-bit PCM (signed, little-endian, packed)`)
@@ -1439,19 +1441,19 @@ function buildAtmosReadme(
   lines.push('  IMPORT INSTRUCTIONS')
   lines.push('----------------------------------------------------------------')
   lines.push('')
-  lines.push('  Dolby Atmos Renderer:')
-  lines.push('    File → Import Audio... → select the .atmos.wav file.')
+  lines.push('  Optional validation in Dolby Atmos Renderer (not certification):')
+  lines.push('    File → Import Audio... → select the .spatial-bwf.wav file.')
   lines.push('    The renderer reads the axml chunk for full ADM metadata.')
   lines.push('')
   lines.push('  Pro Tools / Nuendo / Reaper:')
-  lines.push('    Import the .atmos.wav as multichannel audio. The ADM sidecar')
+  lines.push('    Import the .spatial-bwf.wav as multichannel audio. The ADM sidecar')
   lines.push('    (audioDefinitionModelBwf.xml) is auto-discovered when co-located.')
   lines.push('')
   lines.push('  FFmpeg (verify channels):')
-  lines.push(`    ffprobe -i ${safeBase}.atmos.wav -show_entries stream=channels,channel_layout`)
+  lines.push(`    ffprobe -i ${safeBase}.spatial-bwf.wav -show_entries stream=channels,channel_layout`)
   lines.push('')
   lines.push('  Verify package integrity:')
-  lines.push('    sha256sum *.atmos.wav audioDefinitionModelBwf.xml *.spatial.json README.txt')
+  lines.push('    sha256sum *.spatial-bwf.wav audioDefinitionModelBwf.xml *.spatial.json README.txt')
   lines.push('    Compare against MANIFEST.json → files[].sha256')
   lines.push('')
   lines.push('----------------------------------------------------------------')
@@ -1493,7 +1495,7 @@ async function buildManifestJson(
   }
   const manifest = {
     schema: 'rain.manifest.v1',
-    package: 'rain-atmos-full-source',
+    package: 'rain-spatial-adm-bwf',
     title: metadata.title,
     artist: metadata.artist,
     builtAt: new Date().toISOString(),
