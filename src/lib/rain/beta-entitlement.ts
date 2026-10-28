@@ -1,22 +1,11 @@
 /**
- * Server-side beta entitlement loader and usage ledger writer.
+ * Server-side beta entitlement loader and usage ledger.
  *
- * Loads durable counters and a verified R49 unlock, then applies the pure
- * policy in beta-entitlement-policy.ts. Never trusts browser-supplied
- * counters or paid flags.
+ * Free path: two full-capability renders (each includes one export).
+ * Paid path (verified R49 unlock): 1 500 credits/month at 25/render +
+ * hard cap of 30 successful exports/month.
  *
- * Free path (no verified unlock):
- *   - Two full-capability renders, each including one export.
- *   - Counted from completed UsageRecord use_credit rows when present;
- *     otherwise falls back to export_completed Event rows for the same
- *     identity (transitional compatibility with the previous UX gate).
- *
- * Paid path (verified active beta_r49_unlock entitlement):
- *   - 1 500 credits / month at 25 credits per completed render.
- *   - Hard cap of 30 successful exports / month.
- *   - Credits and exports prefer UsageRecord; Events are a fallback only.
- *
- * Checkout remains disabled until a real provider + webhook path exists.
+ * Checkout remains disabled until a real provider + webhook exist.
  */
 
 import { createHash, randomBytes } from 'crypto'
@@ -46,11 +35,9 @@ export interface BetaEntitlementSnapshot extends BetaEntitlementDecision {
   unlockAmountCents: number
   currency: typeof BETA_UNLOCK_CURRENCY
   historicalDataComplete: false
-  /** Always false until provider callback + durable payment ledger land. */
   checkoutConfigured: false
   checkoutAvailable: false
   paymentStatus: 'not_live'
-  /** Whether UsageRecord rows were present for this identity. */
   usageLedgerPresent: boolean
 }
 
@@ -58,7 +45,6 @@ export interface RecordUsageInput {
   userId: string | null
   anonId: string | null
   kind: 'use_credit' | 'export'
-  /** Client-supplied operation id or output hash for idempotency. */
   operationId?: string | null
   format?: string | null
   metadata?: Record<string, unknown>
@@ -81,7 +67,7 @@ async function countUsageRecords(
   userId: string | null,
   anonId: string | null,
   kind: 'use_credit' | 'export',
-  status: 'completed',
+  status: 'completed' | 'reserved',
   since?: Date,
 ): Promise<number> {
   const base = identityWhere(userId, anonId)
@@ -91,7 +77,11 @@ async function countUsageRecords(
       ...base,
       kind,
       status,
-      ...(since ? { completedAt: { gte: since } } : {}),
+      ...(since
+        ? status === 'completed'
+          ? { completedAt: { gte: since } }
+          : { createdAt: { gte: since } }
+        : {}),
     },
   })
 }
@@ -131,7 +121,7 @@ async function hasActiveR49Unlock(userId: string | null): Promise<boolean> {
 
 /**
  * Load durable counters and evaluate the canonical beta policy.
- * Safe to call from API routes. Returns a snapshot suitable for JSON.
+ * Reserved rows count against allowance so concurrent tabs cannot overspend.
  */
 export async function loadBetaEntitlement(
   ctx: BetaEntitlementContext,
@@ -146,35 +136,41 @@ export async function loadBetaEntitlement(
   const monthStart = startOfUtcMonth()
 
   const [
-    freeUseCredits,
+    freeUseCompleted,
+    freeUseReserved,
     freeExportsLegacy,
     unlocked,
-    monthlyUseCredits,
-    monthlyExportsLedger,
+    monthlyUseCompleted,
+    monthlyUseReserved,
+    monthlyExportsCompleted,
+    monthlyExportsReserved,
     monthlyExportsLegacy,
   ] = await Promise.all([
     countUsageRecords(userId, anonId, 'use_credit', 'completed'),
+    countUsageRecords(userId, anonId, 'use_credit', 'reserved'),
     countEvents(userId, anonId, 'export_completed'),
     hasActiveR49Unlock(userId),
     countUsageRecords(userId, anonId, 'use_credit', 'completed', monthStart),
+    countUsageRecords(userId, anonId, 'use_credit', 'reserved', monthStart),
     countUsageRecords(userId, anonId, 'export', 'completed', monthStart),
+    countUsageRecords(userId, anonId, 'export', 'reserved', monthStart),
     countEvents(userId, anonId, 'export_completed', monthStart),
   ])
 
-  // Prefer the durable usage ledger when any rows exist for this identity.
-  // Otherwise fall back to the previous export_completed Event count so
-  // existing beta users are not reset by the policy wiring.
-  const usageLedgerPresent = freeUseCredits > 0 || monthlyExportsLedger > 0
+  const usageLedgerPresent =
+    freeUseCompleted + freeUseReserved + monthlyExportsCompleted + monthlyExportsReserved > 0
+
+  // Reserved rows block concurrent double-spend until completed or released.
   const completedFreeRenders = usageLedgerPresent
-    ? freeUseCredits
+    ? freeUseCompleted + freeUseReserved
     : Math.min(BETA_FREE_RENDER_ALLOWANCE, freeExportsLegacy)
 
   const monthlyCreditsUsed = usageLedgerPresent
-    ? monthlyUseCredits * BETA_CREDITS_PER_RENDER
+    ? (monthlyUseCompleted + monthlyUseReserved) * BETA_CREDITS_PER_RENDER
     : 0
 
   const successfulExportsThisMonth = usageLedgerPresent
-    ? monthlyExportsLedger
+    ? monthlyExportsCompleted + monthlyExportsReserved
     : monthlyExportsLegacy
 
   const decision = evaluateBetaEntitlement({
@@ -187,10 +183,10 @@ export async function loadBetaEntitlement(
   return {
     ...decision,
     policy: 'beta-two-free-renders-then-r49-unlock',
-    completedFreeRenders,
+    completedFreeRenders: freeUseCompleted,
     hasVerifiedR49Unlock: unlocked,
-    monthlyCreditsUsed,
-    successfulExportsThisMonth,
+    monthlyCreditsUsed: monthlyUseCompleted * BETA_CREDITS_PER_RENDER,
+    successfulExportsThisMonth: usageLedgerPresent ? monthlyExportsCompleted : monthlyExportsLegacy,
     unlockAmountCents: BETA_UNLOCK_AMOUNT_CENTS,
     currency: BETA_UNLOCK_CURRENCY,
     historicalDataComplete: false,
@@ -201,35 +197,146 @@ export async function loadBetaEntitlement(
   }
 }
 
-function buildIdempotencyKey(input: RecordUsageInput): string {
-  const seed = [
+function buildIdempotencyKey(parts: string[]): string {
+  return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 64)
+}
+
+function stableKey(input: RecordUsageInput, status: string): string {
+  if (input.operationId && input.operationId.length >= 8) {
+    return buildIdempotencyKey([
+      status,
+      input.kind,
+      input.userId ?? 'anon',
+      input.anonId ?? '',
+      input.operationId,
+      input.format ?? '',
+    ])
+  }
+  return buildIdempotencyKey([
+    status,
     input.kind,
     input.userId ?? 'anon',
     input.anonId ?? '',
-    input.operationId ?? '',
-    input.format ?? '',
-  ].join('|')
-  if (input.operationId && input.operationId.length >= 16) {
-    return createHash('sha256').update(seed).digest('hex').slice(0, 64)
-  }
-  // No stable operation id — still unique per call so we do not collide,
-  // but retries without operationId will count again (documented limitation).
-  return createHash('sha256')
-    .update(`${seed}|${randomBytes(16).toString('hex')}`)
-    .digest('hex')
-    .slice(0, 64)
+    randomBytes(16).toString('hex'),
+  ])
 }
 
-/**
- * Persist a completed usage row. Idempotent when operationId is supplied.
- * Returns { created: true } on insert, { created: false } on duplicate key.
- */
-export async function recordCompletedUsage(input: RecordUsageInput): Promise<{ created: boolean; id: string | null }> {
+export type ReserveResult =
+  | { ok: true; reservationId: string; entitlement: BetaEntitlementSnapshot }
+  | { ok: false; reason: string; entitlement: BetaEntitlementSnapshot; status: 402 | 503 }
+
+/** Reserve a credit or export slot after a live entitlement check. */
+export async function reserveUsage(input: RecordUsageInput): Promise<ReserveResult> {
   if (!input.userId && !input.anonId) {
-    return { created: false, id: null }
+    throw new Error('An anonymous beta ID or signed-in account is required.')
   }
-  const idempotencyKey = buildIdempotencyKey(input)
+
+  let entitlement: BetaEntitlementSnapshot
+  try {
+    entitlement = await loadBetaEntitlement({
+      userId: input.userId,
+      anonId: input.anonId,
+    })
+  } catch {
+    return {
+      ok: false,
+      reason: 'entitlement-unavailable',
+      entitlement: await loadBetaEntitlement({
+        userId: input.userId,
+        anonId: input.anonId,
+      }).catch(() => ({
+        canStartFullCapabilityRender: false,
+        canExport: false,
+        freeRendersRemaining: 0,
+        monthlyCreditsRemaining: null,
+        paidRendersRemainingByCredits: null,
+        monthlyExportsRemaining: null,
+        reason: 'payment-required' as const,
+        policy: 'beta-two-free-renders-then-r49-unlock' as const,
+        completedFreeRenders: 0,
+        hasVerifiedR49Unlock: false,
+        monthlyCreditsUsed: 0,
+        successfulExportsThisMonth: 0,
+        unlockAmountCents: BETA_UNLOCK_AMOUNT_CENTS,
+        currency: BETA_UNLOCK_CURRENCY,
+        historicalDataComplete: false as const,
+        checkoutConfigured: false as const,
+        checkoutAvailable: false as const,
+        paymentStatus: 'not_live' as const,
+        usageLedgerPresent: false,
+      })),
+      status: 503,
+    }
+  }
+
+  if (input.kind === 'use_credit' && !entitlement.canStartFullCapabilityRender) {
+    return { ok: false, reason: entitlement.reason, entitlement, status: 402 }
+  }
+  if (input.kind === 'export' && !entitlement.canExport) {
+    return { ok: false, reason: entitlement.reason, entitlement, status: 402 }
+  }
+
+  const idempotencyKey = stableKey(input, 'reserved')
+  try {
+    const row = await db.usageRecord.create({
+      data: {
+        userId: input.userId,
+        anonId: input.anonId,
+        kind: input.kind,
+        status: 'reserved',
+        idempotencyKey,
+        operationId: input.operationId ?? null,
+        format: input.format ?? null,
+        metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      },
+      select: { id: true },
+    })
+    return { ok: true, reservationId: row.id, entitlement }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    // Duplicate reservation for same operationId → treat as success (idempotent).
+    if (message.includes('Unique constraint') || message.includes('idempotencyKey')) {
+      const existing = await db.usageRecord.findFirst({
+        where: { idempotencyKey },
+        select: { id: true, status: true },
+      })
+      if (existing) {
+        return { ok: true, reservationId: existing.id, entitlement }
+      }
+    }
+    console.error('[beta-entitlement] reserve failed:', err)
+    return { ok: false, reason: 'reserve-failed', entitlement, status: 503 }
+  }
+}
+
+/** Mark a reserved row completed, or create a completed row if none exists. */
+export async function completeUsage(input: RecordUsageInput & { reservationId?: string | null }): Promise<{ created: boolean; id: string | null }> {
+  if (!input.userId && !input.anonId) return { created: false, id: null }
   const now = new Date()
+
+  if (input.reservationId) {
+    try {
+      const updated = await db.usageRecord.updateMany({
+        where: {
+          id: input.reservationId,
+          status: 'reserved',
+          ...(input.userId ? { userId: input.userId } : { anonId: input.anonId }),
+        },
+        data: {
+          status: 'completed',
+          completedAt: now,
+          format: input.format ?? undefined,
+          metadata: input.metadata ? JSON.stringify(input.metadata) : undefined,
+        },
+      })
+      if (updated.count > 0) return { created: true, id: input.reservationId }
+    } catch (err) {
+      console.error('[beta-entitlement] complete reservation failed:', err)
+    }
+  }
+
+  // Fallback: direct completed write (idempotent on operationId).
+  const idempotencyKey = stableKey(input, 'completed')
   try {
     const row = await db.usageRecord.create({
       data: {
@@ -247,13 +354,40 @@ export async function recordCompletedUsage(input: RecordUsageInput): Promise<{ c
     })
     return { created: true, id: row.id }
   } catch (err: unknown) {
-    // Unique constraint on idempotencyKey → already recorded.
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes('Unique constraint') || message.includes('idempotencyKey')) {
       return { created: false, id: null }
     }
     throw err
   }
+}
+
+/** Release a reservation so failed client work does not consume allowance. */
+export async function releaseUsage(input: {
+  userId: string | null
+  anonId: string | null
+  reservationId: string
+}): Promise<boolean> {
+  if (!input.reservationId) return false
+  try {
+    const result = await db.usageRecord.updateMany({
+      where: {
+        id: input.reservationId,
+        status: 'reserved',
+        ...(input.userId ? { userId: input.userId } : { anonId: input.anonId }),
+      },
+      data: { status: 'released' },
+    })
+    return result.count > 0
+  } catch (err) {
+    console.error('[beta-entitlement] release failed:', err)
+    return false
+  }
+}
+
+/** @deprecated Prefer completeUsage */
+export async function recordCompletedUsage(input: RecordUsageInput): Promise<{ created: boolean; id: string | null }> {
+  return completeUsage(input)
 }
 
 export {
