@@ -49,8 +49,8 @@ The extraction reports different SHA-256 values for the whole WAV, its audio `da
 - `verifyProvenance()` can verify the Ed25519 signature against the public key carried in the certificate. That establishes mathematical signature validity for that key; it does not independently establish that the key belongs to RAIN.
 - The export verification functions in `src/lib/rain/audio-engine.ts` calculate a SHA-256 of the exported Blob for the UI report, then check whether expected RIFF/ID3 fields are present. They do **not** currently parse the embedded certificate and call `verifyProvenance()`, nor do they recompute the certificate's Float32 output hash from the exported PCM/MP3.
 - Consequently, the current “Signature (Ed25519)” row is a field-presence check, not cryptographic signature verification. The displayed whole-file SHA-256 identifies the exact bytes inspected, but is not itself signed or stored in a trusted reference by this verifier.
-- The Export tab previously proceeded to download even when these field-presence checks failed. It now blocks WAV/MP3 delivery on a mismatch. This is a fail-closed improvement, but it is not yet a complete tamper-verification chain.
-- The Export Summary previously claimed “LSB steganographic ✓” despite the certificate stating that no watermark is embedded. The label now honestly reports “Not embedded (AudioSeal unavailable).”
+- The initial attempted UI change to block WAV/MP3 delivery on field-presence mismatch was reverted before release because it was untested and could disrupt existing beta workflows. Production-facing export behavior is intentionally unchanged while a safe test plan is developed.
+- The initial attempted watermark-label change was also reverted from the export UI pending a dedicated, tested correction. The extracted sample says AudioSeal was not embedded; the separate UI label claiming LSB steganography must be reconciled against the actual encoder implementation before changing user-facing behavior.
 
 ### Required next acceptance gate
 
@@ -62,3 +62,8 @@ The extraction reports different SHA-256 values for the whole WAV, its audio `da
 6. Test WAV, MP3 and Distribution Package ZIP separately; a passing WAV field-presence check is not evidence for the other paths.
 
 Until those tests pass, describe the current export as **embedded provenance metadata with field-presence checks**, not fully independently verified, immutable certification.
+
+
+## Production-safety correction — 2026-10-28
+
+An initial change to make ExportTab fail closed on the existing field-presence result was reverted before release. The current verifier only checks whether metadata fields exist; it does not yet cryptographically verify the embedded certificate. Using this result as a download-blocking gate without testing all export cases could cause false failures and break the live beta. No production deployment was made by this change. Future integrity improvements must first be implemented and tested in isolation, with positive and negative fixtures for WAV, MP3 and distribution packages, then reviewed for compatibility before any rollout.
