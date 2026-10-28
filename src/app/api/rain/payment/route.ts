@@ -5,41 +5,20 @@
  * POST /api/rain/payment (body.action=confirm) — Confirm a payment
  * GET  /api/rain/payment?paymentSessionId=xxx — Check payment status
  *
- * SECURITY: This route is the single entry point for all payment operations.
- * Every request is validated for:
- *   - Same-origin (prevent CSRF)
- *   - Rate limiting (3 attempts per session per minute)
- *   - Session isolation (UUIDv7 — no cross-user payment data)
- *   - Payment token expiry (5 minutes)
- *   - Idempotency (same paymentSessionId → same result)
- *   - Beta mode (R0.00 with infrastructure verified)
- *
- * Architecture:
- *   Client → POST /api/rain/payment → PaymentIsolation.createSession()
- *     → Beta mode: { ok: true, betaMode: true, amount: 0 }
- *     → Live mode: Redirect to PayFast/Ozow/Stripe gateway
- *     → Callback: POST /api/rain/payment/confirm
- *     → Confirmation: PaymentIsolation.confirmPayment()
- *     → Distribution: separate POST /api/rain/distribute with the complete verified ZIP
- *
- * IDEMPOTENCY:
- *   The paymentSessionId is the idempotency key. If a payment with the same
- *   sessionId has already been confirmed, the existing result is returned
- *   instead of creating a new payment. No duplicate charges.
+ * Live PayFast redirects are refused unless getPaymentReadiness().liveEnabled
+ * (public URL confirmed + PAYFAST_LIVE_ENABLED=true + credentials).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { PaymentIsolation, isBetaMode, type PaymentMethod } from '@/lib/rain/payment-isolation'
+import { PaymentIsolation, type PaymentMethod } from '@/lib/rain/payment-isolation'
+import { isNonLivePaymentMode } from '@/lib/rain/payment-mode'
+import { getPaymentReadiness } from '@/lib/rain/payment-readiness'
 import { checkRateLimit } from '@/lib/rain/rate-limit'
 import { formatZar } from '@/lib/rain/sa-regional'
 import { withCsrf } from '@/lib/rain/csrf'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
-
-// ---------------------------------------------------------------------------
-// Allowed origins (same-origin check)
-// ---------------------------------------------------------------------------
 
 const ALLOWED_ORIGINS = [
   process.env.NEXT_PUBLIC_APP_URL,
@@ -48,25 +27,15 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3001',
 ].filter(Boolean) as string[]
 
-/**
- * Verify that the request origin matches the allowed origins.
- * Prevents CSRF by rejecting cross-origin payment requests.
- */
 function isSameOrigin(req: NextRequest): boolean {
   const origin = req.headers.get('origin')
-  if (!origin) {
-    // Origin-less requests are allowed through this check only; the CSRF
-    // wrapper and payment token/session checks remain mandatory.
-    return true
-  }
-
+  if (!origin) return true
   let requestOrigin: string
   try {
     requestOrigin = new URL(origin).origin
   } catch {
     return false
   }
-
   return ALLOWED_ORIGINS.some((allowed) => {
     try {
       return new URL(allowed).origin === requestOrigin
@@ -76,44 +45,23 @@ function isSameOrigin(req: NextRequest): boolean {
   })
 }
 
-// ---------------------------------------------------------------------------
-// CORS headers
-// ---------------------------------------------------------------------------
-
 function corsHeaders(origin: string | null): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Payment-Token, X-Session-Id',
     'Access-Control-Max-Age': '86400',
-    'Vary': 'Origin',
+    Vary: 'Origin',
   }
 }
 
-// ---------------------------------------------------------------------------
-// OPTIONS — CORS preflight
-// ---------------------------------------------------------------------------
-
 export async function OPTIONS(req: NextRequest): Promise<NextResponse> {
-  const origin = req.headers.get('origin')
-  return new NextResponse(null, {
-    status: 204,
-    headers: corsHeaders(origin),
-  })
+  return new NextResponse(null, { status: 204, headers: corsHeaders(req.headers.get('origin')) })
 }
-
-// ---------------------------------------------------------------------------
-// POST — Create isolated payment session OR confirm payment
-// ---------------------------------------------------------------------------
-// Route behavior:
-//   body.action === 'confirm' → confirm a payment (after provider callback)
-//   body.action === 'create' or absent → create a new payment session
-// ---------------------------------------------------------------------------
 
 export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => {
   const origin = req.headers.get('origin')
 
-  // ── Same-origin check ──────────────────────────────────────────────────
   if (!isSameOrigin(req)) {
     return NextResponse.json(
       { ok: false, error: 'Cross-origin payment requests are not allowed.', stage: 'security' },
@@ -121,11 +69,14 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
     )
   }
 
-  // ── Global rate limit ──────────────────────────────────────────────────
   const rateCheck = await checkRateLimit(req, 'payment:global', 10)
   if (!rateCheck.ok) {
     return NextResponse.json(
-      { ok: false, error: rateCheck.unavailable ? 'Rate limiting service unavailable' : 'Too many payment requests. Please wait.', retryAfter: rateCheck.retryAfter },
+      {
+        ok: false,
+        error: rateCheck.unavailable ? 'Rate limiting service unavailable' : 'Too many payment requests. Please wait.',
+        retryAfter: rateCheck.retryAfter,
+      },
       {
         status: rateCheck.unavailable ? 503 : 429,
         headers: {
@@ -136,7 +87,6 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
     )
   }
 
-  // ── Parse request body ─────────────────────────────────────────────────
   let body: Record<string, unknown>
   try {
     body = await req.json()
@@ -148,18 +98,11 @@ export const POST = withCsrf(async (req: NextRequest): Promise<NextResponse> => 
   }
 
   const action = typeof body.action === 'string' ? body.action : 'create'
-
-  // ── Route to the appropriate handler ───────────────────────────────────
   if (action === 'confirm') {
     return handleConfirm(req, body, origin)
   }
-
   return handleCreate(body, req, origin)
 })
-
-// ---------------------------------------------------------------------------
-// handleCreate — Create a new isolated payment session
-// ---------------------------------------------------------------------------
 
 async function handleCreate(
   body: Record<string, unknown>,
@@ -167,8 +110,9 @@ async function handleCreate(
   origin: string | null,
 ): Promise<NextResponse> {
   const isolation = PaymentIsolation.getInstance()
+  const readiness = getPaymentReadiness()
+  const nonLive = isNonLivePaymentMode()
 
-  // ── Validate required fields ────────────────────────────────────────────
   const userSessionId = typeof body.userSessionId === 'string' ? body.userSessionId.slice(0, 128) : ''
   const providerInput = typeof body.provider === 'string' ? body.provider : ''
   const amountCents = typeof body.amountCents === 'number' ? Math.round(body.amountCents) : 0
@@ -191,19 +135,12 @@ async function handleCreate(
   }
 
   const provider = providerInput as PaymentMethod
-
-  // ── Create isolated payment session ─────────────────────────────────────
   const result = await isolation.createSession(userSessionId, provider, amountCents, req)
 
   if ('error' in result) {
     const status = result.unavailable ? 503 : result.retryAfter ? 429 : 400
     return NextResponse.json(
-      {
-        ok: false,
-        error: result.error,
-        retryAfter: result.retryAfter,
-        stage: 'create_session',
-      },
+      { ok: false, error: result.error, retryAfter: result.retryAfter, stage: 'create_session' },
       {
         status,
         headers: {
@@ -215,10 +152,9 @@ async function handleCreate(
   }
 
   const { session } = result
-  const betaMode = isBetaMode()
 
-  // ── Beta mode: return mock confirmation (no real payment) ───────────────
-  if (betaMode) {
+  // Hard non-live gate: never redirect to a real gateway until readiness passes.
+  if (nonLive) {
     return NextResponse.json(
       {
         ok: true,
@@ -229,15 +165,18 @@ async function handleCreate(
         amountDisplay: formatZar(0),
         currency: 'ZAR',
         tokenExpiresAt: session.tokenExpiresAt,
-        token: session.token, // In beta, token is safe to expose for confirm flow
-        message: 'Beta mode: Payment infrastructure verified. No charges will be made (R0.00).',
-        redirectUrl: null, // No redirect in beta — payment is instant
+        token: session.token,
+        redirectUrl: null,
+        checkoutAvailable: false,
+        paymentStatus: readiness.paymentStatus,
+        blockers: readiness.blockers,
+        message:
+          'Non-live mode: payment infrastructure path only. No charges. Confirm public URL and set PAYFAST_LIVE_ENABLED=true before live checkout.',
       },
       { status: 200, headers: corsHeaders(origin) },
     )
   }
 
-  // ── Live mode: generate provider redirect URL ──────────────────────────
   const providerInstance = isolation.getProvider(provider)
   if (!providerInstance || !providerInstance.configured) {
     return NextResponse.json(
@@ -249,7 +188,6 @@ async function handleCreate(
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || origin || 'http://localhost:3000'
   const effectiveReturnUrl = returnUrl || `${appUrl}/payment/success?session=${session.paymentSessionId}`
   const effectiveCancelUrl = cancelUrl || `${appUrl}/payment/cancel?session=${session.paymentSessionId}`
-
   const redirectUrl = providerInstance.generateRedirectUrl(session, effectiveReturnUrl, effectiveCancelUrl)
 
   return NextResponse.json(
@@ -261,15 +199,13 @@ async function handleCreate(
       currency: 'ZAR',
       tokenExpiresAt: session.tokenExpiresAt,
       redirectUrl,
+      checkoutAvailable: true,
+      paymentStatus: 'live_ready',
       message: 'Redirect to payment gateway to complete payment.',
     },
     { status: 200, headers: corsHeaders(origin) },
   )
 }
-
-// ---------------------------------------------------------------------------
-// handleConfirm — Confirm a payment and trigger distribution
-// ---------------------------------------------------------------------------
 
 async function handleConfirm(
   req: NextRequest,
@@ -277,7 +213,7 @@ async function handleConfirm(
   origin: string | null,
 ): Promise<NextResponse> {
   const isolation = PaymentIsolation.getInstance()
-  const betaMode = isBetaMode()
+  const nonLive = isNonLivePaymentMode()
 
   const paymentSessionId = typeof body.paymentSessionId === 'string' ? body.paymentSessionId : ''
   const token = typeof body.token === 'string' ? body.token : ''
@@ -290,7 +226,6 @@ async function handleConfirm(
     )
   }
 
-  // ── Validate token ──────────────────────────────────────────────────────
   const session = isolation.validateToken(paymentSessionId, token)
   if (!session) {
     return NextResponse.json(
@@ -299,8 +234,7 @@ async function handleConfirm(
     )
   }
 
-  // ── Beta mode: auto-confirm with mock signature ─────────────────────────
-  if (betaMode) {
+  if (nonLive) {
     const betaProviderData: Record<string, string> = {
       pf_payment_id: `beta-${paymentSessionId}`,
       amount_gross: '0.00',
@@ -310,31 +244,14 @@ async function handleConfirm(
       custom_str1: session.userSessionId,
       custom_str2: session.idempotencyKey,
     }
-
-    const betaSignature = 'beta-mock-signature'
-
-    const confirmResult = isolation.confirmPayment(
-      paymentSessionId,
-      betaProviderData,
-      betaSignature,
-    )
-
+    const confirmResult = isolation.confirmPayment(paymentSessionId, betaProviderData, 'beta-mock-signature')
     if ('error' in confirmResult) {
       return NextResponse.json(
         { ok: false, error: confirmResult.error, stage: 'confirm' },
         { status: 400, headers: corsHeaders(origin) },
       )
     }
-
-    // Generate immutable receipt (server-side only)
     const receipt = isolation.generateReceipt(confirmResult.confirmation)
-
-    // ── Trigger distribution pipeline ─────────────────────────────────────
-    const distributionResult = await triggerDistributionFinalize(
-      session.userSessionId,
-      paymentSessionId,
-    )
-
     return NextResponse.json(
       {
         ok: true,
@@ -348,14 +265,16 @@ async function handleConfirm(
           provider: confirmResult.confirmation.provider,
           confirmedAt: confirmResult.confirmation.confirmedAt,
         },
-        distribution: distributionResult,
-        message: 'Beta payment confirmed (R0.00). Distribution pipeline triggered.',
+        distribution: {
+          triggered: false,
+          error: 'Payment confirmation cannot submit a release by itself. Build and submit the signed distribution ZIP separately.',
+        },
+        message: 'Non-live confirmation only (R0.00). No real charge. No beta unlock entitlement granted from this path.',
       },
       { status: 200, headers: corsHeaders(origin) },
     )
   }
 
-  // ── Live mode: require provider signature ──────────────────────────────
   if (!providerSignature) {
     return NextResponse.json(
       { ok: false, error: 'Provider signature is required in live mode.', stage: 'signature' },
@@ -364,13 +283,7 @@ async function handleConfirm(
   }
 
   const providerData = (body.providerData as Record<string, string>) || body
-
-  const confirmResult = isolation.confirmPayment(
-    paymentSessionId,
-    providerData,
-    providerSignature,
-  )
-
+  const confirmResult = isolation.confirmPayment(paymentSessionId, providerData, providerSignature)
   if ('error' in confirmResult) {
     return NextResponse.json(
       { ok: false, error: confirmResult.error, stage: 'confirm' },
@@ -378,15 +291,7 @@ async function handleConfirm(
     )
   }
 
-  // Generate immutable receipt (server-side only)
   const receipt = isolation.generateReceipt(confirmResult.confirmation)
-
-  // ── Trigger distribution pipeline ───────────────────────────────────────
-  const distributionResult = await triggerDistributionFinalize(
-    session.userSessionId,
-    paymentSessionId,
-  )
-
   return NextResponse.json(
     {
       ok: true,
@@ -400,21 +305,19 @@ async function handleConfirm(
         signatureAlgorithm: confirmResult.confirmation.signatureAlgorithm,
         confirmedAt: confirmResult.confirmation.confirmedAt,
       },
-      distribution: distributionResult,
-      message: 'Payment confirmed. Distribution pipeline triggered.',
+      distribution: {
+        triggered: false,
+        error: 'Payment confirmation cannot submit a release by itself. Build and submit the signed distribution ZIP separately.',
+      },
+      message: 'Payment confirmed. Distribution must be submitted separately.',
     },
     { status: 200, headers: corsHeaders(origin) },
   )
 }
 
-// ---------------------------------------------------------------------------
-// GET — Check payment status (idempotent read-only)
-// ---------------------------------------------------------------------------
-
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const origin = req.headers.get('origin')
   const url = new URL(req.url)
-
   const paymentSessionId = url.searchParams.get('paymentSessionId')
   if (!paymentSessionId) {
     return NextResponse.json(
@@ -425,7 +328,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const isolation = PaymentIsolation.getInstance()
   const session = isolation.getSession(paymentSessionId)
-
   if (!session) {
     return NextResponse.json(
       { ok: true, status: 'not_found', message: 'Payment session not found.' },
@@ -434,49 +336,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const confirmation = isolation.getConfirmation(paymentSessionId)
+  const nonLive = isNonLivePaymentMode()
 
   return NextResponse.json(
     {
       ok: true,
-      status: confirmation ? 'confirmed' : (session.confirmed ? 'confirmed' : 'pending'),
+      status: confirmation ? 'confirmed' : session.confirmed ? 'confirmed' : 'pending',
       paymentSessionId: session.paymentSessionId,
       provider: session.provider,
       currency: session.currency,
       confirmable: !session.confirmed && session.tokenExpiresAt > Date.now(),
-      betaMode: isBetaMode(),
-      amountDisplay: isBetaMode() ? formatZar(session.amountCents) : undefined,
+      betaMode: nonLive,
+      paymentStatus: getPaymentReadiness().paymentStatus,
+      amountDisplay: nonLive ? formatZar(0) : undefined,
     },
     { status: 200, headers: corsHeaders(origin) },
   )
-}
-
-// ---------------------------------------------------------------------------
-// Distribution pipeline trigger
-// ---------------------------------------------------------------------------
-
-/**
- * Trigger the distribution pipeline after successful payment.
- *
- * POSTs to /api/rain/distribute/finalize with the session context.
- * The distribution pipeline handles:
- *   1. DDEX ERN 4.3.2 XML validation
- *   2. Release metadata persistence
- *   3. LabelGrid submission
- *
- * In beta mode, this is called with mock payment data.
- * The finalize route returns 'pending_credentials' if LabelGrid is not
- * configured — this is expected during beta.
- */
-async function triggerDistributionFinalize(
-  _userSessionId: string,
-  _paymentSessionId: string,
-): Promise<{ triggered: boolean; error?: string }> {
-  // A payment event does not carry the actual ZIP bytes, validated ERN, or
-  // signed RAIN-CERT. Never call the legacy finalize route with empty metadata
-  // or claim that a release was submitted. The client must build and submit
-  // the complete package through POST /api/rain/distribute.
-  return {
-    triggered: false,
-    error: 'Payment confirmation cannot submit a release by itself. Build and submit the signed distribution ZIP separately.',
-  }
 }
