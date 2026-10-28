@@ -15,21 +15,37 @@ The order is deliberate: establish reproducible builds and a trustworthy databas
 ## Product rules to implement
 
 1. New beta users receive two free full-capability renders; each free render includes one exported file.
-2. After both free renders are completed, further full-capability use requires a verified R49.00 ZAR payment/unlock.
+2. After both free renders are completed, further full-capability use requires a verified **once-off** R49.00 ZAR payment/unlock.
 3. Paid beta users receive 1,500 credits per monthly accounting period. Each completed render costs 25 credits (up to 60 render-equivalents), and a separate hard cap blocks exports after 30 successful files per month even if credits remain.
-4. At commercial launch, introduce the full tiered subscription model without changing account identity or losing eligible history.
-5. Prior session-only beta activity is unavailable. Historical accounts, hours, saved work, exports and AIE activity must be labelled unknown, not reconstructed or presented as measured zero.
-6. Audio stays in the browser unless a separately disclosed, explicit feature requires upload. Project persistence may save metadata/settings, but must clearly state when source audio must be reselected.
-7. Missing models, credentials, standards compliance or untested integrations must be gated and labelled accurately.
-8. No entitlement may be granted from client flags, local storage, redirect URLs or an unverified callback. Provider verification and durable, idempotent server-side state are required.
+4. The R49 unlock is **once-off for the duration of the beta stage only**. It ends when the commercial product launches (it is not a recurring subscription).
+5. Verified beta unlock holders will enjoy a **discounted commercial fee** at product launch. The discount amount is a commercial pricing decision recorded at launch time; it must not be invented in beta code.
+6. At commercial launch, introduce the full tiered subscription model without changing account identity or losing eligible history. Revoke or supersede pure beta unlocks according to the launch migration rules.
+7. Prior session-only beta activity is unavailable. Historical accounts, hours, saved work, exports and AIE activity must be labelled unknown, not reconstructed or presented as measured zero.
+8. Audio stays in the browser unless a separately disclosed, explicit feature requires upload. Project persistence may save metadata/settings, but must clearly state when source audio must be reselected.
+9. Missing models, credentials, standards compliance or untested integrations must be gated and labelled accurately.
+10. No entitlement may be granted from client flags, local storage, redirect URLs or an unverified callback. Provider verification and durable, idempotent server-side state are required.
 
-### Decisions to record before enabling paid traffic
+### Decisions recorded (operator, 2026-10-28)
 
-- Render accounting: each paid-beta render costs 25 credits, deducted only after a successful render; reserve credits during processing and release the reservation on failure/cancellation. Each of the two introductory free renders includes one export.
-- Export accounting: count successful, finalized output files separately from credits; failed/cancelled exports do not count and retries must be idempotent. Paid-beta exports are hard-capped at 30 per monthly period, regardless of remaining credits. Decide whether each format output counts separately (recommended: each separate output file counts).
-- Monthly boundary: reset the 1,500-credit allowance and 30-file allowance on the same documented monthly period; use UTC for storage and show the reset boundary in South African local time.
-- R49 duration/renewal: confirm once-off unlock versus recurring/monthly payment. Keep checkout disabled until explicit.
-- Provider: select PayFast, Ozow or Stripe for the first live implementation; verify merchant access and sandbox credentials.
+| Topic | Decision |
+|-------|----------|
+| Free allowance | 2 full-capability renders, each including one export |
+| Unlock amount | R49.00 ZAR (4,900 cents), fixed |
+| Unlock type | **Once-off**, not monthly/recurring |
+| Unlock duration | Valid for the **beta stage only**; ends at commercial product launch |
+| After launch | Beta unlock holders receive a **discounted commercial fee** (amount TBD at launch) |
+| Paid-beta credits | 1,500 credits / month, 25 credits per completed render |
+| Export hard cap | 30 successful exports / month while beta unlock is active |
+| Monthly boundary | UTC storage; present reset in South African local time |
+| Checkout | Remains disabled until provider + verified webhook are implemented |
+| Provider | Still open: PayFast, Ozow, or Stripe |
+
+### Remaining decisions before enabling paid traffic
+
+- Export accounting: whether each format output counts as a separate file (recommended: yes).
+- Provider selection and sandbox credentials.
+- Exact commercial discount amount / coupon rule for beta unlock holders at launch.
+- Refund and dispute policy copy.
 
 ## Workstreams and dependency order
 
@@ -58,6 +74,7 @@ Acceptance: a new user can return after closing the browser and after a deployme
 - Count the 30-export monthly fair-use limit only for successfully finalized output files. Persist the selected boundary/timezone; prevent retries and duplicate callbacks from double-counting.
 - Design anonymous-to-account linking so users cannot reset or arbitrarily combine allowances by changing IDs. Rate-limit and protect linking.
 - Until real payment verification and entitlements are complete, show checkout unavailable; never imply payment was taken.
+- Model the R49 unlock as once-off `beta_r49_unlock` with no automatic renewal; plan commercial-launch revocation/migration separately (W12).
 
 Acceptance tests: new user, two credits, exhausted allowance, paid unlock, 30th/31st export, month boundary, concurrent requests, duplicate/replayed requests, failed export, account linking, local-storage tampering and DB outage. Server remains authoritative.
 
@@ -68,7 +85,8 @@ Acceptance tests: new user, two credits, exhausted allowance, paid unlock, 30th/
 - Make callback handling idempotent and replay-safe. Never expose secrets or log sensitive payment payloads.
 - Sandbox tests: success, wrong amount/currency, bad signature, replay, timeout, duplicate event, cancellation, refund and dispute.
 - Count paid conversion only after verified server-to-server confirmation.
-- Do not enable live charging until duration/renewal and refund rules are explicit and legal/privacy copy aligns.
+- Grant exactly one durable once-off entitlement per verified payment; do not auto-renew.
+- Do not enable live charging until refund rules and privacy copy align.
 
 Acceptance: one verified sandbox payment creates exactly one entitlement; forged/replayed callbacks cannot grant access; refunds/disputes follow documented policy.
 
@@ -150,18 +168,20 @@ Acceptance: route-by-route security matrix and automated auth/CSRF/rate-limit/ow
 ### W12 — Commercial tier migration and launch readiness (P2)
 - Model tiered subscriptions separately from beta credits and R49 beta unlock. Entitlements should be capabilities/limits, not scattered UI booleans.
 - Preserve account IDs, verified payment history and permitted project/usage records during beta-to-commercial transition.
+- Apply the promised **discounted commercial fee** for accounts that hold a verified once-off beta unlock; amount is a launch pricing decision.
+- End pure beta unlocks at commercial launch (revoke or supersede with commercial entitlements).
 - Handle checkout, renewal, failed payment, grace period, cancellation, refund, plan change and webhook idempotency.
 - Test pricing and entitlements; rehearse migration. Enterprise desktop capabilities must be server-gated as well as hidden in UI.
 - Finalize operations, support, privacy, legal, provider and rollback runbooks.
 
-Acceptance: test users migrate beta → paid beta → commercial tiers without identity/history loss or privilege escalation.
+Acceptance: test users migrate beta → paid beta → commercial tiers without identity/history loss or privilege escalation; beta holders receive the documented discount path.
 
 ## Release gates
 
 ### P0 — No merge/release until passed
 1. Clean reproducible build and test suite.
 2. Persistent account/session/project data verified against actual deployment DB.
-3. Server-authoritative entitlement ledger: two one-time free full-capability renders (one export each), then verified R49 unlock; paid beta 1,500 credits/month at 25 credits/render and a separate hard cap of 30 successful exports/month.
+3. Server-authoritative entitlement ledger: two one-time free full-capability renders (one export each), then verified **once-off** R49 unlock (beta duration only); paid beta 1,500 credits/month at 25 credits/render and a separate hard cap of 30 successful exports/month.
 4. Verified provider payment and durable entitlement before live charging.
 5. Successful exports durably recorded, idempotent and tied to actual output.
 6. Admin/funder metrics derived from verified records and distinguish missing history from zero.
@@ -176,7 +196,7 @@ Acceptance: test users migrate beta → paid beta → commercial tiers without i
 - Unverified spatial/repair/QC capabilities.
 
 ### P2 — Commercial readiness
-- Full tiered subscription lifecycle and migration.
+- Full tiered subscription lifecycle and migration, including beta-holder commercial discount.
 - Operational alerting, runbooks, retention/deletion workflow and evidence pack.
 - Enterprise-only desktop path and commercial entitlement audit.
 
@@ -186,54 +206,24 @@ Acceptance: test users migrate beta → paid beta → commercial tiers without i
 2. Commit this plan and use the current implementation PR as review vehicle; keep it draft.
 3. Fix build/schema/migration consistency and run clean validation.
 4. Complete persistent account/session/project and production database verification.
-5. Implement durable entitlements after credit-unit and payment-duration decisions are recorded.
+5. Implement durable entitlements (done on recovery branch: policy, ledger, reserve/complete).
 6. Integrate provider sandbox and verify webhooks/idempotency before live charging.
 7. Complete export pipeline/quota accounting and run browser E2E.
 8. Resolve model/stems/provenance/distribution blockers in separate reviewable commits.
-9. Complete security/privacy/deployment checks and assemble release evidence.
-10. Merge only after CI, reviewer inspection and all P0 gates pass. Never force-push, overwrite branches or claim production readiness from source changes alone.
+9. Security/privacy hardening and operational readiness.
+10. Commercial launch migration, including beta-holder discount path.
 
-## Required evidence pack
+## Implementation progress (recovery branch, 2026-10-28)
 
-For each gate preserve commit SHA, command/test name, environment, pass/fail, logs/artifacts, fixtures, unresolved limitations and verifier for any deployment/provider configuration. Never include credentials, private user data or user audio.
-
-## Replacement-beta transition
-
-- Build the replacement beta from this repository on a separate deployment; do not use the retired beta as the production dependency or assume captured compiled assets are reusable source.
-- Use `RAINV6PAGES.zip` and `RAINV6BETA.zip` as reference evidence for interface and intended behaviour. Compiled assets can reveal visible labels and bundled client logic, but cannot alone prove backend behaviour or every runtime failure path.
-- Maintain a migration/cutover checklist: independent staging URL, environment/secrets validation, DB migration and backup/restore rehearsal, browser/device compatibility, account and entitlement tests, pipeline fault injection, export/provenance verification, monitoring, rollback plan, then controlled launch. Retire the existing site only after acceptance evidence is signed off and the replacement is stable.
-- Distribution integrations are a commercial-release feature. Beta must create and validate the master package with metadata, embedded certificate/signature/fingerprint as supported, and optional sidecar evidence; it must not claim external distributor delivery. A proof lock means tamper detection and verifiable evidence, not making alteration physically impossible. Validate evidence against exact exported bytes and describe each hash's scope accurately.
-
-## Current confidence and limitations
-
-This plan is grounded in the repository README, backlog/truth matrix, schema, beta-access/quota code, payment module, analytics, render endpoint, stems capability flags, provenance and rate-limit code. Source inspection cannot establish that the live database, payment provider, browser inference, deployed artifacts, backups or third-party delivery work. Those require runtime and external verification. Proceed in small increments with tests; where the available GitHub connection cannot execute code, changes must remain explicitly unverified rather than being described as tested.
-
-
-## W5a — Intelligent QC scoring, review and recovery (P0 for trustworthy finalization)
-
-RAIN QC is a diagnostic and decision-support layer, not a simplistic all-checks-must-pass switch. Individual checks may be configured as bypassable where appropriate, but a bypass must be explicit, recorded and visible; it must never silently convert a failure into a pass. The system must distinguish a technical hard stop from a non-critical warning and from a subjective issue that needs human listening/review.
-
-### Required user-facing result
-- Show a final **RAIN SCORE /100** based on measured QC results and documented weights, not a raw count of checks passed.
-- List each check with its actual result, threshold/target, measured value where available, severity, and status: passed, warning, failed, bypassed, not run, or unavailable.
-- Explain in plain language what failed, its likely audible/technical impact, and the recommended next action.
-- Provide a reasoned disposition: **Accept**, **Review recommended**, **Targeted rerun recommended**, **Full rerun recommended**, or **Blocked**.
-- Where supported, identify the affected pipeline stage and offer a targeted rerun from that stage rather than rerunning the entire pipeline. State when a targeted rerun is unavailable.
-- Preserve the original result and QC report when rerunning; compare before/after metrics and never overwrite evidence of the prior failure.
-
-### Decision rules
-- **Hard blockers:** corrupted/unreadable output, invalid or mismatched exact-output integrity evidence where required, invalid mandatory signature/certificate binding, invalid/non-finite samples, or other explicitly designated mandatory technical/security requirements. These cannot be bypassed into a successful/verified export merely because the score is high.
-- **Warnings / reviewable findings:** issues whose severity is tolerable under an explicit policy, or subjective findings that need human judgement. They may be accepted or bypassed only with a visible explanation and an audit record; the system must not imply that the finding passed.
-- **Rerun candidates:** deterministic, stage-local failures with a plausible corrective action (for example a measurable loudness/true-peak target miss when the relevant stage can safely correct it). Recommend the smallest valid rerun scope and explain the expected correction. Do not automatically loop indefinitely; cap attempts and detect repeated/no-improvement failures.
-- **Human review candidates:** subjective quality issues or ambiguous metrics for which an automatic rerun is not predictably corrective. Direct the user to listen to the relevant segment or compare a reference instead of blindly rerunning.
-- **Unavailable / not run:** never score as passed. Mark the check unknown and explain why; apply the configured policy for whether that uncertainty blocks export.
-- **Score versus disposition:** calculate and show the score independently of export eligibility. A high score cannot override a hard blocker; a low score alone does not prove a rerun is necessary.
-
-### Score design and evidence
-- Define the QC check catalogue, units, thresholds, severity, weights, bypass policy, and hard-block list in versioned code/configuration. Version the scoring rubric so historical scores remain interpretable after policy changes.
-- Normalize check scores carefully and aggregate only checks that actually ran with valid measurements; disclose coverage and missing checks. Do not silently inflate the score by omitting failed/unavailable checks.
-- Store per-run rubric version, per-check measurement/result, bypass reason and actor, stage/parameter changes, rerun ancestry, final score, disposition, and final export validation outcome.
-- Use fault-injection and fixture tests for pass, warning, hard-block, unavailable-check, bypass, targeted-rerun success, repeated failure, and no-improvement scenarios. Verify that a failed stage gate prevents dependent stages from running unless a documented recovery path explicitly restarts from that stage.
-- Never claim that QC is intelligent merely because it displays a score. The recommendation logic must be deterministic, testable and grounded in the failure type and available recovery actions; any ML-assisted recommendation must be separately identified and validated.
-
-Acceptance: for each supported QC check, tests demonstrate the correct status, score contribution, explanation, disposition and rerun scope. Tests prove that bypasses remain visible in the report and audit trail, hard blockers cannot be bypassed into a verified export, and a rerun does not erase prior evidence.
+| Item | Status |
+|------|--------|
+| Pure policy `evaluateBetaEntitlement` | Done |
+| Server loader `loadBetaEntitlement` | Done |
+| `/api/rain/beta-access` wired | Done |
+| Usage ledger reserve/complete/release | Done |
+| `/api/rain/usage` API | Done |
+| Render route entitlement gate + ledger | Done |
+| R49 once-off / beta-duration decision | Recorded |
+| Checkout / payment provider | Not started (correctly disabled) |
+| Model LFS integrity | Verified present |
+| Commercial discount amount | TBD at launch |
