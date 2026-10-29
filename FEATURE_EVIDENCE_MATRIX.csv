@@ -1,0 +1,15 @@
+capability,status,evidence,launch_blocker,effort
+Build/lint/typecheck,blocked_unknown,"No fresh run; CI defines lint/typecheck/build jobs",yes until run,M
+Automated test suite,partial_stubbed,"CI test job only echoes that no suite exists; package.json has no test script",yes,P1 M
+Browser studio flow,implemented_unverified,"Historical worklog browser check; no current execution",no for manual MVP,M
+Mastering DSP,implemented_unverified,"README describes browser pipeline; no fixture render executed",yes until output verified,M
+WAV/MP3 export,implemented_unverified,"Worklog reports prior WAV; no current output inspected",yes until output verified,M
+Auth/session,implemented_unverified,"src/lib/rain/auth.ts source inspected; runtime tests absent",yes for paid accounts,M
+Tier gates,implemented_unverified,"src/lib/rain/tier-gate.ts source inspected; needs anonymous/cross-user tests",yes for gated paid features,M
+PostgreSQL persistence/RLS,blocked_unknown,"Prisma schema declares SQLite; production parity unverified",yes for production,M
+Billing,blocked_unknown,"Current checkout/webhook path not established in this pass",yes if charging customers,L
+DDEX validation,partial,"Finalize route uses string/regex-like presence checks",yes for automated delivery,M
+LabelGrid,implemented_unverified,"Route assumes /v1/deliveries and admits contract not standardised/verified",yes for automated delivery,M/L
+Provider delivery status,partial,"Local delivered state tied to provider 2xx, no confirmed lifecycle shown",yes for delivery claims,M
+Provenance/C2PA,implemented_unverified,"README claim only; formal conformance and byte binding untested",no if excluded,M
+Backup/restore,blocked_unknown,"No current operational proof",yes for durable production,M
